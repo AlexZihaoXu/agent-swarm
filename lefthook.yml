@@ -1,0 +1,18 @@
+pre-commit:
+  parallel: true
+  commands:
+    format:
+      run: pnpm run format:check
+      fail_text: "Run 'pnpm format' to fix formatting before committing."
+    lint:
+      run: pnpm run lint
+      fail_text: "ESLint found issues — run 'pnpm lint:fix' or address them by hand."
+    typecheck:
+      run: pnpm run typecheck
+      fail_text: 'TypeScript errors — fix them before committing.'
+
+commit-msg:
+  commands:
+    commitlint:
+      run: npx --no-install commitlint --edit {1}
+      fail_text: 'Commit message must follow Conventional Commits (feat:, fix:, chore:, refactor:, docs:, test:, build:, ci:, perf:, style:).'

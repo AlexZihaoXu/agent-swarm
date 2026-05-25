@@ -1,0 +1,27 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+
+# test / coverage
+coverage/
+
+# env & secrets
+.env
+.env.local
+.env.*.local
+
+# logs
+*.log
+
+# tooling caches
+.turbo/
+.eslintcache
+
+# os
+.DS_Store
