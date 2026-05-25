@@ -1,0 +1,44 @@
+<!doctype html>
+<!--
+  Interim noVNC viewer for the agent desktop. Auto-connects and scales the
+  fixed 1080p framebuffer to fit the browser window (no HiDPI doubling, never
+  resizes the server). This will be replaced by the dashboard's embedded viewer.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>agent desktop</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #000;
+        overflow: hidden;
+      }
+      #screen {
+        width: 100vw;
+        height: 100vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="screen"></div>
+    <script type="module">
+      import RFB from './core/rfb.js';
+
+      const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
+      const url = `${wsProto}://${location.host}/websockify`;
+
+      const rfb = new RFB(document.getElementById('screen'), url);
+
+      // Scale the remote framebuffer to fit the window (CSS scaling at 1x —
+      // the canvas stays at the server's 1920x1080, so no HiDPI doubling).
+      rfb.scaleViewport = true;
+      // Never request a server-side resolution change — desktop is locked 1080p.
+      rfb.resizeSession = false;
+      rfb.clipViewport = false;
+    </script>
+  </body>
+</html>

@@ -1,0 +1,14 @@
+[Unit]
+Description=Update Claude Code to the latest version at boot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Best-effort: if the launch is offline this fails harmlessly and the
+# baked-in version is used.
+ExecStart=/usr/bin/npm install -g @anthropic-ai/claude-code@latest
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target

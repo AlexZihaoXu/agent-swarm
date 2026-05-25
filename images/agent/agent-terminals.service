@@ -1,0 +1,17 @@
+[Unit]
+Description=Agent terminal supervisor (multi-session pty over WebSocket)
+After=network.target
+
+[Service]
+User=agent
+Environment=HOME=/home/agent
+Environment=SHELL=/usr/bin/fish
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=DISABLE_AUTOUPDATER=1
+WorkingDirectory=/opt/agent-runtime
+ExecStart=/usr/bin/node /opt/agent-runtime/server.js
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

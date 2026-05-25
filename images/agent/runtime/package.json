@@ -1,0 +1,13 @@
+{
+  "name": "agent-runtime",
+  "version": "0.0.0",
+  "private": true,
+  "description": "In-container terminal supervisor: node-pty sessions streamed over WebSocket to an xterm.js client.",
+  "main": "server.js",
+  "dependencies": {
+    "@xterm/addon-serialize": "^0.13.0",
+    "@xterm/headless": "^5.5.0",
+    "node-pty": "^1.0.0",
+    "ws": "^8.18.0"
+  }
+}

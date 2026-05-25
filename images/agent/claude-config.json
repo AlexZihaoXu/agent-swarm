@@ -1,0 +1,11 @@
+{
+  "hasCompletedOnboarding": true,
+  "bypassPermissionsModeAccepted": true,
+  "projects": {
+    "/home/agent": {
+      "hasTrustDialogAccepted": true,
+      "hasCompletedProjectOnboarding": true,
+      "allowedTools": []
+    }
+  }
+}

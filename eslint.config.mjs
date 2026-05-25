@@ -4,7 +4,9 @@ import prettier from 'eslint-config-prettier';
 
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/build/**', '**/.next/**', '**/node_modules/**'],
+    // images/** is in-container code (CommonJS, its own package.json + Node
+    // runtime), not part of the monorepo's TS lint scope.
+    ignores: ['**/dist/**', '**/build/**', '**/.next/**', '**/node_modules/**', 'images/**'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

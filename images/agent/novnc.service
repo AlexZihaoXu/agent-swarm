@@ -1,0 +1,13 @@
+[Unit]
+Description=noVNC websockify (web VNC) on 6080
+After=tigervncserver@:1.service
+Wants=tigervncserver@:1.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/websockify --web=/usr/share/novnc 6080 localhost:5901
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

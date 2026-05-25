@@ -1,0 +1,185 @@
+<!doctype html>
+<!-- Multi-terminal viewer: xterm.js talking directly to the supervisor's
+     node-pty sessions over WebSocket. Seed for the dashboard's terminal panel. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>agent terminals</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #1e1e1e;
+        color: #ddd;
+        font-family: system-ui, sans-serif;
+        overflow: hidden;
+      }
+      #bar {
+        display: flex;
+        gap: 6px;
+        padding: 6px 8px;
+        background: #252526;
+        align-items: center;
+        height: 32px;
+        box-sizing: border-box;
+      }
+      #tabs {
+        display: flex;
+        gap: 4px;
+      }
+      .tab {
+        padding: 4px 10px;
+        background: #333;
+        border-radius: 4px;
+        cursor: pointer;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        font-size: 13px;
+      }
+      .tab.active {
+        background: #0a84ff;
+      }
+      .tab .x {
+        opacity: 0.6;
+      }
+      .tab .x:hover {
+        opacity: 1;
+      }
+      button {
+        background: #3a3d41;
+        color: #ddd;
+        border: 0;
+        border-radius: 4px;
+        padding: 4px 10px;
+        cursor: pointer;
+        font-size: 13px;
+      }
+      #term {
+        position: absolute;
+        top: 44px;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        padding: 4px;
+        box-sizing: border-box;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="bar">
+      <strong style="margin-right: 8px">Terminals</strong>
+      <span id="tabs"></span>
+      <button id="add">+ New</button>
+    </div>
+    <div id="term"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+    <script>
+      const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
+      let term,
+        fit,
+        ws,
+        active = null;
+
+      function initTerm() {
+        term = new Terminal({
+          cursorBlink: true,
+          fontSize: 13,
+          scrollback: 10000,
+          theme: { background: '#1e1e1e' },
+        });
+        fit = new FitAddon.FitAddon();
+        term.loadAddon(fit);
+        term.open(document.getElementById('term'));
+        fit.fit();
+        term.onData((d) => {
+          if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'data', data: d }));
+        });
+        let rt;
+        window.addEventListener('resize', () => {
+          clearTimeout(rt);
+          rt = setTimeout(() => {
+            fit.fit();
+            // Server resizes the pty + authoritative term, then sends back a
+            // clean snapshot of the new screen (handles grow & shrink correctly).
+            sendResize();
+          }, 150);
+        });
+      }
+      function sendResize() {
+        if (ws && ws.readyState === 1)
+          ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+      }
+      function attach(name) {
+        active = name;
+        if (ws) {
+          ws.onclose = null;
+          ws.close();
+        }
+        term.reset();
+        fit.fit(); // size to the real container before connecting
+        const url =
+          `${wsProto}://${location.host}/ws?session=${encodeURIComponent(name)}` +
+          `&cols=${term.cols}&rows=${term.rows}`;
+        ws = new WebSocket(url);
+        ws.onopen = () => term.focus();
+        ws.onmessage = (e) => term.write(e.data);
+        renderTabs();
+      }
+      async function listSessions() {
+        return (await fetch('/api/sessions')).json();
+      }
+      async function renderTabs() {
+        const sessions = await listSessions();
+        if (!sessions.find((s) => s.name === active) && sessions[0]) active = sessions[0].name;
+        const tabs = document.getElementById('tabs');
+        tabs.innerHTML = '';
+        for (const s of sessions) {
+          const el = document.createElement('span');
+          el.className = 'tab' + (s.name === active ? ' active' : '');
+          el.textContent = s.name;
+          const x = document.createElement('span');
+          x.className = 'x';
+          x.textContent = '✕';
+          x.onclick = async (ev) => {
+            ev.stopPropagation();
+            await fetch('/api/sessions/' + encodeURIComponent(s.name), { method: 'DELETE' });
+            const l = await listSessions();
+            if (active === s.name) active = l[0] ? l[0].name : null;
+            if (active) attach(active);
+            else {
+              term.reset();
+              renderTabs();
+            }
+          };
+          el.onclick = () => {
+            if (s.name !== active) attach(s.name);
+          };
+          el.appendChild(x);
+          tabs.appendChild(el);
+        }
+      }
+      document.getElementById('add').onclick = async () => {
+        const r = await fetch('/api/sessions', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: '{}',
+        });
+        const { name } = await r.json();
+        attach(name);
+      };
+
+      initTerm();
+      (async () => {
+        const s = await listSessions();
+        if (s[0]) attach(s[0].name);
+        else renderTabs();
+      })();
+    </script>
+  </body>
+</html>
