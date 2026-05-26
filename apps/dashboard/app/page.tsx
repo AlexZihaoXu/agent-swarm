@@ -140,7 +140,7 @@ export default function HomePage() {
                 </Card.Header>
                 <Card.Footer className="mt-2 flex flex-wrap gap-2">
                   <Link
-                    href={`/agents/${a.id}/terminal`}
+                    href={`/agents/${a.id}/desktop`}
                     className={buttonVariants({ variant: 'secondary', size: 'sm' })}
                   >
                     Open

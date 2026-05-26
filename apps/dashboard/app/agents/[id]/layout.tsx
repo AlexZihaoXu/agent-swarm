@@ -26,7 +26,7 @@ export default function AgentLayout({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
-  const segment = useSelectedLayoutSegment() ?? 'terminal';
+  const segment = useSelectedLayoutSegment() ?? 'desktop';
 
   return (
     <motion.div
