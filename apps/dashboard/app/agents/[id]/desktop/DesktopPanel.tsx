@@ -28,10 +28,12 @@ export function DesktopPanel({ src, title }: { src: string; title: string }) {
         />
       )}
 
+      {/* Lives in the top-right of the header chrome (fixed), so it never sits
+          over the desktop's own top bar. */}
       <Button
         size="sm"
         variant={locked ? 'secondary' : 'primary'}
-        className="absolute top-3 right-3 z-20"
+        className="fixed top-2 right-4 z-50"
         onPress={() => setLocked((v) => !v)}
       >
         {locked ? <LuLock className="size-4" /> : <LuLockOpen className="size-4" />}
