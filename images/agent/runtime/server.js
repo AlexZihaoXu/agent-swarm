@@ -225,6 +225,39 @@ function latestSession() {
   }
 }
 
+// Plain text of the claude session's CURRENT visible screen (no ANSI), read
+// from the authoritative headless terminal we already maintain per session.
+function claudeScreenText() {
+  const sess = sessions.get('claude');
+  if (!sess || !sess.term) return '';
+  const buf = sess.term.buffer.active;
+  const rows = sess.term.rows;
+  const start = Math.max(0, buf.length - rows);
+  const lines = [];
+  for (let i = start; i < buf.length; i++) {
+    const line = buf.getLine(i);
+    if (line) lines.push(line.translateToString(true));
+  }
+  return lines.join('\n');
+}
+
+// Claude Code's interactive selectors (AskUserQuestion, ExitPlanMode, the
+// permission prompt) are TUI-only — they never reach the transcript. We can't
+// render them in the chat, but we CAN detect that one is open from the screen
+// and route the user to the Terminal to answer. The "↑/↓ to navigate" footer is
+// unique to these selectors (idle shows "? for shortcuts"; busy shows
+// "esc to interrupt"), so it's a reliable, low-false-positive signal.
+function detectAwaiting(screen) {
+  if (!/to navigate/i.test(screen)) return null;
+  // Best-effort: pull the question line (ends with '?') to label the notice.
+  let prompt = null;
+  for (const raw of screen.split('\n')) {
+    const s = raw.replace(/[│┃┆╎|>❯●○◯◉*✻·•\s]+/g, ' ').trim();
+    if (s.endsWith('?') && s.length > 4 && s.length <= 160) prompt = s;
+  }
+  return { prompt };
+}
+
 function readStats() {
   let sl = {};
   try {
@@ -234,6 +267,7 @@ function readStats() {
   }
   const t = transcriptStats();
   const sess = latestSession();
+  const awaiting = detectAwaiting(claudeScreenText());
   const total = t.totals.input + t.totals.output + t.totals.cacheRead + t.totals.cacheCreation;
   const cost = sl.cost || {};
   return {
@@ -251,6 +285,10 @@ function readStats() {
     linesRemoved: cost.total_lines_removed || 0,
     exceeds200k: !!sl.exceeds_200k_tokens,
     lastActivity: t.lastTs || sess.updatedAt || null,
+    // True when an interactive selector (AskUserQuestion/plan/permission) is
+    // open and waiting — these can only be answered in the Terminal.
+    awaitingInput: !!awaiting,
+    promptText: awaiting ? awaiting.prompt : null,
   };
 }
 

@@ -3,7 +3,8 @@
 import { Button } from '@heroui/react';
 import { AnimatePresence, motion, useDragControls } from 'framer-motion';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LuArrowUp, LuMessageSquare, LuPaperclip, LuWrench, LuX } from 'react-icons/lu';
+import Link from 'next/link';
+import { LuArrowUp, LuMessageSquare, LuPaperclip, LuTerminal, LuWrench, LuX } from 'react-icons/lu';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { getTranscript, terminalWsUrl, uploadToAgent, type ChatTurn } from '@/lib/gateway';
@@ -25,7 +26,9 @@ export function ChatWidget({ agentId }: { agentId: string }) {
   const draggedRef = useRef(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const [attaching, setAttaching] = useState(false);
-  const working = useAgentStats(agentId)?.status === 'busy';
+  const stats = useAgentStats(agentId);
+  const working = stats?.status === 'busy';
+  const awaiting = !!stats?.awaitingInput;
 
   const onPickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -199,6 +202,44 @@ export function ChatWidget({ agentId }: { agentId: string }) {
                 </motion.div>
               ))}
             </div>
+
+            {/* Interactive selectors (AskUserQuestion / plan / permission) are
+                TUI-only and never reach the transcript, so they can't be shown
+                or answered here — detect that one's open and route to the
+                Terminal. */}
+            <AnimatePresence>
+              {awaiting && (
+                <motion.div
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 8 }}
+                  transition={{ duration: 0.2, ease: 'easeOut' }}
+                  className="border-warning/40 bg-warning/10 mx-2 mb-1 rounded-xl border p-2.5"
+                >
+                  <p className="text-foreground text-sm font-medium">Waiting for your answer</p>
+                  <p className="text-muted mt-0.5 text-xs">
+                    {stats?.promptText
+                      ? `“${stats.promptText}”`
+                      : 'The agent is asking an interactive question.'}{' '}
+                    It can only be answered in the Terminal.
+                  </p>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    className="mt-2 gap-1.5"
+                    render={(props) => (
+                      <Link
+                        {...(props as React.ComponentProps<typeof Link>)}
+                        href={`/agents/${agentId}/terminal`}
+                      />
+                    )}
+                  >
+                    <LuTerminal className="size-3.5" />
+                    Open Terminal
+                  </Button>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             <div className="p-2">
               <div className="border-separator focus-within:border-accent bg-surface flex flex-col gap-2 rounded-2xl border p-2.5 transition-colors">
