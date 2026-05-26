@@ -82,17 +82,29 @@ function newestFile(dir, ext) {
   return best;
 }
 
+// Per-million-token pricing (USD), published Anthropic API rates. `cw` = cache
+// write (5-min), `cr` = cache read. Edit here if rates change.
+function modelRates(model, ctxTokens) {
+  const m = (model || '').toLowerCase();
+  if (m.includes('opus')) return { in: 15, out: 75, cw: 18.75, cr: 1.5 };
+  if (m.includes('haiku')) return { in: 1, out: 5, cw: 1.25, cr: 0.1 };
+  // Sonnet: long-context (>200K input) tier is priced higher.
+  if (ctxTokens > 200000) return { in: 6, out: 22.5, cw: 7.5, cr: 0.6 };
+  return { in: 3, out: 15, cw: 3.75, cr: 0.3 };
+}
+
 function transcriptStats() {
   const totals = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
   let model = null;
   let turns = 0;
   let lastTs = null;
+  let cost = 0;
   // Current context-window usage = the most recent turn's input side
   // (fresh input + cache read + cache creation all occupy the window).
   let context = 0;
   const newest = newestFile(path.join(CLAUDE_DIR, 'projects'), '.jsonl');
   const raw = newest && safeRead(newest.path);
-  if (!raw) return { totals, model, turns, lastTs, context };
+  if (!raw) return { totals, model, turns, lastTs, context, cost };
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
     let o;
@@ -105,18 +117,22 @@ function transcriptStats() {
     if (o.type === 'assistant' && o.message) {
       const usage = o.message.usage || {};
       const input = usage.input_tokens || 0;
+      const output = usage.output_tokens || 0;
       const cacheRead = usage.cache_read_input_tokens || 0;
       const cacheCreation = usage.cache_creation_input_tokens || 0;
       totals.input += input;
-      totals.output += usage.output_tokens || 0;
+      totals.output += output;
       totals.cacheRead += cacheRead;
       totals.cacheCreation += cacheCreation;
       context = input + cacheRead + cacheCreation;
       if (o.message.model) model = o.message.model;
+      // Cost this turn, at the message's own model's rates.
+      const r = modelRates(o.message.model, context);
+      cost += (input * r.in + output * r.out + cacheCreation * r.cw + cacheRead * r.cr) / 1_000_000;
       turns++;
     }
   }
-  return { totals, model, turns, lastTs, context };
+  return { totals, model, turns, lastTs, context, cost };
 }
 
 let shotCache = { at: 0, buf: null };
@@ -179,7 +195,10 @@ function readStats() {
     tokens: { ...t.totals, total },
     context: t.context,
     turns: t.turns,
-    cost: typeof cost.total_cost_usd === 'number' ? cost.total_cost_usd : null,
+    // Computed from token usage × per-model rates; fall back to Claude Code's
+    // own statusLine figure if we have no turns yet.
+    cost:
+      t.turns > 0 ? t.cost : typeof cost.total_cost_usd === 'number' ? cost.total_cost_usd : null,
     linesAdded: cost.total_lines_added || 0,
     linesRemoved: cost.total_lines_removed || 0,
     exceeds200k: !!sl.exceeds_200k_tokens,
