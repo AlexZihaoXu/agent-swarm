@@ -97,6 +97,10 @@ export interface AgentStats {
 
 /** Live session stats for one agent, served by the agent's terminal supervisor. */
 export const getAgentStats = (id: string) => api<AgentStats>(`/a/${id}/terminal/api/stats`);
+/** WebSocket that streams the stats snapshot ~1/s. */
+export const statsStreamUrl = (id: string) => `${wsOrigin()}/a/${id}/terminal/stats`;
+/** Low-res desktop screenshot (for fleet-card previews). */
+export const screenshotUrl = (id: string) => `${GATEWAY_BASE}/a/${id}/terminal/api/screenshot`;
 
 export interface UpgradeInfo {
   installed: number;

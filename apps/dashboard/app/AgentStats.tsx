@@ -1,7 +1,7 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   LuArrowDown,
   LuArrowUp,
@@ -10,7 +10,7 @@ import {
   LuGauge,
   LuRefreshCcw,
 } from 'react-icons/lu';
-import { getAgentStats, type AgentStats } from '@/lib/gateway';
+import { getAgentStats, statsStreamUrl, type AgentStats } from '@/lib/gateway';
 
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -38,10 +38,14 @@ function fmtContext(used: number, model: string | null): string {
   return `${fmtTokens(used)}${lim}`;
 }
 
-/** Polls one agent's live session stats (null until/unless reachable). */
+/**
+ * One agent's live session stats: a single snapshot request for immediate data,
+ * then a WebSocket stream (pushes ~1/s) for real-time updates. Reconnects if the
+ * socket drops. Null until/unless reachable.
+ */
 export function useAgentStats(
   agentId: string,
-  { intervalMs = 3000, enabled = true }: { intervalMs?: number; enabled?: boolean } = {},
+  { enabled = true }: { enabled?: boolean } = {},
 ): AgentStats | null {
   const [stats, setStats] = useState<AgentStats | null>(null);
   useEffect(() => {
@@ -50,22 +54,89 @@ export function useAgentStats(
       return;
     }
     let alive = true;
-    const tick = async () => {
+    let ws: WebSocket | null = null;
+    let retry: ReturnType<typeof setTimeout>;
+
+    // Snapshot for instant data, then subscribe to the stream.
+    getAgentStats(agentId)
+      .then((s) => alive && setStats(s))
+      .catch(() => {});
+
+    const connect = () => {
+      if (!alive) return;
       try {
-        const s = await getAgentStats(agentId);
-        if (alive) setStats(s);
+        ws = new WebSocket(statsStreamUrl(agentId));
       } catch {
-        /* agent stopped or supervisor unreachable */
+        return;
       }
+      ws.onmessage = (e) => {
+        if (!alive) return;
+        try {
+          setStats(JSON.parse(e.data as string));
+        } catch {
+          /* ignore */
+        }
+      };
+      ws.onclose = () => {
+        if (alive) retry = setTimeout(connect, 3000);
+      };
+      ws.onerror = () => {
+        try {
+          ws?.close();
+        } catch {
+          /* ignore */
+        }
+      };
     };
-    void tick();
-    const t = setInterval(() => void tick(), intervalMs);
+    connect();
+
     return () => {
       alive = false;
-      clearInterval(t);
+      clearTimeout(retry);
+      if (ws) {
+        ws.onclose = null;
+        try {
+          ws.close();
+        } catch {
+          /* ignore */
+        }
+      }
     };
-  }, [agentId, intervalMs, enabled]);
+  }, [agentId, enabled]);
   return stats;
+}
+
+/** Exponential-smoothing (lerp) toward `target` for animated number readouts. */
+function useLerp(target: number, factor = 0.2): number {
+  const [display, setDisplay] = useState(target);
+  const cur = useRef(target);
+  useEffect(() => {
+    let raf = 0;
+    const tick = () => {
+      const next = cur.current + (target - cur.current) * factor;
+      if (Math.abs(target - next) < 0.5) {
+        cur.current = target;
+        setDisplay(target);
+        return;
+      }
+      cur.current = next;
+      setDisplay(next);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target, factor]);
+  return display;
+}
+
+function Tokens({ value }: { value: number }) {
+  return <>{fmtTokens(Math.round(useLerp(value)))}</>;
+}
+function Cost({ value }: { value: number }) {
+  return <>{fmtCost(useLerp(value))}</>;
+}
+function ContextUsage({ value, model }: { value: number; model: string | null }) {
+  return <>{fmtContext(Math.round(useLerp(value)), model)}</>;
 }
 
 /** Maps the container + claude-session status into a single chip. */
@@ -138,22 +209,22 @@ export function AgentStatsInline({ stats: s }: { stats: AgentStats | null }) {
       {s.model && <span className="text-foreground font-medium">{s.model}</span>}
       {s.context > 0 && (
         <Metric icon={<LuGauge className="size-3" />} title="context window usage" strong>
-          {fmtContext(s.context, s.model)}
+          <ContextUsage value={s.context} model={s.model} />
         </Metric>
       )}
       {up > 0 && (
         <Metric icon={<LuArrowUp className="size-3" />} title="tokens sent (input + cache)">
-          {fmtTokens(up)}
+          <Tokens value={up} />
         </Metric>
       )}
       {s.tokens.output > 0 && (
         <Metric icon={<LuArrowDown className="size-3" />} title="tokens received (output)">
-          {fmtTokens(s.tokens.output)}
+          <Tokens value={s.tokens.output} />
         </Metric>
       )}
       {s.cost != null && s.cost > 0 && (
         <Metric icon={<LuDollarSign className="size-3" />} title="money spent (USD)">
-          {fmtCost(s.cost)}
+          <Cost value={s.cost} />
         </Metric>
       )}
     </div>
@@ -172,27 +243,27 @@ export function AgentStatsBar({ agentId }: { agentId: string }) {
       {t.total > 0 && (
         <>
           <Metric icon={<LuArrowUp className="size-3" />} title="input tokens">
-            {fmtTokens(t.input)}
+            <Tokens value={t.input} />
           </Metric>
           <Metric icon={<LuArrowDown className="size-3" />} title="output tokens">
-            {fmtTokens(t.output)}
+            <Tokens value={t.output} />
           </Metric>
           <Metric icon={<LuRefreshCcw className="size-3" />} title="cache-read tokens">
-            {fmtTokens(t.cacheRead)}
+            <Tokens value={t.cacheRead} />
           </Metric>
           <Metric icon={<LuCoins className="size-3" />} title="total tokens" strong>
-            {fmtTokens(t.total)}
+            <Tokens value={t.total} />
           </Metric>
         </>
       )}
       {s.context > 0 && (
         <Metric icon={<LuGauge className="size-3" />} title="context window usage" strong>
-          {fmtContext(s.context, s.model)}
+          <ContextUsage value={s.context} model={s.model} />
         </Metric>
       )}
       {s.cost != null && s.cost > 0 && (
         <Metric icon={<LuDollarSign className="size-3" />} title="session cost (USD)">
-          {fmtCost(s.cost)}
+          <Cost value={s.cost} />
         </Metric>
       )}
       {(s.linesAdded > 0 || s.linesRemoved > 0) && (

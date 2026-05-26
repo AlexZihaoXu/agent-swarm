@@ -6,9 +6,9 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState, type MouseEvent } from 'react';
 import {
-  desktopUrl,
   getUpgradeInfo,
   removeAgent,
+  screenshotUrl,
   startAgent,
   stopAgent,
   upgradeAgent,
@@ -38,15 +38,34 @@ function subline(agent: Agent): string {
   return parts.join(' · ');
 }
 
-function relativeTime(ms: number): string {
-  const s = Math.max(0, Math.floor((Date.now() - ms) / 1000));
-  if (s < 60) return 'just now';
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
-}
-
 type Dialog = 'stop' | 'remove' | 'upgrade' | null;
+
+/** Low-res desktop thumbnail that refreshes every few seconds (cheap, unlike a
+ *  live VNC stream per card). Keeps retrying if a frame fails to load. */
+function PreviewImage({ agentId }: { agentId: string }) {
+  const [ts, setTs] = useState(() => Date.now());
+  const [ok, setOk] = useState(false);
+  useEffect(() => {
+    const t = setInterval(() => setTs(Date.now()), 2500);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <>
+      <img
+        src={`${screenshotUrl(agentId)}?t=${ts}`}
+        alt=""
+        onLoad={() => setOk(true)}
+        onError={() => setOk(false)}
+        className={ok ? 'h-full w-full object-contain' : 'hidden'}
+      />
+      {!ok && (
+        <span className="text-muted absolute inset-0 flex items-center justify-center text-xs">
+          connecting…
+        </span>
+      )}
+    </>
+  );
+}
 
 export function AgentCard({ agent, onChanged }: { agent: Agent; onChanged: () => void }) {
   const router = useRouter();
@@ -103,12 +122,7 @@ export function AgentCard({ agent, onChanged }: { agent: Agent; onChanged: () =>
           className="border-separator group relative block aspect-video w-full shrink-0 overflow-hidden border bg-black sm:w-44"
         >
           {running ? (
-            <iframe
-              title={`${agent.id} preview`}
-              src={desktopUrl(agent.id)}
-              tabIndex={-1}
-              className="pointer-events-none h-full w-full"
-            />
+            <PreviewImage agentId={agent.id} />
           ) : (
             <span className="text-muted absolute inset-0 flex items-center justify-center text-xs">
               stopped
@@ -123,7 +137,6 @@ export function AgentCard({ agent, onChanged }: { agent: Agent; onChanged: () =>
           {subline(agent) && (
             <p className="text-muted font-mono text-xs break-words">{subline(agent)}</p>
           )}
-          <p className="text-muted font-mono text-xs">created {relativeTime(agent.createdAt)}</p>
 
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
             <Chip color={chip.color} size="sm" variant="soft">
