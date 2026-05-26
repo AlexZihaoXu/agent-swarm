@@ -171,10 +171,15 @@
    Constrain the height and shrink the cells so wide previews stay compact. */
 .chat-prompt {
   max-height: 16rem;
+  /* Dark fills the whole scroll viewport, so scrolling right never reveals the
+     banner behind the (narrower) content. */
+  background: #16130e;
 }
 .chat-prompt pre {
   margin: 0;
   padding: 0.5rem 0.6rem;
+  width: max-content;
+  min-width: 100%;
 }
 .chat-prompt pre div {
   font-size: 11px !important;
