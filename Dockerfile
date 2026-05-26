@@ -22,6 +22,12 @@ RUN pnpm --filter @agent-swarm/gateway build \
 FROM node:22-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+# Where the gateway finds the agent build context and persists runtime settings.
+ENV AGENT_CONTEXT_DIR=/app/agent-context
+ENV SETTINGS_FILE=/data/settings.json
+
+# Agent build context, so the gateway can build the agent image on demand.
+COPY images/agent ./agent-context
 
 # gateway/ — compiled gateway + its runtime deps (flat node_modules).
 COPY apps/gateway/package.json ./gateway/package.json

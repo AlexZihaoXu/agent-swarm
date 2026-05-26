@@ -31,6 +31,40 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+export interface Settings {
+  credentialsFile: string;
+  default: string;
+}
+
+export interface ImageStatus {
+  image: string;
+  present: boolean;
+  building: boolean;
+}
+
+export const getSettings = () => api<Settings>('/api/settings');
+export const updateSettings = (credentialsFile: string) =>
+  api<Settings & { validated: boolean | null }>('/api/settings', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ credentialsFile }),
+  });
+
+export const getImageStatus = () => api<ImageStatus>('/api/image');
+
+/** POST the build and stream the daemon's progress text line-by-line. */
+export async function buildImage(onChunk: (text: string) => void): Promise<void> {
+  const res = await fetch(`${GATEWAY_BASE}/api/image/build`, { method: 'POST' });
+  if (!res.body) throw new Error('build produced no output stream');
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    onChunk(decoder.decode(value, { stream: true }));
+  }
+}
+
 export const listAgents = () => api<Agent[]>('/api/agents');
 export const createAgent = (opts: CreateAgentOptions = {}) =>
   api<Agent>('/api/agents', {

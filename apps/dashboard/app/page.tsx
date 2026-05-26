@@ -3,8 +3,18 @@
 import { Button, buttonVariants, Card, Chip } from '@heroui/react';
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { listAgents, removeAgent, startAgent, stopAgent, type Agent } from '@/lib/gateway';
+import { LuSettings } from 'react-icons/lu';
+import {
+  getImageStatus,
+  listAgents,
+  removeAgent,
+  startAgent,
+  stopAgent,
+  type Agent,
+} from '@/lib/gateway';
+import { ConfirmActionButton } from './ConfirmActionButton';
 import { CreateAgentModal } from './CreateAgentModal';
+import { ImageBanner } from './ImageBanner';
 import { ThemeSwitch } from './ThemeSwitch';
 
 function statusColor(status: string): 'success' | 'warning' | 'danger' | 'default' {
@@ -44,12 +54,22 @@ export default function HomePage() {
     }
   }, []);
 
+  const [imagePresent, setImagePresent] = useState<boolean | null>(null);
+  const refreshImage = useCallback(async () => {
+    try {
+      setImagePresent((await getImageStatus()).present);
+    } catch {
+      /* gateway unreachable — leave as-is */
+    }
+  }, []);
+
   // Initial load + light polling so status changes show up.
   useEffect(() => {
     void refresh();
+    void refreshImage();
     const t = setInterval(() => void refresh(), 4000);
     return () => clearInterval(t);
-  }, [refresh]);
+  }, [refresh, refreshImage]);
 
   const run = useCallback(
     async (fn: () => Promise<unknown>) => {
@@ -75,9 +95,20 @@ export default function HomePage() {
         </div>
         <div className="flex items-center gap-3">
           <ThemeSwitch />
-          <CreateAgentModal onCreated={() => void refresh()} />
+          <Link
+            href="/settings"
+            aria-label="Settings"
+            className={buttonVariants({ variant: 'tertiary', size: 'sm' })}
+          >
+            <LuSettings className="size-4" />
+          </Link>
+          <CreateAgentModal onCreated={() => void refresh()} disabled={imagePresent === false} />
         </div>
       </header>
+
+      {imagePresent === false && (
+        <ImageBanner image="agent-swarm/agent:dev" onBuilt={() => void refreshImage()} />
+      )}
 
       {error && (
         <Card className="border-danger mb-6" variant="secondary">
@@ -115,14 +146,20 @@ export default function HomePage() {
                     Open
                   </Link>
                   {running ? (
-                    <Button
+                    <ConfirmActionButton
+                      confirmWord={a.id}
+                      action="Stop"
+                      title="Stop agent"
+                      description={
+                        <>
+                          This stops the container and its running <code>claude</code> session.
+                        </>
+                      }
                       isDisabled={busy}
-                      size="sm"
-                      variant="tertiary"
-                      onPress={() => void run(() => stopAgent(a.id))}
+                      onConfirm={() => run(() => stopAgent(a.id))}
                     >
                       Stop
-                    </Button>
+                    </ConfirmActionButton>
                   ) : (
                     <Button
                       isDisabled={busy}
@@ -133,14 +170,16 @@ export default function HomePage() {
                       Start
                     </Button>
                   )}
-                  <Button
+                  <ConfirmActionButton
+                    confirmWord={a.id}
+                    action="Remove"
+                    title="Remove agent"
+                    description="This permanently deletes the container and its workspace. This cannot be undone."
                     isDisabled={busy}
-                    size="sm"
-                    variant="danger"
-                    onPress={() => void run(() => removeAgent(a.id))}
+                    onConfirm={() => run(() => removeAgent(a.id))}
                   >
                     Remove
-                  </Button>
+                  </ConfirmActionButton>
                 </Card.Footer>
               </Card>
             );

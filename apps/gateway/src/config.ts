@@ -1,5 +1,6 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /**
  * Gateway mode decides how the proxy reaches an agent container:
@@ -29,11 +30,23 @@ export const config = {
    */
   project: process.env.SWARM_PROJECT ?? process.env.COMPOSE_PROJECT_NAME ?? 'agent-swarm',
   agentImage: process.env.AGENT_IMAGE ?? 'agent-swarm/agent:dev',
+  /** Docker build context for the agent image, so the gateway can build it on
+   * demand. In the container this is bundled at /app/agent-context; for host-dev
+   * it resolves to the repo's images/agent. */
+  agentContextDir:
+    process.env.AGENT_CONTEXT_DIR ??
+    fileURLToPath(new URL('../../../images/agent', import.meta.url)),
+  /** Tiny image used to probe whether a host path exists (pulled if missing). */
+  probeImage: process.env.PROBE_IMAGE ?? 'busybox',
   /** Container name = `${agentNamePrefix}${id}`; the id is what the URL carries. */
   agentNamePrefix: 'swarm-agent-',
-  /** Host credentials file bind-mounted into each agent so it reuses host login. */
+  /** Default host credentials file bind-mounted into each agent (overridable at
+   * runtime via the settings API / dashboard). */
   credentialsFile:
     process.env.CLAUDE_CREDENTIALS_FILE ?? join(homedir(), '.agent-swarm', '.credentials.json'),
+  /** Where runtime settings (e.g. the selected credentials path) are persisted. */
+  settingsFile:
+    process.env.SETTINGS_FILE ?? join(homedir(), '.agent-swarm', 'gateway-settings.json'),
   /** Where to send everything that isn't /api or /a/:id — the Next.js dashboard. */
   dashboardUpstream: process.env.DASHBOARD_UPSTREAM ?? 'http://localhost:3000',
   /** In-container service ports (fixed by the agent image). */

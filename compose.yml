@@ -18,6 +18,10 @@ networks:
     name: swarm-net
     external: true
 
+volumes:
+  # Persists runtime settings (e.g. the selected credentials path) across restarts.
+  gateway-data:
+
 services:
   dashboard:
     build:
@@ -38,5 +42,6 @@ services:
       - '8080:8080'
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - gateway-data:/data
     networks: [swarm-net]
     restart: unless-stopped

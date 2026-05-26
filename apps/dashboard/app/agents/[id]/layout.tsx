@@ -43,12 +43,12 @@ export default function AgentLayout({
         <Tabs selectedKey={segment} className="ml-2">
           <Tabs.ListContainer>
             <Tabs.List aria-label="Agent views">
-              <Tabs.Tab id="terminal" href={`/agents/${id}/terminal`} render={asLink}>
-                Terminal
-                <Tabs.Indicator />
-              </Tabs.Tab>
               <Tabs.Tab id="desktop" href={`/agents/${id}/desktop`} render={asLink}>
                 Desktop
+                <Tabs.Indicator />
+              </Tabs.Tab>
+              <Tabs.Tab id="terminal" href={`/agents/${id}/terminal`} render={asLink}>
+                Terminal
                 <Tabs.Indicator />
               </Tabs.Tab>
             </Tabs.List>

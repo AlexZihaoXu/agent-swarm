@@ -7,4 +7,5 @@
 .git
 .env
 .env.*.local
-images/agent
+# images/agent is bundled into the dashboard image as the agent build context,
+# so the gateway can build the agent image on demand.

@@ -16,7 +16,13 @@ function defaultHostname(): string {
  * "New agent" button that opens a config modal (hostname + display name) before
  * creating. Hostname becomes the agent's id/URL; username is a friendly label.
  */
-export function CreateAgentModal({ onCreated }: { onCreated: () => void }) {
+export function CreateAgentModal({
+  onCreated,
+  disabled = false,
+}: {
+  onCreated: () => void;
+  disabled?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const [hostname, setHostname] = useState('');
   const [username, setUsername] = useState('');
@@ -46,7 +52,9 @@ export function CreateAgentModal({ onCreated }: { onCreated: () => void }) {
 
   return (
     <Modal>
-      <Button onPress={openModal}>New agent</Button>
+      <Button onPress={openModal} isDisabled={disabled}>
+        New agent
+      </Button>
       <Modal.Backdrop isOpen={open} onOpenChange={setOpen}>
         <Modal.Container>
           <Modal.Dialog className="sm:max-w-[400px]">

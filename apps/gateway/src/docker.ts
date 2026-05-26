@@ -1,5 +1,9 @@
+import { readdirSync } from 'node:fs';
+import { basename, dirname } from 'node:path';
+import type { Readable } from 'node:stream';
 import type Docker from 'dockerode';
 import { config as defaultConfig, type Config } from './config.js';
+import { getSettings } from './settings.js';
 import type { Agent, CreateAgentOptions, ProxyTarget, ServiceName } from './types.js';
 
 /** Label key for the agent's friendly display name. */
@@ -33,6 +37,8 @@ export function resolveHostPort(ports: PortBindings, internalPort: number): Prox
 
 /** Drives the Docker engine for agent lifecycle + proxy target resolution. */
 export class AgentManager {
+  private building = false;
+
   constructor(
     private readonly docker: Docker,
     private readonly cfg: Config = defaultConfig,
@@ -66,9 +72,16 @@ export class AgentManager {
         { statusCode: 400 },
       );
     }
+    if (!(await this.imagePresent())) {
+      throw Object.assign(new Error(`agent image "${this.cfg.agentImage}" is not built`), {
+        statusCode: 409,
+      });
+    }
     const username = opts.username?.trim();
     const name = this.containerName(id);
     const portMode = this.cfg.mode === 'ports';
+    // The credentials path is operator-selectable at runtime (settings).
+    const credentialsFile = getSettings().credentialsFile;
 
     // Tag with the stack's compose project so Docker UIs (Portainer) nest the
     // agent under the dashboard, plus our own marker for management.
@@ -91,7 +104,7 @@ export class AgentManager {
         CgroupnsMode: 'host',
         Binds: [
           '/sys/fs/cgroup:/sys/fs/cgroup:rw',
-          `${this.cfg.credentialsFile}:/home/agent/.claude/.credentials.json`,
+          `${credentialsFile}:/home/agent/.claude/.credentials.json`,
         ],
         Tmpfs: { '/run': '', '/run/lock': '', '/tmp': '' },
         CapAdd: ['SYS_BOOT', 'SYS_ADMIN'],
@@ -144,6 +157,94 @@ export class AgentManager {
     }
     const info = await this.docker.getContainer(this.containerName(id)).inspect();
     return resolveHostPort(info.NetworkSettings?.Ports as PortBindings, internalPort);
+  }
+
+  /** Whether the agent image exists locally. */
+  async imagePresent(): Promise<boolean> {
+    try {
+      await this.docker.getImage(this.cfg.agentImage).inspect();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Whether an agent-image build is currently running. */
+  get isBuilding(): boolean {
+    return this.building;
+  }
+
+  /**
+   * Build the agent image from the bundled context, forwarding each daemon
+   * progress event to `onLine` as a text line. Resolves when the build
+   * finishes; rejects if it fails. Guards against concurrent builds.
+   */
+  async buildAgentImageStreaming(onLine: (text: string) => void): Promise<void> {
+    if (this.building)
+      throw Object.assign(new Error('a build is already running'), {
+        statusCode: 409,
+      });
+    this.building = true;
+    try {
+      const src = readdirSync(this.cfg.agentContextDir);
+      const stream = (await this.docker.buildImage(
+        { context: this.cfg.agentContextDir, src },
+        { t: this.cfg.agentImage },
+      )) as unknown as Readable;
+      await new Promise<void>((resolve, reject) => {
+        this.docker.modem.followProgress(
+          stream,
+          (err) => (err ? reject(err) : resolve()),
+          (ev: { stream?: string; status?: string; progress?: string; error?: string }) => {
+            if (ev.error) onLine(`ERROR: ${ev.error}\n`);
+            else if (ev.stream) onLine(ev.stream);
+            else if (ev.status) onLine(`${ev.status}${ev.progress ? ' ' + ev.progress : ''}\n`);
+          },
+        );
+      });
+    } finally {
+      this.building = false;
+    }
+  }
+
+  /** Pull `image` if it isn't present locally. */
+  private async ensureImage(image: string): Promise<void> {
+    try {
+      await this.docker.getImage(image).inspect();
+      return;
+    } catch {
+      /* not present — pull below */
+    }
+    const stream = (await this.docker.pull(image)) as unknown as Readable;
+    await new Promise<void>((resolve, reject) => {
+      this.docker.modem.followProgress(stream, (err) => (err ? reject(err) : resolve()));
+    });
+  }
+
+  /**
+   * Check whether a host path points at an existing regular file, by mounting
+   * its parent directory read-only into a throwaway probe container (Docker
+   * Desktop resolves bind sources under shared dirs like /Users). Returns null
+   * if the check itself couldn't run (advisory, never blocks saving).
+   */
+  async validateHostFile(path: string): Promise<boolean | null> {
+    if (!path || !path.startsWith('/')) return false;
+    let container;
+    try {
+      await this.ensureImage(this.cfg.probeImage);
+      container = await this.docker.createContainer({
+        Image: this.cfg.probeImage,
+        Cmd: ['test', '-f', `/probe/${basename(path)}`],
+        HostConfig: { Binds: [`${dirname(path)}:/probe:ro`] },
+      });
+      await container.start();
+      const { StatusCode } = await container.wait();
+      return StatusCode === 0;
+    } catch {
+      return null;
+    } finally {
+      if (container) await container.remove({ force: true }).catch(() => {});
+    }
   }
 
   private toAgent(info: Docker.ContainerInspectInfo): Agent {
