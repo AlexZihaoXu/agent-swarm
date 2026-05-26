@@ -82,14 +82,14 @@ export function AgentCard({ agent, onChanged }: { agent: Agent; onChanged: () =>
         <Link
           href={`/agents/${agent.id}/desktop`}
           aria-label={`Open ${agent.id}`}
-          className="border-separator group relative flex aspect-video w-full shrink-0 items-center justify-center overflow-hidden border bg-black sm:w-56"
+          className="border-separator group relative block aspect-video w-full shrink-0 overflow-hidden border bg-black sm:w-44"
         >
           {running ? (
             <iframe
               title={`${agent.id} preview`}
               src={desktopUrl(agent.id)}
               tabIndex={-1}
-              className="pointer-events-none h-4/5 w-4/5"
+              className="pointer-events-none h-full w-full"
             />
           ) : (
             <span className="text-muted absolute inset-0 flex items-center justify-center text-xs">
