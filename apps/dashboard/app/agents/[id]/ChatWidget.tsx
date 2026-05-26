@@ -207,7 +207,13 @@ export function ChatWidget({ agentId }: { agentId: string }) {
     const ws = wsRef.current;
     if (!text || !ws || ws.readyState !== 1) return;
     ws.send(JSON.stringify({ type: 'data', data: text }));
-    ws.send(JSON.stringify({ type: 'data', data: '\r' }));
+    // Submit AFTER a gap. Sending the text and Enter back-to-back makes Claude's
+    // TUI treat them as one paste, turning Enter into a literal newline instead
+    // of a submit (the message just sits in the box). The delay lets paste
+    // detection settle so the Enter registers as submit.
+    setTimeout(() => {
+      if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'data', data: '\r' }));
+    }, 250);
     atBottomRef.current = true; // sending always snaps back to the latest
     // Optimistic echo until the transcript catches up.
     setTurns((prev) => [
