@@ -96,6 +96,9 @@ export function ChatWidget({ agentId }: { agentId: string }) {
   const draggedRef = useRef(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // Stick to the bottom only while the user is already there — so scrolling up
+  // to read isn't yanked back down by polls.
+  const atBottomRef = useRef(true);
   const [attaching, setAttaching] = useState(false);
   const stats = useAgentStats(agentId);
   const working = stats?.status === 'busy';
@@ -138,6 +141,7 @@ export function ChatWidget({ agentId }: { agentId: string }) {
   // While open: poll the transcript and keep a send socket to the claude session.
   useEffect(() => {
     if (!open) return;
+    atBottomRef.current = true; // open pinned to the latest message
     void refresh();
     const poll = setInterval(() => void refresh(), 2000);
     let ws: WebSocket | null = null;
@@ -163,9 +167,18 @@ export function ChatWidget({ agentId }: { agentId: string }) {
     };
   }, [open, agentId, refresh]);
 
-  // Stick to the bottom as new turns arrive (and as the typing indicator shows).
+  const scrollToBottom = () => {
+    const el = scrollRef.current;
+    if (el) el.scrollTo({ top: el.scrollHeight });
+  };
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (el) atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
+
+  // Follow new content only when pinned to the bottom (and always on open).
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+    if (atBottomRef.current) scrollToBottom();
   }, [turns, open, working]);
 
   // Type-to-focus: while the dock is open, starting to type anywhere (outside a
@@ -189,6 +202,7 @@ export function ChatWidget({ agentId }: { agentId: string }) {
     if (!text || !ws || ws.readyState !== 1) return;
     ws.send(JSON.stringify({ type: 'data', data: text }));
     ws.send(JSON.stringify({ type: 'data', data: '\r' }));
+    atBottomRef.current = true; // sending always snaps back to the latest
     // Optimistic echo until the transcript catches up.
     setTurns((prev) => [
       ...prev,
@@ -257,7 +271,11 @@ export function ChatWidget({ agentId }: { agentId: string }) {
               </button>
             </header>
 
-            <div ref={scrollRef} className="min-h-0 flex-1 space-y-4 overflow-auto p-3">
+            <div
+              ref={scrollRef}
+              onScroll={onScroll}
+              className="min-h-0 flex-1 space-y-4 overflow-auto p-3"
+            >
               {turns.length === 0 && (
                 <p className="text-muted text-sm">No messages yet. Say something below.</p>
               )}
