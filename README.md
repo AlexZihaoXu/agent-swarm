@@ -18,9 +18,10 @@ build (see [Planned: the swarm layer](#planned-the-swarm-layer)).
 
 ## Overview
 
-The initial build has three planes:
+The initial build has two kinds of containers — the **dashboard** (control
+plane) and the **agents** it spawns — across three logical planes:
 
-1. **Dashboard (UI)** — Portainer-style operator console: create agents, edit
+1. **Dashboard UI** — Portainer-style operator console: create agents, edit
    config, and watch/drive each agent through two live views — an **xterm.js
    terminal** (the `claude` session) and a **noVNC desktop** (the agent's GUI) —
    plus start/stop/delete.
@@ -28,8 +29,9 @@ The initial build has three planes:
    A TypeScript service that owns agent lifecycle (talks **directly to the
    Docker engine** via `dockerode`) and **reverse-proxies** each agent's
    terminal + desktop streams under `/a/:id/…` — so any number of agents are
-   reachable through one port with **no per-agent host ports to collide**. It
-   also serves the dashboard.
+   reachable through one port with **no per-agent host ports to collide**. The
+   gateway and the Next.js UI run **together in one container** (the gateway
+   serves the UI by proxying to the Next server on an internal port).
 3. **Agent runtime (data plane)** — an **Ubuntu 24.04 GNOME desktop** container
    running **systemd** as PID 1. systemd starts the desktop stack (TigerVNC +
    GNOME Shell, served to the browser over **noVNC** on `:6080`) and a
@@ -47,25 +49,28 @@ it.
 ```
                               host :8080   ← the only published port
                                    │
-                       ┌───────────▼────────────┐ ── Docker engine API (socket) ──┐
-                       │      Gateway (TS)       │   lifecycle via dockerode        │
-                       │  /api/agents            │   (create / start / stop / rm)   │
-                       │  /a/:id/desktop  ─┐      │                                  │
-                       │  /a/:id/terminal ─┤ reverse-proxy HTTP + WS                 │
-                       │  /*  → dashboard  │      │                                  │
-                       └───────────┬───────┴──────┘                                  │
-                                   │  swarm-net (Docker DNS resolves by name)        │
-              ┌────────────────────┼─────────────────────┐                          │
-        ┌─────▼──────────────┐ ┌───▼────────────────┐ ┌──▼─────────────────┐  spawns │
-        │ Agent (systemd PID1)│ │ Agent (systemd PID1)│ │ Agent (systemd PID1)│ ◄──────┘
+        ┌──────────────────────────▼──────────────────────────┐ ─ Docker socket ─┐
+        │            Dashboard container (one container)        │  lifecycle via   │
+        │  ┌─────────────────────┐   ┌──────────────────────┐  │  dockerode       │
+        │  │  Gateway (TS, :8080) │──▶│ Next.js UI (int :3000)│ │  (create/stop/…) │
+        │  │  /api/agents         │   │  HeroUI dashboard     │  │                  │
+        │  │  /a/:id/desktop ─┐   │   └──────────────────────┘  │                  │
+        │  │  /a/:id/terminal ┤ reverse-proxy HTTP + WS         │                  │
+        │  │  /*  → UI        │   │                             │                  │
+        │  └──────────────────┴───┘                             │                  │
+        └──────────────────────────┬──────────────────────────┘                  │
+                                   │  swarm-net (Docker DNS resolves by name)      │
+              ┌────────────────────┼─────────────────────┐                        │
+        ┌─────▼──────────────┐ ┌───▼────────────────┐ ┌──▼─────────────────┐ spawns│
+        │ Agent (systemd PID1)│ │ Agent (systemd PID1)│ │ Agent (systemd PID1)│ ◄────┘
         │ GNOME+noVNC   :6080 │ │ GNOME+noVNC   :6080 │ │  … (no host ports) │
         │ terminals     :7681 │ │ terminals     :7681 │ │                    │
         │ node-pty→claude/sh  │ │ node-pty→claude/sh  │ │                    │
         └─────────────────────┘ └─────────────────────┘ └────────────────────┘
 
-   The Dashboard (Next.js + HeroUI) is served by the gateway and embeds each
-   agent's xterm.js terminal + noVNC desktop through the /a/:id proxy.
-   Persistence (Postgres / object store) and the planned Swarm Services
+   The gateway and Next.js UI share one container; the gateway serves the UI and
+   embeds each agent's xterm.js terminal + noVNC desktop through the /a/:id
+   proxy. Persistence (Postgres / object store) and the planned Swarm Services
    (messaging / memory / tools MCP servers) attach here later.
 ```
 
@@ -80,20 +85,18 @@ evolve together:
 agent-swarm/
 ├── apps/
 │   ├── dashboard/            # Web UI (Next.js + React + HeroUI + xterm.js + noVNC)
-│   │   ├── app/              # App Router: fleet page + /agents/[id]/terminal
+│   │   ├── app/              # App Router: fleet page + /agents/[id]/{terminal,desktop}
 │   │   ├── lib/gateway.ts    # client for the gateway API + /a/:id URL builders
-│   │   ├── Dockerfile        # Next.js standalone image
 │   │   └── package.json
 │   │
 │   ├── gateway/              # Control plane + reverse proxy (single published port)
 │   │   ├── src/
 │   │   │   ├── server.ts     # HTTP server: API + /a/:id proxy + WS upgrades
 │   │   │   ├── docker.ts     # dockerode lifecycle + proxy target resolver
-│   │   │   ├── proxy.ts      # http-proxy HTTP+WS forwarding (prefix strip)
+│   │   │   ├── proxy.ts      # http-proxy (HTTP) + raw TCP relay (WS upgrades)
 │   │   │   ├── router.ts     # /a/:id/<service>/<rest> path parsing
 │   │   │   ├── api.ts        # /api/agents REST handlers
-│   │   │   └── config.ts     # env (mode, network, image, ports, upstream)
-│   │   ├── Dockerfile
+│   │   │   └── config.ts     # env (mode, network, image, project, upstream)
 │   │   └── package.json
 │   │
 │   └── swarm-services/       # (planned) shared MCP servers — messaging/memory/tools
@@ -114,7 +117,9 @@ agent-swarm/
 │           ├── public/index.html      # xterm.js multi-terminal UI
 │           └── package.json
 │
-├── compose.yml               # prod stack: gateway + dashboard on swarm-net
+├── Dockerfile                # combined image: gateway + Next.js UI in one container
+├── start.mjs                 # supervisor: runs Next (:3000) + gateway (:8080) together
+├── compose.yml               # the dashboard stack (one service) on swarm-net
 ├── .env.example
 ├── pnpm-workspace.yaml
 ├── package.json
@@ -123,15 +128,16 @@ agent-swarm/
 
 ### What lives where
 
-| Path                   | Responsibility                                                                          |
-| ---------------------- | --------------------------------------------------------------------------------------- |
-| `apps/dashboard`       | Operator UI: agent list, create/config forms, live xterm.js terminal + noVNC desktop.   |
-| `apps/gateway`         | Control plane + reverse proxy: owns lifecycle (dockerode), routes `/a/:id/…` to agents. |
-| `apps/swarm-services`  | _(planned)_ shared MCP servers — messaging, memory, custom tools.                       |
-| `packages/shared`      | _(planned)_ types/DTOs shared by dashboard ↔ gateway ↔ runtime to stay in sync.         |
-| `images/agent`         | Ubuntu 24.04 GNOME desktop image (systemd): VNC/noVNC, browser, VS Code, toolchain.     |
-| `images/agent/runtime` | In-container terminal supervisor: node-pty sessions streamed over WebSocket.            |
-| `compose.yml`          | Prod stack: gateway + dashboard on the shared `swarm-net` network.                      |
+| Path                       | Responsibility                                                                          |
+| -------------------------- | --------------------------------------------------------------------------------------- |
+| `apps/dashboard`           | Operator UI: agent list, create/config forms, live xterm.js terminal + noVNC desktop.   |
+| `apps/gateway`             | Control plane + reverse proxy: owns lifecycle (dockerode), routes `/a/:id/…` to agents. |
+| `apps/swarm-services`      | _(planned)_ shared MCP servers — messaging, memory, custom tools.                       |
+| `packages/shared`          | _(planned)_ types/DTOs shared by dashboard ↔ gateway ↔ runtime to stay in sync.         |
+| `images/agent`             | Ubuntu 24.04 GNOME desktop image (systemd): VNC/noVNC, browser, VS Code, toolchain.     |
+| `images/agent/runtime`     | In-container terminal supervisor: node-pty sessions streamed over WebSocket.            |
+| `Dockerfile` / `start.mjs` | Combined image + supervisor: gateway and Next.js UI in one container.                   |
+| `compose.yml`              | The dashboard stack (single service) on the shared `swarm-net` network.                 |
 
 ---
 
@@ -276,18 +282,19 @@ injecting the systemd flags and credential mount automatically. See
 
 ### Containerized (recommended) — `compose.yml`
 
-The whole stack runs as containers behind the single `:8080` port. The gateway
-reaches agents **by name over `swarm-net`** in `network` mode — and because
-container-to-container DNS works on both Linux and Docker Desktop for Mac (only
-_host_-to-container is blocked on Mac), this path works everywhere. Agents
-publish **no host ports**.
+The control plane runs as **one container** (gateway + Next.js UI) behind the
+single `:8080` port — so the stack is just the dashboard plus each agent. The
+gateway reaches agents **by name over `swarm-net`** in `network` mode — and
+because container-to-container DNS works on both Linux and Docker Desktop for
+Mac (only _host_-to-container is blocked on Mac), this path works everywhere.
+Agents publish **no host ports**.
 
 ```bash
 docker network create swarm-net 2>/dev/null || true   # shared, external network
 docker build -t agent-swarm/agent:dev images/agent     # the agent image
 
 CLAUDE_CREDENTIALS_FILE=$HOME/.agent-swarm/.credentials.json \
-  docker compose up --build -d        # dashboard + gateway → http://localhost:8080
+  docker compose up --build -d        # the dashboard container → http://localhost:8080
 ```
 
 Spawned agents are tagged with this stack's compose project (`agent-swarm`), so
