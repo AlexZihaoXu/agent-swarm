@@ -46,9 +46,9 @@
   --warning: oklch(78.19% 0.1603 50.71);
   --warning-foreground: oklch(21.03% 0.0059 50.71);
 
-  /* Border Radius */
-  --radius: 0;
-  --field-radius: 0;
+  /* Border Radius — gently rounded, not blocky. */
+  --radius: 0.5rem;
+  --field-radius: 0.5rem;
 
   /* Font Family — open-source stand-ins for Anthropic's brand pair. */
   --font-sans: var(--font-sans-brand), ui-sans-serif, system-ui, sans-serif;
