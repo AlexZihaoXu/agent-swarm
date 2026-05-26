@@ -33,7 +33,7 @@ export function DesktopPanel({ src, title }: { src: string; title: string }) {
       <Button
         size="sm"
         variant={locked ? 'secondary' : 'primary'}
-        className="fixed top-2 right-4 z-50"
+        className="fixed top-2 right-4 z-50 min-w-[8.5rem] justify-center transition-colors duration-300"
         onPress={() => setLocked((v) => !v)}
       >
         {locked ? <LuLock className="size-4" /> : <LuLockOpen className="size-4" />}

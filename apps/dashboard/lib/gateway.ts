@@ -119,6 +119,16 @@ export const getTranscript = (id: string) => api<ChatTurn[]>(`/a/${id}/terminal/
 export const terminalWsUrl = (id: string, session = 'claude') =>
   `${wsOrigin()}/a/${id}/terminal/ws?session=${encodeURIComponent(session)}&cols=80&rows=24`;
 
+/** Upload a file into the agent (~/uploads); returns its in-agent path. */
+export async function uploadToAgent(id: string, file: File): Promise<string> {
+  const res = await fetch(
+    `${GATEWAY_BASE}/a/${id}/terminal/api/upload?name=${encodeURIComponent(file.name)}`,
+    { method: 'POST', body: file },
+  );
+  if (!res.ok) throw new Error(`upload failed → ${res.status}`);
+  return (await res.json()).path as string;
+}
+
 export interface UpgradeInfo {
   installed: number;
   latest: number;

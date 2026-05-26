@@ -3,8 +3,8 @@
 import { Button } from '@heroui/react';
 import { AnimatePresence, motion, useDragControls } from 'framer-motion';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LuMessageSquare, LuSend, LuX } from 'react-icons/lu';
-import { getTranscript, terminalWsUrl, type ChatTurn } from '@/lib/gateway';
+import { LuArrowUp, LuMessageSquare, LuPaperclip, LuX } from 'react-icons/lu';
+import { getTranscript, terminalWsUrl, uploadToAgent, type ChatTurn } from '@/lib/gateway';
 import { useAgentStats } from '@/app/AgentStats';
 
 /**
@@ -21,7 +21,24 @@ export function ChatWidget({ agentId }: { agentId: string }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const dragControls = useDragControls();
   const draggedRef = useRef(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [attaching, setAttaching] = useState(false);
   const working = useAgentStats(agentId)?.status === 'busy';
+
+  const onPickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setAttaching(true);
+    try {
+      const p = await uploadToAgent(agentId, file);
+      setInput((prev) => (prev ? `${prev}\n${p}` : p));
+    } catch {
+      /* ignore */
+    } finally {
+      setAttaching(false);
+    }
+  };
 
   const refresh = useCallback(async () => {
     try {
@@ -141,52 +158,69 @@ export function ChatWidget({ agentId }: { agentId: string }) {
               </button>
             </header>
 
-            <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-auto p-3">
+            <div ref={scrollRef} className="min-h-0 flex-1 space-y-4 overflow-auto p-3">
               {turns.length === 0 && (
                 <p className="text-muted text-sm">No messages yet. Say something below.</p>
               )}
               {turns.map((t, i) => (
-                <div key={i} className={t.role === 'user' ? 'text-right' : ''}>
-                  <span className="text-muted text-[10px] tracking-wide uppercase">{t.role}</span>
-                  {t.items.map((it, j) =>
-                    it.kind === 'text' ? (
-                      <div
-                        key={j}
-                        className={`mt-0.5 inline-block max-w-full rounded px-2 py-1 text-sm whitespace-pre-wrap ${
-                          t.role === 'user'
-                            ? 'bg-accent-soft text-accent-soft-foreground text-left'
-                            : 'bg-surface-secondary'
-                        }`}
-                      >
-                        {it.text}
-                      </div>
-                    ) : (
-                      <div key={j} className="text-muted mt-0.5 font-mono text-xs">
-                        ⚙ {it.name}
-                      </div>
-                    ),
-                  )}
+                <div key={i} className={t.role === 'user' ? 'flex justify-end' : ''}>
+                  {/* User → grey bubble on the right; assistant → plain text on the left. */}
+                  <div
+                    className={
+                      t.role === 'user'
+                        ? 'bg-surface-secondary max-w-[85%] rounded-lg px-3 py-2 text-sm'
+                        : 'max-w-full space-y-1.5 text-sm'
+                    }
+                  >
+                    {t.items.map((it, j) =>
+                      it.kind === 'text' ? (
+                        <p key={j} className="whitespace-pre-wrap">
+                          {it.text}
+                        </p>
+                      ) : (
+                        <p key={j} className="text-muted font-mono text-xs">
+                          ⚙ {it.name}
+                        </p>
+                      ),
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
 
-            <div className="border-separator flex items-end gap-2 border-t p-2">
-              <textarea
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    send();
-                  }
-                }}
-                rows={2}
-                placeholder="Message the agent…"
-                className="bg-field text-field-foreground border-field-border min-h-0 flex-1 resize-none border px-2 py-1 text-sm outline-none"
-              />
-              <Button isIconOnly aria-label="Send" onPress={send} isDisabled={!input.trim()}>
-                <LuSend className="size-4" />
-              </Button>
+            <div className="p-2">
+              <div className="border-separator focus-within:border-accent bg-surface flex flex-col gap-2 border p-2 transition-colors">
+                <textarea
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      send();
+                    }
+                  }}
+                  rows={2}
+                  placeholder="Message the agent…"
+                  className="placeholder:text-muted max-h-32 min-h-0 resize-none bg-transparent text-sm outline-none"
+                />
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      aria-label="Attach file"
+                      onClick={() => fileRef.current?.click()}
+                      className="text-muted hover:text-foreground hover:bg-surface-secondary flex size-8 items-center justify-center transition-colors"
+                    >
+                      <LuPaperclip className="size-4" />
+                    </button>
+                    <input ref={fileRef} type="file" hidden onChange={onPickFile} />
+                    {attaching && <span className="text-muted text-xs">uploading…</span>}
+                  </div>
+                  <Button isIconOnly aria-label="Send" onPress={send} isDisabled={!input.trim()}>
+                    <LuArrowUp className="size-4" />
+                  </Button>
+                </div>
+              </div>
             </div>
           </motion.div>
         )}
