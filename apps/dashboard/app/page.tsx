@@ -1,6 +1,7 @@
 'use client';
 
 import { buttonVariants, Card } from '@heroui/react';
+import { AnimatePresence, motion } from 'framer-motion';
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { LuSettings } from 'react-icons/lu';
@@ -60,25 +61,50 @@ export default function HomePage() {
         </div>
       </header>
 
-      {imagePresent === false && (
-        <ImageBanner image="agent-swarm/agent:dev" onBuilt={() => void refreshImage()} />
-      )}
-
-      {error && (
-        <Card className="border-danger mb-6" variant="secondary">
-          <Card.Content className="text-danger text-sm">
-            Can&apos;t reach the gateway: {error}
-          </Card.Content>
-        </Card>
-      )}
+      <AnimatePresence>
+        {imagePresent === false && (
+          <ImageBanner
+            key="banner"
+            image="agent-swarm/agent:dev"
+            onBuilt={() => void refreshImage()}
+          />
+        )}
+        {error && (
+          <motion.div
+            key="error"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+          >
+            <Card className="border-danger mb-6" variant="secondary">
+              <Card.Content className="text-danger text-sm">
+                Can&apos;t reach the gateway: {error}
+              </Card.Content>
+            </Card>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {agents.length === 0 && !error ? (
         <p className="text-muted text-sm">No agents yet. Create one to get started.</p>
       ) : (
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-          {agents.map((a) => (
-            <AgentCard key={a.id} agent={a} onChanged={() => void refresh()} />
-          ))}
+          <AnimatePresence mode="popLayout">
+            {agents.map((a) => (
+              <motion.div
+                key={a.id}
+                layout
+                initial={{ opacity: 0, scale: 0.96 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.96 }}
+                transition={{ duration: 0.2, ease: 'easeOut' }}
+              >
+                <AgentCard agent={a} onChanged={() => void refresh()} />
+              </motion.div>
+            ))}
+          </AnimatePresence>
         </div>
       )}
     </main>

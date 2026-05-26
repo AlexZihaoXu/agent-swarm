@@ -38,7 +38,13 @@ export function ImageBanner({ image, onBuilt }: { image: string; onBuilt: () => 
   };
 
   return (
-    <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
+    <motion.div
+      initial={{ opacity: 0, y: -8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -8 }}
+      transition={{ duration: 0.2 }}
+      className="mb-6"
+    >
       <div className="border-warning bg-warning-soft text-warning-soft-foreground flex items-center gap-4 border px-4 py-3">
         <div className="flex-1">
           <p className="text-sm font-semibold">Agent image not built</p>
