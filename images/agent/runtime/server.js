@@ -331,6 +331,25 @@ const server = http.createServer(async (req, res) => {
   if (u.pathname === '/api/transcript' && req.method === 'GET') {
     return sendJson(res, 200, readTranscript());
   }
+  // Attachment upload: raw body → ~/uploads/<name>; returns the in-agent path
+  // so the chat can reference it for claude to read.
+  if (u.pathname === '/api/upload' && req.method === 'POST') {
+    const name = path
+      .basename(u.searchParams.get('name') || 'upload.bin')
+      .replace(/[^\w.\-]/g, '_');
+    const dir = path.join(HOME, 'uploads');
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+    } catch {
+      /* ignore */
+    }
+    const dest = path.join(dir, name);
+    const out = fs.createWriteStream(dest);
+    req.pipe(out);
+    out.on('finish', () => sendJson(res, 200, { path: dest }));
+    out.on('error', () => sendJson(res, 500, { error: 'upload failed' }));
+    return;
+  }
   // Low-res JPEG of the desktop for fleet-card previews (cheap; full live view
   // is the noVNC stream). Cached ~1s so multiple viewers don't hammer X.
   if (u.pathname === '/api/screenshot' && req.method === 'GET') {
