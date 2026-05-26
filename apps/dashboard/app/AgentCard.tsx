@@ -141,11 +141,11 @@ export function AgentCard({ agent, onChanged }: { agent: Agent; onChanged: () =>
             </div>
           </div>
 
-          {/* Wraps to as many lines as needed — no truncation. */}
           <p className="text-muted font-mono text-xs break-words">
             {agent.username ? `${agent.id} · ` : ''}
-            {prettyImage(agent.image)} · created {relativeTime(agent.createdAt)}
+            {prettyImage(agent.image)}
           </p>
+          <p className="text-muted font-mono text-xs">created {relativeTime(agent.createdAt)}</p>
 
           {running && <AgentStatsInline agentId={agent.id} />}
         </div>
