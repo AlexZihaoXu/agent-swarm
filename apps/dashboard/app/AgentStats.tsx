@@ -23,9 +23,16 @@ function fmtCost(usd: number): string {
 }
 
 /** Polls one agent's live session stats (null until/unless reachable). */
-export function useAgentStats(agentId: string, intervalMs = 3000): AgentStats | null {
+export function useAgentStats(
+  agentId: string,
+  { intervalMs = 3000, enabled = true }: { intervalMs?: number; enabled?: boolean } = {},
+): AgentStats | null {
   const [stats, setStats] = useState<AgentStats | null>(null);
   useEffect(() => {
+    if (!enabled) {
+      setStats(null);
+      return;
+    }
     let alive = true;
     const tick = async () => {
       try {
@@ -41,8 +48,26 @@ export function useAgentStats(agentId: string, intervalMs = 3000): AgentStats | 
       alive = false;
       clearInterval(t);
     };
-  }, [agentId, intervalMs]);
+  }, [agentId, intervalMs, enabled]);
   return stats;
+}
+
+/** Maps the container + claude-session status into a single chip. */
+export function agentChip(
+  containerStatus: string,
+  sessionStatus?: string | null,
+): {
+  label: string;
+  color: 'success' | 'warning' | 'danger' | 'default';
+  working: boolean;
+} {
+  if (containerStatus !== 'running') {
+    const danger = containerStatus === 'exited' || containerStatus === 'dead';
+    return { label: containerStatus, color: danger ? 'danger' : 'warning', working: false };
+  }
+  if (sessionStatus === 'busy') return { label: 'working', color: 'success', working: true };
+  if (sessionStatus === 'idle') return { label: 'idle', color: 'warning', working: false };
+  return { label: 'running', color: 'success', working: false };
 }
 
 function Metric({
@@ -88,13 +113,11 @@ function ActivityBadge({ status }: { status: string }) {
   );
 }
 
-/** Compact one-line stats for a fleet card. */
-export function AgentStatsInline({ agentId }: { agentId: string }) {
-  const s = useAgentStats(agentId);
+/** Compact one-line stats for a fleet card (presentational — caller supplies stats). */
+export function AgentStatsInline({ stats: s }: { stats: AgentStats | null }) {
   if (!s || (!s.model && !s.tokens.total)) return null;
   return (
-    <div className="text-muted mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-      {s.status && <ActivityBadge status={s.status} />}
+    <div className="text-muted flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
       {s.model && <span className="text-foreground font-medium">{s.model}</span>}
       {s.tokens.total > 0 && (
         <Metric icon={<LuCoins className="size-3" />} title="total tokens" strong>
