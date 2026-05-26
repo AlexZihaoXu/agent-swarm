@@ -1,5 +1,6 @@
-# The dashboard stack: one published port (gateway :8080) fronting the
-# dashboard and reverse-proxying to agent containers by name over swarm-net.
+# The dashboard stack: a single container running the gateway (control plane +
+# reverse proxy) and the Next.js UI together, behind one published port (:8080).
+# The only other containers are the agents the gateway spawns at runtime.
 #
 # Works on Linux and macOS: the gateway runs in a container here, and
 # container-to-container traffic over swarm-net resolves by name on both (only
@@ -21,24 +22,13 @@ services:
   dashboard:
     build:
       context: .
-      dockerfile: apps/dashboard/Dockerfile
-    # Empty => the dashboard's client calls the gateway same-origin (relative).
-    environment:
-      NEXT_PUBLIC_GATEWAY_URL: ''
-    networks: [swarm-net]
-    restart: unless-stopped
-
-  gateway:
-    build:
-      context: .
-      dockerfile: apps/gateway/Dockerfile
+      dockerfile: Dockerfile
     environment:
       GATEWAY_MODE: network
       SWARM_NETWORK: swarm-net
       # Nest spawned agents under this stack in Docker UIs.
       SWARM_PROJECT: agent-swarm
       AGENT_IMAGE: agent-swarm/agent:dev
-      DASHBOARD_UPSTREAM: http://dashboard:3000
       DOCKER_SOCKET: /var/run/docker.sock
       # IMPORTANT: a HOST path. The gateway only forwards this string to the
       # Docker daemon as an agent bind mount — the daemon resolves it on the
@@ -49,5 +39,4 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     networks: [swarm-net]
-    depends_on: [dashboard]
     restart: unless-stopped
