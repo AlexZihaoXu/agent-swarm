@@ -1,6 +1,14 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import {
+  LuArrowDown,
+  LuArrowUp,
+  LuCoins,
+  LuDollarSign,
+  LuRefreshCcw,
+  LuMessageSquare,
+} from 'react-icons/lu';
 import { getAgentStats, type AgentStats } from '@/lib/gateway';
 
 function fmtTokens(n: number): string {
@@ -10,7 +18,7 @@ function fmtTokens(n: number): string {
 }
 
 function fmtCost(usd: number): string {
-  return usd < 1 ? `$${usd.toFixed(3)}` : `$${usd.toFixed(2)}`;
+  return usd < 1 ? usd.toFixed(3) : usd.toFixed(2);
 }
 
 /** Polls one agent's live session stats (null until/unless reachable). */
@@ -36,16 +44,65 @@ export function useAgentStats(agentId: string, intervalMs = 3000): AgentStats | 
   return stats;
 }
 
+function Metric({
+  icon,
+  title,
+  children,
+  strong,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  children: React.ReactNode;
+  strong?: boolean;
+}) {
+  return (
+    <span
+      title={title}
+      className={`flex items-center gap-1 tabular-nums ${strong ? 'text-foreground' : ''}`}
+    >
+      <span className="opacity-60">{icon}</span>
+      {children}
+    </span>
+  );
+}
+
+function StatusDot({ status }: { status: string }) {
+  const color =
+    status === 'busy' || status === 'running'
+      ? 'bg-success'
+      : status === 'idle'
+        ? 'bg-muted'
+        : 'bg-warning';
+  return (
+    <span className="flex items-center gap-1.5 capitalize">
+      <span className={`size-1.5 rounded-full ${color}`} />
+      {status}
+    </span>
+  );
+}
+
 /** Compact one-line stats for a fleet card. */
 export function AgentStatsInline({ agentId }: { agentId: string }) {
   const s = useAgentStats(agentId);
   if (!s || (!s.model && !s.tokens.total)) return null;
   return (
-    <div className="text-muted mt-1 flex flex-wrap items-center gap-x-3 font-mono text-xs">
-      {s.model && <span className="text-foreground">{s.model}</span>}
-      {s.tokens.total > 0 && <span>{fmtTokens(s.tokens.total)} tok</span>}
-      {s.cost != null && s.cost > 0 && <span>{fmtCost(s.cost)}</span>}
-      {s.turns > 0 && <span>{s.turns} turns</span>}
+    <div className="text-muted mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+      {s.model && <span className="text-foreground font-medium">{s.model}</span>}
+      {s.tokens.total > 0 && (
+        <Metric icon={<LuCoins className="size-3" />} title="total tokens" strong>
+          {fmtTokens(s.tokens.total)}
+        </Metric>
+      )}
+      {s.cost != null && s.cost > 0 && (
+        <Metric icon={<LuDollarSign className="size-3" />} title="session cost (USD)">
+          {fmtCost(s.cost)}
+        </Metric>
+      )}
+      {s.turns > 0 && (
+        <Metric icon={<LuMessageSquare className="size-3" />} title="turns">
+          {s.turns}
+        </Metric>
+      )}
     </div>
   );
 }
@@ -56,18 +113,32 @@ export function AgentStatsBar({ agentId }: { agentId: string }) {
   if (!s) return null;
   const t = s.tokens;
   return (
-    <div className="text-muted ml-auto flex flex-wrap items-center gap-x-3 font-mono text-xs">
+    <div className="text-muted ml-auto flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
       {s.model && <span className="text-foreground font-semibold">{s.model}</span>}
-      {s.status && <span className="capitalize">{s.status}</span>}
+      {s.status && <StatusDot status={s.status} />}
       {t.total > 0 && (
-        <span title="input / output / cache-read">
-          ↑{fmtTokens(t.input)} ↓{fmtTokens(t.output)} ⟳{fmtTokens(t.cacheRead)}
-        </span>
+        <>
+          <Metric icon={<LuArrowUp className="size-3" />} title="input tokens">
+            {fmtTokens(t.input)}
+          </Metric>
+          <Metric icon={<LuArrowDown className="size-3" />} title="output tokens">
+            {fmtTokens(t.output)}
+          </Metric>
+          <Metric icon={<LuRefreshCcw className="size-3" />} title="cache-read tokens">
+            {fmtTokens(t.cacheRead)}
+          </Metric>
+          <Metric icon={<LuCoins className="size-3" />} title="total tokens" strong>
+            {fmtTokens(t.total)}
+          </Metric>
+        </>
       )}
-      {t.total > 0 && <span className="text-foreground">{fmtTokens(t.total)} tok</span>}
-      {s.cost != null && s.cost > 0 && <span>{fmtCost(s.cost)}</span>}
+      {s.cost != null && s.cost > 0 && (
+        <Metric icon={<LuDollarSign className="size-3" />} title="session cost (USD)">
+          {fmtCost(s.cost)}
+        </Metric>
+      )}
       {(s.linesAdded > 0 || s.linesRemoved > 0) && (
-        <span>
+        <span className="tabular-nums" title="lines added / removed">
           <span className="text-success">+{s.linesAdded}</span>{' '}
           <span className="text-danger">-{s.linesRemoved}</span>
         </span>

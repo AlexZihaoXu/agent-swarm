@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { LuSettings } from 'react-icons/lu';
 import {
+  desktopUrl,
   getImageStatus,
   listAgents,
   removeAgent,
@@ -13,6 +14,7 @@ import {
   type Agent,
 } from '@/lib/gateway';
 import { AgentStatsInline } from './AgentStats';
+import { AgentUpdate } from './AgentUpdate';
 import { ConfirmActionButton } from './ConfirmActionButton';
 import { CreateAgentModal } from './CreateAgentModal';
 import { ImageBanner } from './ImageBanner';
@@ -122,67 +124,93 @@ export default function HomePage() {
       {agents.length === 0 && !error ? (
         <p className="text-muted text-sm">No agents yet. Create one to get started.</p>
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
           {agents.map((a) => {
             const running = a.status === 'running';
             return (
               <Card key={a.id}>
-                <Card.Header>
-                  <div className="flex items-center justify-between">
-                    <Card.Title>{a.username || a.id}</Card.Title>
-                    <Chip color={statusColor(a.status)} size="sm" variant="soft">
-                      {a.status}
-                    </Chip>
-                  </div>
-                  <Card.Description className="font-mono text-xs">
-                    {a.username ? `${a.id} · ` : ''}
-                    {prettyImage(a.image)} · created {relativeTime(a.createdAt)}
-                  </Card.Description>
-                  {running && <AgentStatsInline agentId={a.id} />}
-                </Card.Header>
-                <Card.Footer className="mt-2 flex flex-wrap gap-2">
+                <div className="flex flex-col gap-4 sm:flex-row">
+                  {/* Live view: a non-interactive, scaled noVNC preview; click → open. */}
                   <Link
                     href={`/agents/${a.id}/desktop`}
-                    className={buttonVariants({ variant: 'secondary', size: 'sm' })}
+                    aria-label={`Open ${a.id}`}
+                    className="border-separator group relative block aspect-video w-full shrink-0 overflow-hidden border bg-black sm:w-56"
                   >
-                    Open
+                    {running ? (
+                      <iframe
+                        title={`${a.id} preview`}
+                        src={desktopUrl(a.id)}
+                        tabIndex={-1}
+                        className="pointer-events-none h-full w-full"
+                      />
+                    ) : (
+                      <span className="text-muted absolute inset-0 flex items-center justify-center text-xs">
+                        stopped
+                      </span>
+                    )}
+                    <span className="absolute inset-0 bg-black/0 transition-colors group-hover:bg-black/10" />
                   </Link>
-                  {running ? (
-                    <ConfirmActionButton
-                      confirmWord={a.id}
-                      action="Stop"
-                      title="Stop agent"
-                      description={
-                        <>
-                          This stops the container and its running <code>claude</code> session.
-                        </>
-                      }
-                      isDisabled={busy}
-                      onConfirm={() => run(() => stopAgent(a.id))}
-                    >
-                      Stop
-                    </ConfirmActionButton>
-                  ) : (
-                    <Button
-                      isDisabled={busy}
-                      size="sm"
-                      variant="tertiary"
-                      onPress={() => void run(() => startAgent(a.id))}
-                    >
-                      Start
-                    </Button>
-                  )}
-                  <ConfirmActionButton
-                    confirmWord={a.id}
-                    action="Remove"
-                    title="Remove agent"
-                    description="This permanently deletes the container and its workspace. This cannot be undone."
-                    isDisabled={busy}
-                    onConfirm={() => run(() => removeAgent(a.id))}
-                  >
-                    Remove
-                  </ConfirmActionButton>
-                </Card.Footer>
+
+                  {/* Right column: info on top, options at the bottom. */}
+                  <div className="flex min-w-0 flex-1 flex-col">
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="truncate font-semibold">{a.username || a.id}</h3>
+                      <Chip color={statusColor(a.status)} size="sm" variant="soft">
+                        {a.status}
+                      </Chip>
+                    </div>
+                    <p className="text-muted truncate font-mono text-xs">
+                      {a.username ? `${a.id} · ` : ''}
+                      {prettyImage(a.image)} · created {relativeTime(a.createdAt)}
+                    </p>
+                    {running && <AgentStatsInline agentId={a.id} />}
+
+                    <div className="mt-auto flex flex-wrap gap-2 pt-3">
+                      <Link
+                        href={`/agents/${a.id}/desktop`}
+                        className={buttonVariants({ variant: 'secondary', size: 'sm' })}
+                      >
+                        Open
+                      </Link>
+                      {running && <AgentUpdate agentId={a.id} onUpgraded={() => void refresh()} />}
+                      {running ? (
+                        <ConfirmActionButton
+                          confirmWord={a.id}
+                          action="Stop"
+                          title="Stop agent"
+                          description={
+                            <>
+                              This stops the container and its running <code>claude</code> session.
+                            </>
+                          }
+                          isDisabled={busy}
+                          onConfirm={() => run(() => stopAgent(a.id))}
+                        >
+                          Stop
+                        </ConfirmActionButton>
+                      ) : (
+                        <Button
+                          isDisabled={busy}
+                          size="sm"
+                          variant="tertiary"
+                          onPress={() => void run(() => startAgent(a.id))}
+                        >
+                          Start
+                        </Button>
+                      )}
+                      <ConfirmActionButton
+                        confirmWord={a.id}
+                        action="Remove"
+                        title="Remove agent"
+                        description="This permanently deletes the container and its workspace. This cannot be undone."
+                        isDisabled={busy}
+                        onConfirm={() => run(() => removeAgent(a.id))}
+                      >
+                        Remove
+                      </ConfirmActionButton>
+                    </div>
+                  </div>
+                </div>
               </Card>
             );
           })}
