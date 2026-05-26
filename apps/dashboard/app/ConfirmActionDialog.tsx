@@ -1,49 +1,43 @@
 'use client';
 
 import { Button, Input, Label, Modal, TextField } from '@heroui/react';
-import { useState, type ReactNode } from 'react';
-
-type Variant = 'primary' | 'secondary' | 'tertiary' | 'outline' | 'ghost' | 'danger';
+import { useEffect, useState, type ReactNode } from 'react';
 
 /**
- * A button whose action runs only after the user types the agent name to
- * confirm — used for destructive/disruptive operations (Stop, Remove).
+ * Controlled type-the-name confirmation dialog for disruptive actions (Stop,
+ * Remove). Open/close is driven by the parent so it can be triggered from a menu.
  */
-export function ConfirmActionButton({
+export function ConfirmActionDialog({
+  isOpen,
+  onOpenChange,
   confirmWord,
   action,
   title,
   description,
-  variant = 'tertiary',
-  isDisabled = false,
-  children,
   onConfirm,
 }: {
+  isOpen: boolean;
+  onOpenChange: (open: boolean) => void;
   confirmWord: string;
   action: string;
   title: string;
   description: ReactNode;
-  variant?: Variant;
-  isDisabled?: boolean;
-  children: ReactNode;
   onConfirm: () => Promise<void> | void;
 }) {
-  const [open, setOpen] = useState(false);
   const [typed, setTyped] = useState('');
   const [busy, setBusy] = useState(false);
   const matches = typed.trim() === confirmWord;
 
-  const openModal = () => {
-    setTyped('');
-    setOpen(true);
-  };
+  useEffect(() => {
+    if (isOpen) setTyped('');
+  }, [isOpen]);
 
   const confirm = async () => {
     if (!matches) return;
     setBusy(true);
     try {
       await onConfirm();
-      setOpen(false);
+      onOpenChange(false);
     } finally {
       setBusy(false);
     }
@@ -51,10 +45,7 @@ export function ConfirmActionButton({
 
   return (
     <Modal>
-      <Button size="sm" variant={variant} isDisabled={isDisabled} onPress={openModal}>
-        {children}
-      </Button>
-      <Modal.Backdrop isOpen={open} onOpenChange={setOpen} isDismissable={!busy}>
+      <Modal.Backdrop isOpen={isOpen} onOpenChange={onOpenChange} isDismissable={!busy}>
         <Modal.Container>
           <Modal.Dialog className="sm:max-w-[420px]">
             <Modal.CloseTrigger />
