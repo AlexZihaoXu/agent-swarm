@@ -29,7 +29,10 @@
       import RFB from './core/rfb.js';
 
       const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
-      const url = `${wsProto}://${location.host}/websockify`;
+      // Relative to the page so it works at the container root (:6080/) and
+      // behind the gateway (/a/<id>/desktop/).
+      const base = location.pathname.replace(/[^/]*$/, '');
+      const url = `${wsProto}://${location.host}${base}websockify`;
 
       const rfb = new RFB(document.getElementById('screen'), url);
 
