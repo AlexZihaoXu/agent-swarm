@@ -86,9 +86,12 @@ function transcriptStats() {
   let model = null;
   let turns = 0;
   let lastTs = null;
+  // Current context-window usage = the most recent turn's input side
+  // (fresh input + cache read + cache creation all occupy the window).
+  let context = 0;
   const newest = newestFile(path.join(CLAUDE_DIR, 'projects'), '.jsonl');
   const raw = newest && safeRead(newest.path);
-  if (!raw) return { totals, model, turns, lastTs };
+  if (!raw) return { totals, model, turns, lastTs, context };
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
     let o;
@@ -100,15 +103,19 @@ function transcriptStats() {
     if (o.timestamp) lastTs = o.timestamp;
     if (o.type === 'assistant' && o.message) {
       const usage = o.message.usage || {};
-      totals.input += usage.input_tokens || 0;
+      const input = usage.input_tokens || 0;
+      const cacheRead = usage.cache_read_input_tokens || 0;
+      const cacheCreation = usage.cache_creation_input_tokens || 0;
+      totals.input += input;
       totals.output += usage.output_tokens || 0;
-      totals.cacheRead += usage.cache_read_input_tokens || 0;
-      totals.cacheCreation += usage.cache_creation_input_tokens || 0;
+      totals.cacheRead += cacheRead;
+      totals.cacheCreation += cacheCreation;
+      context = input + cacheRead + cacheCreation;
       if (o.message.model) model = o.message.model;
       turns++;
     }
   }
-  return { totals, model, turns, lastTs };
+  return { totals, model, turns, lastTs, context };
 }
 
 function latestSession() {
@@ -137,6 +144,7 @@ function readStats() {
     status: sess.status || null,
     sessionId: sess.sessionId || null,
     tokens: { ...t.totals, total },
+    context: t.context,
     turns: t.turns,
     cost: typeof cost.total_cost_usd === 'number' ? cost.total_cost_usd : null,
     linesAdded: cost.total_lines_added || 0,

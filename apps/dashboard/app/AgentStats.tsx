@@ -7,8 +7,8 @@ import {
   LuArrowUp,
   LuCoins,
   LuDollarSign,
+  LuGauge,
   LuRefreshCcw,
-  LuMessageSquare,
 } from 'react-icons/lu';
 import { getAgentStats, type AgentStats } from '@/lib/gateway';
 
@@ -20,6 +20,22 @@ function fmtTokens(n: number): string {
 
 function fmtCost(usd: number): string {
   return usd < 1 ? usd.toFixed(3) : usd.toFixed(2);
+}
+
+/** Pull the context-window limit out of a model name like "Opus 4.7 (1M context)". */
+function contextLimit(model: string | null): number | null {
+  const m = model?.match(/\((\d+)\s*([km])?\s*context\)/i);
+  if (!m) return null;
+  const n = parseInt(m[1]!, 10);
+  const unit = (m[2] || '').toLowerCase();
+  return unit === 'm' ? n * 1e6 : unit === 'k' ? n * 1e3 : n;
+}
+
+/** "41.0k / 1M" when the model's limit is known, else "41.0k". */
+function fmtContext(used: number, model: string | null): string {
+  const limit = contextLimit(model);
+  const lim = limit ? ` / ${limit >= 1e6 ? `${limit / 1e6}M` : `${limit / 1e3}k`}` : '';
+  return `${fmtTokens(used)}${lim}`;
 }
 
 /** Polls one agent's live session stats (null until/unless reachable). */
@@ -116,22 +132,28 @@ function ActivityBadge({ status }: { status: string }) {
 /** Compact one-line stats for a fleet card (presentational — caller supplies stats). */
 export function AgentStatsInline({ stats: s }: { stats: AgentStats | null }) {
   if (!s || (!s.model && !s.tokens.total)) return null;
+  const up = s.tokens.input + s.tokens.cacheCreation + s.tokens.cacheRead;
   return (
     <div className="text-muted flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
       {s.model && <span className="text-foreground font-medium">{s.model}</span>}
-      {s.tokens.total > 0 && (
-        <Metric icon={<LuCoins className="size-3" />} title="total tokens" strong>
-          {fmtTokens(s.tokens.total)}
+      {s.context > 0 && (
+        <Metric icon={<LuGauge className="size-3" />} title="context window usage" strong>
+          {fmtContext(s.context, s.model)}
+        </Metric>
+      )}
+      {up > 0 && (
+        <Metric icon={<LuArrowUp className="size-3" />} title="tokens sent (input + cache)">
+          {fmtTokens(up)}
+        </Metric>
+      )}
+      {s.tokens.output > 0 && (
+        <Metric icon={<LuArrowDown className="size-3" />} title="tokens received (output)">
+          {fmtTokens(s.tokens.output)}
         </Metric>
       )}
       {s.cost != null && s.cost > 0 && (
-        <Metric icon={<LuDollarSign className="size-3" />} title="session cost (USD)">
+        <Metric icon={<LuDollarSign className="size-3" />} title="money spent (USD)">
           {fmtCost(s.cost)}
-        </Metric>
-      )}
-      {s.turns > 0 && (
-        <Metric icon={<LuMessageSquare className="size-3" />} title="turns">
-          {s.turns}
         </Metric>
       )}
     </div>
@@ -162,6 +184,11 @@ export function AgentStatsBar({ agentId }: { agentId: string }) {
             {fmtTokens(t.total)}
           </Metric>
         </>
+      )}
+      {s.context > 0 && (
+        <Metric icon={<LuGauge className="size-3" />} title="context window usage" strong>
+          {fmtContext(s.context, s.model)}
+        </Metric>
       )}
       {s.cost != null && s.cost > 0 && (
         <Metric icon={<LuDollarSign className="size-3" />} title="session cost (USD)">

@@ -85,6 +85,8 @@ export interface AgentStats {
     cacheCreation: number;
     total: number;
   };
+  /** Current context-window usage (most recent turn's input side). */
+  context: number;
   turns: number;
   cost: number | null;
   linesAdded: number;
