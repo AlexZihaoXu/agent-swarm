@@ -267,7 +267,14 @@ function readStats() {
   }
   const t = transcriptStats();
   const sess = latestSession();
-  const awaiting = detectAwaiting(claudeScreenText());
+  // Claude Code itself records when it's blocked on an interactive prompt:
+  // the session file flips status to "waiting" with a "waitingFor" label
+  // (e.g. "permission prompt"). That's the authoritative signal. We also scan
+  // the screen as a fallback and, when it works, for the nicer question text.
+  const screen = detectAwaiting(claudeScreenText());
+  const waiting = sess.status === 'waiting';
+  const awaitingInput = waiting || !!screen;
+  const promptText = (screen && screen.prompt) || (waiting ? sess.waitingFor : null) || null;
   const total = t.totals.input + t.totals.output + t.totals.cacheRead + t.totals.cacheCreation;
   const cost = sl.cost || {};
   return {
@@ -287,8 +294,8 @@ function readStats() {
     lastActivity: t.lastTs || sess.updatedAt || null,
     // True when an interactive selector (AskUserQuestion/plan/permission) is
     // open and waiting — these can only be answered in the Terminal.
-    awaitingInput: !!awaiting,
-    promptText: awaiting ? awaiting.prompt : null,
+    awaitingInput,
+    promptText,
   };
 }
 
