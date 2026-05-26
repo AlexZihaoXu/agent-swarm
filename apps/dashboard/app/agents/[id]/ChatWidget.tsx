@@ -1,10 +1,11 @@
 'use client';
 
 import { Button } from '@heroui/react';
-import { AnimatePresence, motion } from 'framer-motion';
+import { AnimatePresence, motion, useDragControls } from 'framer-motion';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { LuMessageSquare, LuSend, LuX } from 'react-icons/lu';
 import { getTranscript, terminalWsUrl, type ChatTurn } from '@/lib/gateway';
+import { useAgentStats } from '@/app/AgentStats';
 
 /**
  * Floating chat dock: a small button that expands into a panel (top-right) where
@@ -18,6 +19,9 @@ export function ChatWidget({ agentId }: { agentId: string }) {
   const [input, setInput] = useState('');
   const wsRef = useRef<WebSocket | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const dragControls = useDragControls();
+  const draggedRef = useRef(false);
+  const working = useAgentStats(agentId)?.status === 'busy';
 
   const refresh = useCallback(async () => {
     try {
@@ -74,26 +78,60 @@ export function ChatWidget({ agentId }: { agentId: string }) {
   return (
     <>
       {!open && (
-        <Button
-          className="fixed right-4 bottom-4 z-50 shadow-overlay"
-          onPress={() => setOpen(true)}
+        <motion.button
+          aria-label="Open chat"
+          drag
+          dragMomentum={false}
+          onDragStart={() => (draggedRef.current = true)}
+          onDragEnd={() => setTimeout(() => (draggedRef.current = false), 0)}
+          onClick={() => {
+            if (!draggedRef.current) setOpen(true);
+          }}
+          whileHover={{ scale: 1.08 }}
+          whileTap={{ scale: 0.95 }}
+          className="bg-accent text-accent-foreground shadow-overlay fixed right-4 bottom-4 z-50 flex size-12 cursor-grab items-center justify-center rounded-full active:cursor-grabbing"
         >
-          <LuMessageSquare className="size-4" />
-          Chat
-        </Button>
+          <LuMessageSquare className="size-5" />
+          {working && (
+            <motion.span
+              className="bg-success absolute -top-0.5 -right-0.5 size-3 rounded-full ring-2 ring-[var(--background)]"
+              animate={{ opacity: [1, 0.3, 1], scale: [1, 1.2, 1] }}
+              transition={{ duration: 1, repeat: Infinity, ease: 'easeInOut' }}
+            />
+          )}
+        </motion.button>
       )}
 
       <AnimatePresence>
         {open && (
           <motion.div
-            initial={{ opacity: 0, scale: 0.96, y: 8 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.96, y: 8 }}
+            drag
+            dragControls={dragControls}
+            dragListener={false}
+            dragMomentum={false}
+            initial={{ opacity: 0, scale: 0.96 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.96 }}
             transition={{ duration: 0.18, ease: 'easeOut' }}
-            className="bg-overlay border-separator shadow-overlay fixed top-16 right-4 z-50 flex h-[70vh] w-[min(380px,calc(100vw-2rem))] flex-col border"
+            className="border-separator shadow-overlay fixed top-16 right-4 z-50 flex h-[70vh] w-[min(380px,calc(100vw-2rem))] flex-col border bg-[color-mix(in_oklch,var(--overlay)_80%,transparent)] backdrop-blur-md"
           >
-            <header className="border-separator flex items-center justify-between border-b px-3 py-2">
-              <span className="text-sm font-semibold">Chat · {agentId}</span>
+            <header
+              onPointerDown={(e) => dragControls.start(e)}
+              className="border-separator flex cursor-grab items-center justify-between border-b px-3 py-2 select-none active:cursor-grabbing"
+            >
+              <span className="flex items-center gap-2 text-sm font-semibold">
+                Chat · {agentId}
+                {working && (
+                  <span className="text-success flex items-center gap-1 text-xs font-normal">
+                    <motion.span
+                      className="bg-success size-1.5 rounded-full"
+                      animate={{ opacity: [1, 0.3, 1], scale: [1, 1.3, 1] }}
+                      transition={{ duration: 1, repeat: Infinity, ease: 'easeInOut' }}
+                    />
+                    working
+                  </span>
+                )}
+              </span>
               <button
                 aria-label="Close chat"
                 className="text-muted hover:text-foreground"
