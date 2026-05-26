@@ -1,5 +1,6 @@
 'use client';
 
+import { motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
 import {
   LuArrowDown,
@@ -66,17 +67,23 @@ function Metric({
   );
 }
 
-function StatusDot({ status }: { status: string }) {
-  const color =
-    status === 'busy' || status === 'running'
-      ? 'bg-success'
-      : status === 'idle'
-        ? 'bg-muted'
-        : 'bg-warning';
+/**
+ * Claude session activity. `busy` (the session is generating) shows a pulsing
+ * green "working"; `idle` is a muted "idle"; anything else shows raw.
+ */
+function ActivityBadge({ status }: { status: string }) {
+  const working = status === 'busy';
+  const label = working ? 'working' : status === 'idle' ? 'idle' : status;
   return (
-    <span className="flex items-center gap-1.5 capitalize">
-      <span className={`size-1.5 rounded-full ${color}`} />
-      {status}
+    <span className={`flex items-center gap-1.5 ${working ? 'text-success' : ''}`}>
+      <motion.span
+        className={`size-1.5 rounded-full ${working ? 'bg-success' : 'bg-muted'}`}
+        animate={working ? { opacity: [1, 0.25, 1], scale: [1, 1.3, 1] } : { opacity: 1, scale: 1 }}
+        transition={
+          working ? { duration: 1, repeat: Infinity, ease: 'easeInOut' } : { duration: 0.2 }
+        }
+      />
+      {label}
     </span>
   );
 }
@@ -87,6 +94,7 @@ export function AgentStatsInline({ agentId }: { agentId: string }) {
   if (!s || (!s.model && !s.tokens.total)) return null;
   return (
     <div className="text-muted mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+      {s.status && <ActivityBadge status={s.status} />}
       {s.model && <span className="text-foreground font-medium">{s.model}</span>}
       {s.tokens.total > 0 && (
         <Metric icon={<LuCoins className="size-3" />} title="total tokens" strong>
@@ -115,7 +123,7 @@ export function AgentStatsBar({ agentId }: { agentId: string }) {
   return (
     <div className="text-muted ml-auto flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
       {s.model && <span className="text-foreground font-semibold">{s.model}</span>}
-      {s.status && <StatusDot status={s.status} />}
+      {s.status && <ActivityBadge status={s.status} />}
       {t.total > 0 && (
         <>
           <Metric icon={<LuArrowUp className="size-3" />} title="input tokens">
