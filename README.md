@@ -24,10 +24,12 @@ The initial build has three planes:
    config, and watch/drive each agent through two live views — an **xterm.js
    terminal** (the `claude` session) and a **noVNC desktop** (the agent's GUI) —
    plus start/stop/delete.
-2. **Control plane (orchestrator)** — backend API that owns agent lifecycle.
-   Talks **directly to the Docker engine** to run containers, injects
-   config/secrets, proxies the terminal and desktop streams, and persists agent
-   state.
+2. **Gateway (control plane)** — the single published port for the whole fleet.
+   A TypeScript service that owns agent lifecycle (talks **directly to the
+   Docker engine** via `dockerode`) and **reverse-proxies** each agent's
+   terminal + desktop streams under `/a/:id/…` — so any number of agents are
+   reachable through one port with **no per-agent host ports to collide**. It
+   also serves the dashboard.
 3. **Agent runtime (data plane)** — an **Ubuntu 24.04 GNOME desktop** container
    running **systemd** as PID 1. systemd starts the desktop stack (TigerVNC +
    GNOME Shell, served to the browser over **noVNC** on `:6080`) and a
@@ -36,37 +38,35 @@ The initial build has three planes:
    always-on `claude --dangerously-skip-permissions` in `/home/agent`. Ships a
    full toolchain (Chrome/Chromium, VS Code, ffmpeg, Python/uv, Node/nvm, fish)
    and self-updating Claude Code. Needs privileged run flags (see
-   [Running an agent](#running-an-agent-container)).
+   [Running the stack](#running-the-stack)).
 
 A fourth plane — **Swarm services** (shared MCP servers for messaging, memory,
 and tools) — is planned but out of scope for now; the structure leaves room for
 it.
 
 ```
-        ┌───────────────┐  terminal (WS) + desktop (noVNC/WS)  ┌────────────────────┐
-        │   Dashboard   │ ───────────────────────────────────► │   Control Plane    │
-        │ xterm + noVNC │ ◄─────────────────────────────────── │   (orchestrator)   │
-        └───────────────┘            live streams              └─────────┬──────────┘
-                                                                         │ Docker engine API
-                                                                         │ (socket)
-                                                                         ▼
-            ┌────────────────────────────────────────────────────────────────────┐
-            │                 Agent Containers (systemd as PID 1)                 │
-            │   ┌────────────────────────────┐  ┌────────────────────────────┐    │
-            │   │ Ubuntu 24.04 GNOME desktop  │  │ Ubuntu 24.04 GNOME desktop  │  … │
-            │   │ TigerVNC + noVNC   (:6080)  │  │ TigerVNC + noVNC   (:6080)  │    │
-            │   │ terminal supervisor (:7681) │  │ terminal supervisor (:7681) │    │
-            │   │  node-pty → claude/shells   │  │  node-pty → claude/shells   │    │
-            │   └────────────────────────────┘  └────────────────────────────┘    │
-            └────────────────────────────────────────────────────────────────────┘
-                                          │
-                          ┌───────────────┴───────────────┐
-                          │   Postgres    │  object store  │
-                          │ (agent state) │ (logs/artifacts)│
-                          └───────────────────────────────┘
+                              host :8080   ← the only published port
+                                   │
+                       ┌───────────▼────────────┐ ── Docker engine API (socket) ──┐
+                       │      Gateway (TS)       │   lifecycle via dockerode        │
+                       │  /api/agents            │   (create / start / stop / rm)   │
+                       │  /a/:id/desktop  ─┐      │                                  │
+                       │  /a/:id/terminal ─┤ reverse-proxy HTTP + WS                 │
+                       │  /*  → dashboard  │      │                                  │
+                       └───────────┬───────┴──────┘                                  │
+                                   │  swarm-net (Docker DNS resolves by name)        │
+              ┌────────────────────┼─────────────────────┐                          │
+        ┌─────▼──────────────┐ ┌───▼────────────────┐ ┌──▼─────────────────┐  spawns │
+        │ Agent (systemd PID1)│ │ Agent (systemd PID1)│ │ Agent (systemd PID1)│ ◄──────┘
+        │ GNOME+noVNC   :6080 │ │ GNOME+noVNC   :6080 │ │  … (no host ports) │
+        │ terminals     :7681 │ │ terminals     :7681 │ │                    │
+        │ node-pty→claude/sh  │ │ node-pty→claude/sh  │ │                    │
+        └─────────────────────┘ └─────────────────────┘ └────────────────────┘
 
-         (planned) Swarm Services: messaging / memory / tools MCP servers
-                   that agents connect to over MCP — not built yet.
+   The Dashboard (Next.js + HeroUI) is served by the gateway and embeds each
+   agent's xterm.js terminal + noVNC desktop through the /a/:id proxy.
+   Persistence (Postgres / object store) and the planned Swarm Services
+   (messaging / memory / tools MCP servers) attach here later.
 ```
 
 ---
@@ -79,25 +79,27 @@ evolve together:
 ```
 agent-swarm/
 ├── apps/
-│   ├── dashboard/            # Web UI (Next.js + React + xterm.js + noVNC)
-│   │   ├── src/
-│   │   ├── public/
+│   ├── dashboard/            # Web UI (Next.js + React + HeroUI + xterm.js + noVNC)
+│   │   ├── app/              # App Router: fleet page + /agents/[id]/terminal
+│   │   ├── lib/gateway.ts    # client for the gateway API + /a/:id URL builders
+│   │   ├── Dockerfile        # Next.js standalone image
 │   │   └── package.json
 │   │
-│   ├── control-plane/        # Orchestrator API (lifecycle, scheduling, streaming)
+│   ├── gateway/              # Control plane + reverse proxy (single published port)
 │   │   ├── src/
-│   │   │   ├── api/          # HTTP/WS route handlers
-│   │   │   ├── docker/       # Docker engine driver (dockerode)
-│   │   │   ├── agents/       # agent domain model + lifecycle state machine
-│   │   │   ├── db/           # schema, migrations, repositories
-│   │   │   └── events/       # session/log streaming (pub-sub)
+│   │   │   ├── server.ts     # HTTP server: API + /a/:id proxy + WS upgrades
+│   │   │   ├── docker.ts     # dockerode lifecycle + proxy target resolver
+│   │   │   ├── proxy.ts      # http-proxy HTTP+WS forwarding (prefix strip)
+│   │   │   ├── router.ts     # /a/:id/<service>/<rest> path parsing
+│   │   │   ├── api.ts        # /api/agents REST handlers
+│   │   │   └── config.ts     # env (mode, network, image, ports, upstream)
+│   │   ├── Dockerfile
 │   │   └── package.json
 │   │
 │   └── swarm-services/       # (planned) shared MCP servers — messaging/memory/tools
 │
 ├── packages/
-│   └── shared/               # Shared TS types & API contracts (single source of truth)
-│       └── src/
+│   └── shared/               # (planned) shared TS types & API contracts
 │
 ├── images/
 │   └── agent/                # Ubuntu 24.04 GNOME desktop image (systemd as PID 1)
@@ -112,15 +114,7 @@ agent-swarm/
 │           ├── public/index.html      # xterm.js multi-terminal UI
 │           └── package.json
 │
-├── infra/
-│   ├── docker-compose.yml    # local dev: control-plane + db + dashboard
-│   └── migrations/
-│
-├── scripts/                  # dev/build/release helpers
-├── docs/
-│   ├── architecture.md
-│   └── adr/                  # architecture decision records
-│
+├── compose.yml               # prod stack: gateway + dashboard on swarm-net
 ├── .env.example
 ├── pnpm-workspace.yaml
 ├── package.json
@@ -129,15 +123,15 @@ agent-swarm/
 
 ### What lives where
 
-| Path                   | Responsibility                                                                        |
-| ---------------------- | ------------------------------------------------------------------------------------- |
-| `apps/dashboard`       | Operator UI: agent list, create/config forms, live xterm.js terminal + noVNC desktop. |
-| `apps/control-plane`   | The brain. Owns the agent lifecycle state machine; drives the Docker engine.          |
-| `apps/swarm-services`  | _(planned)_ shared MCP servers — messaging, memory, custom tools.                     |
-| `packages/shared`      | Types/DTOs shared by dashboard ↔ control plane ↔ runtime to stay in sync.             |
-| `images/agent`         | Ubuntu 24.04 GNOME desktop image (systemd): VNC/noVNC, browser, VS Code, toolchain.   |
-| `images/agent/runtime` | In-container terminal supervisor: node-pty sessions streamed over WebSocket.          |
-| `infra`                | How it all gets stood up locally (docker-compose).                                    |
+| Path                   | Responsibility                                                                          |
+| ---------------------- | --------------------------------------------------------------------------------------- |
+| `apps/dashboard`       | Operator UI: agent list, create/config forms, live xterm.js terminal + noVNC desktop.   |
+| `apps/gateway`         | Control plane + reverse proxy: owns lifecycle (dockerode), routes `/a/:id/…` to agents. |
+| `apps/swarm-services`  | _(planned)_ shared MCP servers — messaging, memory, custom tools.                       |
+| `packages/shared`      | _(planned)_ types/DTOs shared by dashboard ↔ gateway ↔ runtime to stay in sync.         |
+| `images/agent`         | Ubuntu 24.04 GNOME desktop image (systemd): VNC/noVNC, browser, VS Code, toolchain.     |
+| `images/agent/runtime` | In-container terminal supervisor: node-pty sessions streamed over WebSocket.            |
+| `compose.yml`          | Prod stack: gateway + dashboard on the shared `swarm-net` network.                      |
 
 ---
 
@@ -148,13 +142,14 @@ agent-swarm/
 - **Agent config** — model, system prompt, allowed tools, env/secrets, resource
   limits, and the workspace it operates on.
 - **Session** — the live `claude` CLI process inside an agent, spawned in a
-  pseudo-terminal via **node-pty**. The agent supervisor relays its terminal
-  stream up to the control plane, which fans it out to the dashboard's
-  **xterm.js** terminal; keystrokes flow back down the same path.
-- **Desktop** — each agent runs a full **Ubuntu desktop** (XFCE on Xvfb) served
-  to the browser over **noVNC**, giving the agent a GUI environment (browsers,
-  graphical apps) and the operator a way to watch/drive it. The control plane
-  proxies the noVNC WebSocket per agent — no per-agent ports exposed.
+  pseudo-terminal via **node-pty**. The agent supervisor streams its terminal
+  over WebSocket; the gateway proxies it to the dashboard's **xterm.js**
+  terminal, and keystrokes flow back down the same path.
+- **Desktop** — each agent runs the full **Ubuntu GNOME desktop** (GNOME Shell
+  on TigerVNC) served to the browser over **noVNC**, giving the agent a GUI
+  environment (browsers, graphical apps) and the operator a way to watch/drive
+  it. The gateway proxies the noVNC WebSocket per agent — no per-agent host
+  ports exposed.
 - **Docker driver** — thin wrapper over the Docker engine API (`create`,
   `start`, `stop`, `remove`, `attach`, `logs`) — the Portainer-style mechanism
   for managing the fleet on a single host.
@@ -165,32 +160,50 @@ agent-swarm/
 
 ## Proposed tech stack
 
-| Layer                   | Choice                                                      | Why                                                          |
-| ----------------------- | ----------------------------------------------------------- | ------------------------------------------------------------ |
-| Dashboard               | Next.js + React + Tailwind + xterm.js + noVNC               | Renders the live terminal and the agent desktop.             |
-| Control plane           | Node + TypeScript (Fastify)                                 | Shares types with the UI via `packages/shared`.              |
-| Docker access           | `dockerode` over the engine socket                          | Direct container control, Portainer-style.                   |
-| Agent base image        | Ubuntu 24.04 + systemd (PID 1)                              | systemd is required for a stable GNOME Shell session.        |
-| Agent desktop           | GNOME Shell + TigerVNC + noVNC                              | The real Ubuntu desktop, streamed to the browser.            |
-| Agent terminals         | node-pty + ws, rendered by xterm.js                         | Always-on `claude`/shell sessions; multi-session add/remove. |
-| Agent toolchain         | Chrome/Chromium, VS Code, ffmpeg, Python/uv, Node/nvm, fish | What the agent needs to actually get work done.              |
-| Persistence             | Postgres (agent state) + object store (logs/artifacts)      | Durable state; cheap blob storage.                           |
-| Transport               | REST for control, WebSocket for live session streams        | Standard, dashboard-friendly.                                |
-| Monorepo                | pnpm workspaces (+ Turborepo optional)                      | Single-version-policy, fast incremental builds.              |
-| Swarm layer _(planned)_ | TS MCP servers over HTTP/SSE                                | Remote transport so all agents share one source of state.    |
+| Layer                   | Choice                                                      | Why                                                             |
+| ----------------------- | ----------------------------------------------------------- | --------------------------------------------------------------- |
+| Dashboard               | Next.js + React + HeroUI (Tailwind) + xterm.js + noVNC      | HeroUI v3 component library; xterm.js + noVNC for live views.   |
+| Gateway (control plane) | Node + TypeScript (`node:http` + `http-proxy`)              | One process owns lifecycle + reverse proxy; minimal deps.       |
+| Docker access           | `dockerode` over the engine socket                          | Direct container control, Portainer-style.                      |
+| Fleet routing           | One published port → `/a/:id/<service>` reverse proxy       | No per-agent host ports; agents reachable by name on swarm-net. |
+| Agent base image        | Ubuntu 24.04 + systemd (PID 1)                              | systemd is required for a stable GNOME Shell session.           |
+| Agent desktop           | GNOME Shell + TigerVNC + noVNC                              | The real Ubuntu desktop, streamed to the browser.               |
+| Agent terminals         | node-pty + ws, rendered by xterm.js                         | Always-on `claude`/shell sessions; multi-session add/remove.    |
+| Agent toolchain         | Chrome/Chromium, VS Code, ffmpeg, Python/uv, Node/nvm, fish | What the agent needs to actually get work done.                 |
+| Persistence             | Postgres (agent state) + object store (logs/artifacts)      | Durable state; cheap blob storage.                              |
+| Transport               | REST for control, WebSocket for live session streams        | Standard, dashboard-friendly.                                   |
+| Monorepo                | pnpm workspaces (+ Turborepo optional)                      | Single-version-policy, fast incremental builds.                 |
+| Swarm layer _(planned)_ | TS MCP servers over HTTP/SSE                                | Remote transport so all agents share one source of state.       |
 
 ---
 
 ## Getting started
 
-> Placeholder — fill in once the stack is scaffolded.
+Local dev runs the gateway and dashboard on the host (fast reload) while agents
+run as containers. See [Running the stack](#running-the-stack) for the why.
 
 ```bash
 pnpm install
-cp .env.example .env          # set ANTHROPIC_API_KEY, DB url, etc.
-docker compose -f infra/docker-compose.yml up   # control-plane + db
-pnpm --filter dashboard dev   # http://localhost:3000
+
+# 1. Build the agent image
+docker build -t agent-swarm/agent:dev images/agent
+
+# 2. Bridge your Claude login to a host file (macOS — see Authentication)
+mkdir -p ~/.agent-swarm
+security find-generic-password -s "Claude Code-credentials" -w \
+  > ~/.agent-swarm/.credentials.json
+
+# 3. Gateway: creates swarm-net, drives Docker, proxies agents (ports mode on macOS)
+pnpm --filter @agent-swarm/gateway dev      # http://localhost:8080
+
+# 4. Dashboard (dev): talks to the gateway on :8080
+pnpm --filter @agent-swarm/dashboard dev    # http://localhost:3000
 ```
+
+Then open the dashboard and click **New agent** (or `curl -X POST
+localhost:8080/api/agents`). Each agent's terminal and desktop are reachable at
+`/a/:id/terminal/` and `/a/:id/desktop/` through the gateway — no per-agent
+host ports.
 
 ---
 
@@ -211,6 +224,16 @@ pnpm --filter dashboard dev   # http://localhost:3000
   isolation that we've accepted; memory/fleet-density is a non-goal.
 - **Auth = shared host credentials, bind-mounted** — agents reuse the host's
   Claude login via a single mounted `.credentials.json` (see Authentication).
+- **Dashboard UI = HeroUI** — the dashboard uses HeroUI v3 (React, Tailwind-based)
+  as its component library. The HeroUI MCP server is wired into project scope
+  (`.mcp.json`) so component docs are available while building it.
+- **Single-port gateway, proxy by path** — one published port fronts the fleet.
+  The gateway routes `/a/:id/desktop` and `/a/:id/terminal` (HTTP + WebSocket) to
+  each agent and serves the dashboard at `/`. Agents need **no host ports**, so
+  the fleet scales without port collisions. The proxy resolves agents two ways
+  (`GATEWAY_MODE`): **`network`** (by container name over `swarm-net`, prod/Linux)
+  or **`ports`** (via Docker-assigned ephemeral host ports on `127.0.0.1`, dev on
+  macOS where the host can't route to container IPs/DNS).
 
 ## Authentication
 
@@ -242,15 +265,42 @@ Each container then mounts it:
 > token — concurrent refreshes across a large fleet can invalidate each other.
 > If we scale up, revisit (per-agent creds, a credential broker, or API keys).
 
-## Running an agent container
+## Running the stack
 
-Today the agent image is the runnable piece (control plane + dashboard aren't
-built yet). Build and run one directly:
+Normally you don't run agents by hand — the **gateway** creates them via
+`dockerode` (the dashboard's **New agent** button, or `POST /api/agents`),
+injecting the systemd flags and credential mount automatically. See
+[Getting started](#getting-started) for the host-dev flow.
+
+**Why host-dev on macOS.** Docker Desktop for Mac can't route from the host to
+container IPs or Docker DNS names — only to published ports. So the gateway runs
+in **`ports` mode**: each agent gets a Docker-assigned ephemeral host port and
+the host-run gateway proxies to `127.0.0.1:<port>`. On Linux you instead run the
+gateway containerized in **`network` mode** (`compose.yml`), where it reaches
+agents by name over `swarm-net` and agents publish nothing.
+
+```bash
+# Prod-oriented stack (Linux): gateway + dashboard behind one port
+CLAUDE_CREDENTIALS_FILE=$HOME/.agent-swarm/.credentials.json \
+  docker compose up --build        # dashboard + gateway on :8080
+```
+
+> **Credential path gotcha:** in `network` mode the gateway runs in a container,
+> but the agent bind mount it requests is resolved by the **host** Docker daemon.
+> So `CLAUDE_CREDENTIALS_FILE` must be a **host** path (it is not mounted into the
+> gateway — the gateway only forwards the string to the engine).
+
+The agent caps (`SYS_ADMIN`/`SYS_BOOT`), cgroup mount, and unconfined
+seccomp/apparmor are required for systemd + GNOME Shell in a container; the
+gateway injects these per agent. The image is multi-arch: **arm64** uses Chromium
+(xtradeb PPA), **amd64** uses Google Chrome; browsers render WebGL in software
+(SwiftShader).
+
+<details>
+<summary>Run a single agent image directly (no gateway)</summary>
 
 ```bash
 docker build -t agent-swarm/agent:dev images/agent
-
-# macOS: bridge the Claude credential out of the Keychain first (see Authentication)
 docker run -d --name agent1 \
   --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup \
   --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
@@ -264,11 +314,7 @@ docker run -d --name agent1 \
 - **Desktop:** http://localhost:6080/ — GNOME over noVNC (scale-to-fit, locked 1080p)
 - **Terminals:** http://localhost:7681/ — xterm.js; the first tab is the always-on `claude`
 
-The `SYS_ADMIN`/`SYS_BOOT` caps, cgroup mount, and unconfined seccomp/apparmor
-are required for systemd + GNOME Shell in a container; the control plane will
-inject these (and the credential mount) per agent via `dockerode`. The image is
-multi-arch: **arm64** uses Chromium (xtradeb PPA), **amd64** uses Google Chrome;
-browsers render WebGL in software (SwiftShader).
+</details>
 
 ## Planned: the swarm layer
 

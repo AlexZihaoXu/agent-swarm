@@ -1,0 +1,41 @@
+# Production-oriented stack: one published port (gateway :8080) fronting the
+# dashboard and proxying to agent containers by name over swarm-net.
+#
+# Dev on macOS uses the host-run path instead (see README → Running the stack);
+# this compose targets Linux where the gateway can route to agents by name.
+networks:
+  swarm-net:
+    name: swarm-net
+
+services:
+  dashboard:
+    build:
+      context: .
+      dockerfile: apps/dashboard/Dockerfile
+    # Empty => the dashboard's client calls the gateway same-origin (relative).
+    environment:
+      NEXT_PUBLIC_GATEWAY_URL: ''
+    networks: [swarm-net]
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: .
+      dockerfile: apps/gateway/Dockerfile
+    environment:
+      GATEWAY_MODE: network
+      SWARM_NETWORK: swarm-net
+      AGENT_IMAGE: agent-swarm/agent:dev
+      DASHBOARD_UPSTREAM: http://dashboard:3000
+      DOCKER_SOCKET: /var/run/docker.sock
+      # IMPORTANT: a HOST path. The gateway only forwards this string to the
+      # Docker daemon as an agent bind mount — the daemon resolves it on the
+      # host, not inside this container. So we do NOT mount it here.
+      CLAUDE_CREDENTIALS_FILE: ${CLAUDE_CREDENTIALS_FILE:-/root/.agent-swarm/.credentials.json}
+    ports:
+      - '8080:8080'
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [swarm-net]
+    depends_on: [dashboard]
+    restart: unless-stopped
