@@ -178,7 +178,13 @@ function readTranscript() {
           items.push({ kind: 'tool', name: b.name, detail: toolDetail(b.input) });
       }
     }
-    if (items.length) out.push({ role: o.message.role, ts: o.timestamp || null, items });
+    if (items.length) {
+      const turn = { role: o.message.role, ts: o.timestamp || null, items };
+      // Claude Code marks API/transport failures (e.g. "API Error: 500 …") with
+      // this flag — surface it so the chat can render them distinctly.
+      if (o.isApiErrorMessage) turn.error = true;
+      out.push(turn);
+    }
   }
   return out;
 }

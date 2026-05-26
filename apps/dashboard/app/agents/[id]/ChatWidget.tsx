@@ -4,7 +4,15 @@ import { Button } from '@heroui/react';
 import { AnimatePresence, motion, useDragControls } from 'framer-motion';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { LuArrowUp, LuMessageSquare, LuPaperclip, LuTerminal, LuWrench, LuX } from 'react-icons/lu';
+import {
+  LuArrowUp,
+  LuMessageSquare,
+  LuPaperclip,
+  LuTerminal,
+  LuTriangleAlert,
+  LuWrench,
+  LuX,
+} from 'react-icons/lu';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -220,14 +228,15 @@ export function ChatWidget({ agentId }: { agentId: string }) {
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.96 }}
             transition={{ duration: 0.18, ease: 'easeOut' }}
-            className="border-separator fixed top-16 right-4 z-50 flex h-[70vh] w-[min(400px,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border bg-[color-mix(in_oklch,var(--overlay)_85%,transparent)] shadow-[0_16px_60px_rgba(0,0,0,0.55)] backdrop-blur-xl"
+            className="border-separator bg-surface fixed top-16 right-4 z-50 flex h-[70vh] w-[min(400px,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border shadow-[0_16px_60px_rgba(0,0,0,0.55)]"
           >
             <header
               onPointerDown={(e) => dragControls.start(e)}
-              className="border-separator flex cursor-grab items-center justify-between border-b px-3 py-2 select-none active:cursor-grabbing"
+              className="border-separator bg-surface-secondary flex cursor-grab items-center justify-between border-b px-3.5 py-3 select-none active:cursor-grabbing"
             >
               <span className="flex items-center gap-2 text-sm font-semibold">
-                Chat · {agentId}
+                <LuMessageSquare className="text-muted size-4 shrink-0" />
+                {agentId}
                 {working && (
                   <span className="text-success flex items-center gap-1 text-xs font-normal">
                     <motion.span
@@ -260,39 +269,53 @@ export function ChatWidget({ agentId }: { agentId: string }) {
                   transition={{ duration: 0.25, ease: 'easeOut' }}
                   className={t.role === 'user' ? 'flex justify-end' : ''}
                 >
-                  {/* User → bubble on the right; assistant → markdown on the left. */}
-                  <div
-                    className={
-                      t.role === 'user'
-                        ? 'bg-surface-secondary text-surface-secondary-foreground max-w-[85%] rounded-2xl rounded-br-md px-3.5 py-2 text-sm font-medium'
-                        : 'max-w-full space-y-2 font-medium'
-                    }
-                  >
-                    {t.items.map((it, j) =>
-                      it.kind === 'text' ? (
-                        t.role === 'user' ? (
-                          <p key={j} className="whitespace-pre-wrap">
-                            {it.text}
-                          </p>
+                  {/* API/transport errors are not real replies — set them apart
+                      with a red alert card so they can't be mistaken for one. */}
+                  {t.error ? (
+                    <div className="border-danger/50 bg-danger/10 space-y-1 rounded-xl border px-3 py-2 text-sm">
+                      <div className="text-danger flex items-center gap-1.5 font-semibold">
+                        <LuTriangleAlert className="size-3.5 shrink-0" />
+                        Error
+                      </div>
+                      <p className="text-foreground whitespace-pre-wrap">
+                        {t.items.map((it) => it.text ?? '').join('\n')}
+                      </p>
+                    </div>
+                  ) : (
+                    /* User → bubble on the right; assistant → markdown on the left. */
+                    <div
+                      className={
+                        t.role === 'user'
+                          ? 'bg-surface-secondary text-surface-secondary-foreground max-w-[85%] rounded-2xl rounded-br-md px-3.5 py-2 text-sm font-medium'
+                          : 'max-w-full space-y-2 font-medium'
+                      }
+                    >
+                      {t.items.map((it, j) =>
+                        it.kind === 'text' ? (
+                          t.role === 'user' ? (
+                            <p key={j} className="whitespace-pre-wrap">
+                              {it.text}
+                            </p>
+                          ) : (
+                            <AssistantText
+                              key={j}
+                              text={it.text ?? ''}
+                              animate={animateIdx.current.has(i)}
+                            />
+                          )
                         ) : (
-                          <AssistantText
+                          <div
                             key={j}
-                            text={it.text ?? ''}
-                            animate={animateIdx.current.has(i)}
-                          />
-                        )
-                      ) : (
-                        <div
-                          key={j}
-                          className="text-muted bg-surface-secondary/60 flex items-center gap-1.5 rounded-lg px-2 py-1 font-mono text-xs"
-                        >
-                          <LuWrench className="size-3 shrink-0" />
-                          <span className="shrink-0 font-semibold">{it.name}</span>
-                          {it.detail && <span className="truncate opacity-80">{it.detail}</span>}
-                        </div>
-                      ),
-                    )}
-                  </div>
+                            className="text-muted bg-surface-secondary/60 flex items-center gap-1.5 rounded-lg px-2 py-1 font-mono text-xs"
+                          >
+                            <LuWrench className="size-3 shrink-0" />
+                            <span className="shrink-0 font-semibold">{it.name}</span>
+                            {it.detail && <span className="truncate opacity-80">{it.detail}</span>}
+                          </div>
+                        ),
+                      )}
+                    </div>
+                  )}
                 </motion.div>
               ))}
 

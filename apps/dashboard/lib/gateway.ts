@@ -117,6 +117,8 @@ export interface ChatTurn {
   role: 'user' | 'assistant';
   ts: string | number | null;
   items: ChatItem[];
+  /** Set when this is an API/transport error message, not a real reply. */
+  error?: boolean;
 }
 
 /** Normalized conversation (user/assistant turns) for the chat view. */

@@ -131,6 +131,14 @@ export const migrations: Migration[] = [
       await ctx.exec('chown -R agent:agent /opt/agent-runtime; systemctl restart agent-terminals');
     },
   },
+  {
+    version: 9,
+    name: 'transcript: flag API-error messages',
+    apply: async (ctx) => {
+      await ctx.putDir('runtime', '/opt/agent-runtime');
+      await ctx.exec('chown -R agent:agent /opt/agent-runtime; systemctl restart agent-terminals');
+    },
+  },
 ];
 
 /** Highest migration version (the version a fully up-to-date agent is at). */
