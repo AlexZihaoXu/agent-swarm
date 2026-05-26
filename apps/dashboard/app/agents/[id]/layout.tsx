@@ -7,6 +7,7 @@ import { useSelectedLayoutSegment } from 'next/navigation';
 import { use, type ComponentProps, type ReactNode } from 'react';
 import { LuMonitor, LuTerminal } from 'react-icons/lu';
 import { AgentStatsBar } from '@/app/AgentStats';
+import { ChatWidget } from './ChatWidget';
 
 // HeroUI's Tab `render` hands generic DOM props; Link wants anchor props. They
 // line up at runtime (Tab renders an <a>), so narrow at this single boundary.
@@ -71,6 +72,7 @@ export default function AgentLayout({
       </header>
 
       <div className="min-h-0 flex-1">{children}</div>
+      <ChatWidget agentId={id} />
     </motion.div>
   );
 }

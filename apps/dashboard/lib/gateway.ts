@@ -102,6 +102,23 @@ export const statsStreamUrl = (id: string) => `${wsOrigin()}/a/${id}/terminal/st
 /** Low-res desktop screenshot (for fleet-card previews). */
 export const screenshotUrl = (id: string) => `${GATEWAY_BASE}/a/${id}/terminal/api/screenshot`;
 
+export interface ChatItem {
+  kind: 'text' | 'tool';
+  text?: string;
+  name?: string;
+}
+export interface ChatTurn {
+  role: 'user' | 'assistant';
+  ts: string | number | null;
+  items: ChatItem[];
+}
+
+/** Normalized conversation (user/assistant turns) for the chat view. */
+export const getTranscript = (id: string) => api<ChatTurn[]>(`/a/${id}/terminal/api/transcript`);
+/** WebSocket to a terminal session — used to send chat input to `claude`. */
+export const terminalWsUrl = (id: string, session = 'claude') =>
+  `${wsOrigin()}/a/${id}/terminal/ws?session=${encodeURIComponent(session)}&cols=80&rows=24`;
+
 export interface UpgradeInfo {
   installed: number;
   latest: number;
