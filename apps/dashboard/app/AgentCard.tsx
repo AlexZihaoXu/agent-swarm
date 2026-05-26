@@ -25,9 +25,24 @@ function statusColor(status: string): 'success' | 'warning' | 'danger' | 'defaul
   return 'default';
 }
 
+const DEFAULT_IMAGE = 'agent-swarm/agent:dev';
+
 function prettyImage(image: string): string {
   const sha = image.match(/^sha256:([0-9a-f]{12})/);
   return sha ? `image ${sha[1]}` : image;
+}
+
+/**
+ * Secondary line under the title: the hostname (when a display name is set) and
+ * the image — but only when it's a custom image. The default agent image (or its
+ * untagged sha) is hidden, since every agent uses it.
+ */
+function subline(agent: Agent): string {
+  const parts: string[] = [];
+  if (agent.username) parts.push(agent.id);
+  const isDefault = agent.image === DEFAULT_IMAGE || /^sha256:/.test(agent.image);
+  if (!isDefault) parts.push(prettyImage(agent.image));
+  return parts.join(' · ');
 }
 
 function relativeTime(ms: number): string {
@@ -141,10 +156,9 @@ export function AgentCard({ agent, onChanged }: { agent: Agent; onChanged: () =>
             </div>
           </div>
 
-          <p className="text-muted font-mono text-xs break-words">
-            {agent.username ? `${agent.id} · ` : ''}
-            {prettyImage(agent.image)}
-          </p>
+          {subline(agent) && (
+            <p className="text-muted font-mono text-xs break-words">{subline(agent)}</p>
+          )}
           <p className="text-muted font-mono text-xs">created {relativeTime(agent.createdAt)}</p>
 
           {running && <AgentStatsInline agentId={agent.id} />}
