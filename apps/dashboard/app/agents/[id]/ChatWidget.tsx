@@ -3,7 +3,9 @@
 import { Button } from '@heroui/react';
 import { AnimatePresence, motion, useDragControls } from 'framer-motion';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LuArrowUp, LuMessageSquare, LuPaperclip, LuX } from 'react-icons/lu';
+import { LuArrowUp, LuMessageSquare, LuPaperclip, LuWrench, LuX } from 'react-icons/lu';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { getTranscript, terminalWsUrl, uploadToAgent, type ChatTurn } from '@/lib/gateway';
 import { useAgentStats } from '@/app/AgentStats';
 
@@ -106,16 +108,9 @@ export function ChatWidget({ agentId }: { agentId: string }) {
           }}
           whileHover={{ scale: 1.08 }}
           whileTap={{ scale: 0.95 }}
-          className="bg-accent text-accent-foreground shadow-overlay fixed right-4 bottom-4 z-50 flex size-12 cursor-grab items-center justify-center rounded-full active:cursor-grabbing"
+          className="bg-accent text-accent-foreground fixed right-4 bottom-4 z-50 flex size-12 cursor-grab items-center justify-center rounded-full shadow-[0_8px_30px_rgba(0,0,0,0.45)] active:cursor-grabbing"
         >
           <LuMessageSquare className="size-5" />
-          {working && (
-            <motion.span
-              className="bg-success absolute -top-0.5 -right-0.5 size-3 rounded-full ring-2 ring-[var(--background)]"
-              animate={{ opacity: [1, 0.3, 1], scale: [1, 1.2, 1] }}
-              transition={{ duration: 1, repeat: Infinity, ease: 'easeInOut' }}
-            />
-          )}
         </motion.button>
       )}
 
@@ -130,7 +125,7 @@ export function ChatWidget({ agentId }: { agentId: string }) {
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.96 }}
             transition={{ duration: 0.18, ease: 'easeOut' }}
-            className="border-separator shadow-overlay fixed top-16 right-4 z-50 flex h-[70vh] w-[min(380px,calc(100vw-2rem))] flex-col border bg-[color-mix(in_oklch,var(--overlay)_80%,transparent)] backdrop-blur-md"
+            className="border-separator fixed top-16 right-4 z-50 flex h-[70vh] w-[min(400px,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border bg-[color-mix(in_oklch,var(--overlay)_85%,transparent)] shadow-[0_16px_60px_rgba(0,0,0,0.55)] backdrop-blur-xl"
           >
             <header
               onPointerDown={(e) => dragControls.start(e)}
@@ -163,33 +158,50 @@ export function ChatWidget({ agentId }: { agentId: string }) {
                 <p className="text-muted text-sm">No messages yet. Say something below.</p>
               )}
               {turns.map((t, i) => (
-                <div key={i} className={t.role === 'user' ? 'flex justify-end' : ''}>
-                  {/* User → grey bubble on the right; assistant → plain text on the left. */}
+                <motion.div
+                  key={i}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.25, ease: 'easeOut' }}
+                  className={t.role === 'user' ? 'flex justify-end' : ''}
+                >
+                  {/* User → bubble on the right; assistant → markdown on the left. */}
                   <div
                     className={
                       t.role === 'user'
-                        ? 'bg-surface-secondary max-w-[85%] rounded-lg px-3 py-2 text-sm'
-                        : 'max-w-full space-y-1.5 text-sm'
+                        ? 'bg-surface-secondary text-surface-secondary-foreground max-w-[85%] rounded-2xl rounded-br-md px-3.5 py-2 text-sm font-medium'
+                        : 'max-w-full space-y-2 font-medium'
                     }
                   >
                     {t.items.map((it, j) =>
                       it.kind === 'text' ? (
-                        <p key={j} className="whitespace-pre-wrap">
-                          {it.text}
-                        </p>
+                        t.role === 'user' ? (
+                          <p key={j} className="whitespace-pre-wrap">
+                            {it.text}
+                          </p>
+                        ) : (
+                          <div key={j} className="chat-md">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{it.text}</ReactMarkdown>
+                          </div>
+                        )
                       ) : (
-                        <p key={j} className="text-muted font-mono text-xs">
-                          ⚙ {it.name}
-                        </p>
+                        <div
+                          key={j}
+                          className="text-muted bg-surface-secondary/60 flex items-center gap-1.5 rounded-lg px-2 py-1 font-mono text-xs"
+                        >
+                          <LuWrench className="size-3 shrink-0" />
+                          <span className="shrink-0 font-semibold">{it.name}</span>
+                          {it.detail && <span className="truncate opacity-80">{it.detail}</span>}
+                        </div>
                       ),
                     )}
                   </div>
-                </div>
+                </motion.div>
               ))}
             </div>
 
             <div className="p-2">
-              <div className="border-separator focus-within:border-accent bg-surface flex flex-col gap-2 border p-2 transition-colors">
+              <div className="border-separator focus-within:border-accent bg-surface flex flex-col gap-2 rounded-2xl border p-2.5 transition-colors">
                 <textarea
                   value={input}
                   onChange={(e) => setInput(e.target.value)}

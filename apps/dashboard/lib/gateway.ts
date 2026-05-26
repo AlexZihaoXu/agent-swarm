@@ -106,6 +106,7 @@ export interface ChatItem {
   kind: 'text' | 'tool';
   text?: string;
   name?: string;
+  detail?: string;
 }
 export interface ChatTurn {
   role: 'user' | 'assistant';
