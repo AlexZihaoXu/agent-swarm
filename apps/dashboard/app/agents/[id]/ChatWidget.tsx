@@ -509,8 +509,9 @@ export function ChatWidget({ agentId }: { agentId: string }) {
                       </Button>
                     </div>
                   ) : promptOptions.length > 0 ? (
-                    /* Single-select: one click per option. */
-                    <div className="mt-2 max-h-48 space-y-1 overflow-auto">
+                    /* Single-select: compact answer chips (the render above is
+                       the question; these are just the clickable answers). */
+                    <div className="mt-2 flex flex-wrap gap-1.5">
                       {promptOptions.map((o) => (
                         <button
                           key={o.n}
@@ -523,15 +524,12 @@ export function ChatWidget({ agentId }: { agentId: string }) {
                               setTimeout(() => inputRef.current?.focus(), 350);
                             }
                           }}
-                          className="border-separator bg-surface hover:border-accent hover:bg-surface-secondary flex w-full items-baseline gap-2 rounded-lg border px-2.5 py-1.5 text-left text-sm transition-colors"
+                          className="border-separator bg-surface hover:border-accent hover:bg-surface-secondary flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-sm transition-colors"
                         >
-                          <span className="text-muted shrink-0 font-mono text-xs">{o.n}</span>
-                          <span className="min-w-0">{o.label}</span>
+                          <span className="text-muted font-mono text-xs">{o.n}</span>
+                          <span>{o.label}</span>
                         </button>
                       ))}
-                      <p className="text-muted pt-0.5 text-[11px]">
-                        Tip: pick “Type something” then type your answer below.
-                      </p>
                     </div>
                   ) : (
                     <>
