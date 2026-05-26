@@ -99,7 +99,9 @@ export interface AgentStats {
   /** Best-effort text of the pending question, if we could read it. */
   promptText?: string | null;
   /** Parsed numbered choices of the open selector (for one-click answers). */
-  promptOptions?: { n: number; label: string }[];
+  promptOptions?: { n: number; label: string; checkable?: boolean; checked?: boolean }[];
+  /** The open selector is a multi-select (checkboxes + Submit). */
+  promptMultiSelect?: boolean;
 }
 
 /** Live session stats for one agent, served by the agent's terminal supervisor. */

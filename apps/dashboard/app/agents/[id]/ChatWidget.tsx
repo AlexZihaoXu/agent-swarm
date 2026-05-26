@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   LuArrowUp,
+  LuCheck,
   LuMessageSquare,
   LuPaperclip,
   LuTerminal,
@@ -104,6 +105,10 @@ export function ChatWidget({ agentId }: { agentId: string }) {
   const working = stats?.status === 'busy';
   const awaiting = !!stats?.awaitingInput;
   const promptOptions = stats?.promptOptions ?? [];
+  const multiSelect = !!stats?.promptMultiSelect;
+  // Multi-select checkbox state, reset whenever a new question appears.
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  useEffect(() => setPicked(new Set()), [stats?.promptText, awaiting]);
   // Track which turns are newly arrived (so only those type out, not history).
   const seenLen = useRef<number | null>(null);
   const animateIdx = useRef<Set<number>>(new Set());
@@ -218,15 +223,37 @@ export function ChatWidget({ agentId }: { agentId: string }) {
   // sent one at a time, slightly spaced, so none are coalesced/dropped. The
   // "Type something" option selects into a text field — the user then types in
   // the composer as usual.
-  const answerOption = (n: number) => {
+  // Send a list of keystrokes to the selector, spaced so none are dropped.
+  const driveKeys = (keys: string[]) => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== 1) return;
-    const keys = [...Array(Math.max(0, n - 1)).fill('\x1b[B'), '\r'];
     keys.forEach((k, idx) =>
       setTimeout(() => {
         if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'data', data: k }));
-      }, idx * 60),
+      }, idx * 70),
     );
+  };
+
+  const DOWN = '\x1b[B';
+  const ENTER = '\r';
+  const SPACE = ' ';
+
+  // Single-select: step down to the n-th option, then Enter.
+  const answerOption = (n: number) => driveKeys([...Array(Math.max(0, n - 1)).fill(DOWN), ENTER]);
+
+  // Multi-select: walk the checkbox rows top-to-bottom, toggling (Space) the
+  // picked ones, then step onto the Submit row and Enter. That lands on the
+  // "Submit answers / Cancel" review screen, which surfaces as a normal
+  // single-select prompt the user confirms with one more click.
+  const submitMulti = () => {
+    const checkable = promptOptions.filter((o) => o.checkable);
+    const keys: string[] = [];
+    checkable.forEach((o, p) => {
+      if (picked.has(o.n)) keys.push(SPACE);
+      if (p < checkable.length - 1) keys.push(DOWN);
+    });
+    keys.push(DOWN, ENTER); // step from last checkbox onto Submit, then confirm
+    driveKeys(keys);
   };
 
   return (
@@ -385,7 +412,51 @@ export function ChatWidget({ agentId }: { agentId: string }) {
                     {stats?.promptText ? `“${stats.promptText}”` : 'The agent is asking a question'}
                   </p>
 
-                  {promptOptions.length > 0 ? (
+                  {multiSelect && promptOptions.some((o) => o.checkable) ? (
+                    /* Multi-select: toggle checkboxes, then Submit. */
+                    <div className="mt-2 space-y-1.5">
+                      <div className="max-h-44 space-y-1 overflow-auto">
+                        {promptOptions
+                          .filter((o) => o.checkable && !/^type something/i.test(o.label))
+                          .map((o) => {
+                            const on = picked.has(o.n);
+                            return (
+                              <button
+                                key={o.n}
+                                onClick={() =>
+                                  setPicked((prev) => {
+                                    const s = new Set(prev);
+                                    if (s.has(o.n)) s.delete(o.n);
+                                    else s.add(o.n);
+                                    return s;
+                                  })
+                                }
+                                className={`flex w-full items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left text-sm transition-colors ${
+                                  on
+                                    ? 'border-accent bg-accent/10'
+                                    : 'border-separator bg-surface hover:bg-surface-secondary'
+                                }`}
+                              >
+                                <span
+                                  className={`flex size-4 shrink-0 items-center justify-center rounded border ${
+                                    on
+                                      ? 'border-accent bg-accent text-accent-foreground'
+                                      : 'border-separator'
+                                  }`}
+                                >
+                                  {on && <LuCheck className="size-3" />}
+                                </span>
+                                <span className="min-w-0">{o.label}</span>
+                              </button>
+                            );
+                          })}
+                      </div>
+                      <Button size="sm" onPress={submitMulti} isDisabled={picked.size === 0}>
+                        Submit{picked.size > 0 ? ` (${picked.size})` : ''}
+                      </Button>
+                    </div>
+                  ) : promptOptions.length > 0 ? (
+                    /* Single-select: one click per option. */
                     <div className="mt-2 max-h-48 space-y-1 overflow-auto">
                       {promptOptions.map((o) => (
                         <button

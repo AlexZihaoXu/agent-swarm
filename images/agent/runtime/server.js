@@ -254,22 +254,49 @@ function claudeScreenText() {
 // low-false-positive signal that one is open. We also parse the numbered
 // options off the screen so the chat can offer them as one-click answers
 // (driven by sending the matching arrow-key sequence back to the pty).
+// Shapes handled (all share the "↑/↓ to navigate" footer):
+//   - single-select: "1. Label" rows, one Enter picks one;
+//   - multi-select:   "1. [ ] Label" checkbox rows + a "Submit" row (Space
+//     toggles, then Enter on Submit → a review screen, itself single-select);
+//   - plan approval / permission prompts: single-select Yes/No-style rows.
+// We parse the numbered options (and any checkbox state) so the chat can drive
+// the selector with the matching key sequence.
 function detectAwaiting(screen) {
   if (!/to navigate/i.test(screen)) return null;
   let prompt = null;
+  let multiSelect = false;
+  let hasSubmit = false;
   const options = [];
   for (const raw of screen.split('\n')) {
-    // Option line: optional "❯" cursor, then "N. label". Description lines
-    // (no leading number) and box rules are skipped.
-    const mo = raw.match(/^\s*[❯>›]?\s*(\d+)\.\s+(\S.*?)\s*$/);
+    // Drop box rules + a leading cursor marker so the row starts at its label.
+    const line = raw
+      .replace(/[│┃┆╎]/g, ' ')
+      .replace(/^\s*[❯>›]\s?/, '')
+      .trim();
+    if (/^Submit$/i.test(line)) {
+      hasSubmit = true;
+      continue;
+    }
+    const mo = line.match(/^(\d+)\.\s+(.*)$/);
     if (mo) {
-      const label = mo[2].replace(/\s+/g, ' ').trim();
-      if (label && label.length <= 120) options.push({ n: parseInt(mo[1], 10), label });
+      let label = mo[2].trim();
+      let checkable = false;
+      let checked = false;
+      const cb = label.match(/^\[\s*([xX✔✓●]?)\s*\]\s*(.*)$/);
+      if (cb) {
+        checkable = true;
+        checked = !!cb[1];
+        label = cb[2].trim();
+        multiSelect = true;
+      }
+      if (label && label.length <= 120)
+        options.push({ n: parseInt(mo[1], 10), label, checkable, checked });
+      continue;
     }
     const s = raw.replace(/[│┃┆╎|>❯●○◯◉*✻·•\s]+/g, ' ').trim();
     if (s.endsWith('?') && s.length > 4 && s.length <= 160) prompt = s;
   }
-  return { prompt, options };
+  return { prompt, options, multiSelect, hasSubmit };
 }
 
 function readStats() {
@@ -290,6 +317,7 @@ function readStats() {
   const awaitingInput = waiting || !!screen;
   const promptText = (screen && screen.prompt) || (waiting ? sess.waitingFor : null) || null;
   const promptOptions = (screen && screen.options) || [];
+  const promptMultiSelect = !!(screen && screen.multiSelect);
   const total = t.totals.input + t.totals.output + t.totals.cacheRead + t.totals.cacheCreation;
   const cost = sl.cost || {};
   return {
@@ -313,6 +341,7 @@ function readStats() {
     awaitingInput,
     promptText,
     promptOptions,
+    promptMultiSelect,
   };
 }
 
