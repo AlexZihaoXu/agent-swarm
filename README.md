@@ -231,9 +231,11 @@ host ports.
   The gateway routes `/a/:id/desktop` and `/a/:id/terminal` (HTTP + WebSocket) to
   each agent and serves the dashboard at `/`. Agents need **no host ports**, so
   the fleet scales without port collisions. The proxy resolves agents two ways
-  (`GATEWAY_MODE`): **`network`** (by container name over `swarm-net`, prod/Linux)
-  or **`ports`** (via Docker-assigned ephemeral host ports on `127.0.0.1`, dev on
-  macOS where the host can't route to container IPs/DNS).
+  (`GATEWAY_MODE`): **`network`** (by container name over `swarm-net`, used when
+  the gateway is containerized — works on Linux and macOS) or **`ports`** (via
+  Docker-assigned ephemeral host ports on `127.0.0.1`, for host-dev on macOS
+  where a host process can't route to container DNS). Spawned agents are tagged
+  with the stack's compose project so Docker UIs nest them under the dashboard.
 
 ## Authentication
 
@@ -272,23 +274,40 @@ Normally you don't run agents by hand — the **gateway** creates them via
 injecting the systemd flags and credential mount automatically. See
 [Getting started](#getting-started) for the host-dev flow.
 
-**Why host-dev on macOS.** Docker Desktop for Mac can't route from the host to
-container IPs or Docker DNS names — only to published ports. So the gateway runs
-in **`ports` mode**: each agent gets a Docker-assigned ephemeral host port and
-the host-run gateway proxies to `127.0.0.1:<port>`. On Linux you instead run the
-gateway containerized in **`network` mode** (`compose.yml`), where it reaches
-agents by name over `swarm-net` and agents publish nothing.
+### Containerized (recommended) — `compose.yml`
+
+The whole stack runs as containers behind the single `:8080` port. The gateway
+reaches agents **by name over `swarm-net`** in `network` mode — and because
+container-to-container DNS works on both Linux and Docker Desktop for Mac (only
+_host_-to-container is blocked on Mac), this path works everywhere. Agents
+publish **no host ports**.
 
 ```bash
-# Prod-oriented stack (Linux): gateway + dashboard behind one port
+docker network create swarm-net 2>/dev/null || true   # shared, external network
+docker build -t agent-swarm/agent:dev images/agent     # the agent image
+
 CLAUDE_CREDENTIALS_FILE=$HOME/.agent-swarm/.credentials.json \
-  docker compose up --build        # dashboard + gateway on :8080
+  docker compose up --build -d        # dashboard + gateway → http://localhost:8080
 ```
 
-> **Credential path gotcha:** in `network` mode the gateway runs in a container,
-> but the agent bind mount it requests is resolved by the **host** Docker daemon.
-> So `CLAUDE_CREDENTIALS_FILE` must be a **host** path (it is not mounted into the
+Spawned agents are tagged with this stack's compose project (`agent-swarm`), so
+Docker UIs like **Portainer** nest them under the dashboard stack. (Because they
+aren't in `compose.yml`, `docker compose down` treats them as orphans — use the
+dashboard's **Remove**, or `docker compose down --remove-orphans`, to tear the
+fleet down.)
+
+> **Credential path gotcha:** the gateway runs in a container, but the agent
+> bind mount it requests is resolved by the **host** Docker daemon. So
+> `CLAUDE_CREDENTIALS_FILE` must be a **host** path (it is not mounted into the
 > gateway — the gateway only forwards the string to the engine).
+
+### Host-dev (fast reload)
+
+For hot-reload while developing, run the gateway + dashboard on the host instead
+(see [Getting started](#getting-started)). Here the gateway uses **`ports` mode**
+— each agent gets a Docker-assigned ephemeral host port and the host-run gateway
+proxies to `127.0.0.1:<port>` — because a host process on Mac can't reach
+container DNS names.
 
 The agent caps (`SYS_ADMIN`/`SYS_BOOT`), cgroup mount, and unconfined
 seccomp/apparmor are required for systemd + GNOME Shell in a container; the

@@ -1,11 +1,21 @@
-# Production-oriented stack: one published port (gateway :8080) fronting the
-# dashboard and proxying to agent containers by name over swarm-net.
+# The dashboard stack: one published port (gateway :8080) fronting the
+# dashboard and reverse-proxying to agent containers by name over swarm-net.
 #
-# Dev on macOS uses the host-run path instead (see README → Running the stack);
-# this compose targets Linux where the gateway can route to agents by name.
+# Works on Linux and macOS: the gateway runs in a container here, and
+# container-to-container traffic over swarm-net resolves by name on both (only
+# host-to-container DNS is blocked on Docker Desktop, which is why host-run dev
+# uses ports mode instead — see README → Running the stack).
+#
+# Spawned agents are tagged with this project (agent-swarm) so Portainer and
+# other Docker UIs nest them under this stack.
+name: agent-swarm
+
+# swarm-net is shared between this stack and the agents the gateway spawns at
+# runtime, so it's external (create once: `docker network create swarm-net`).
 networks:
   swarm-net:
     name: swarm-net
+    external: true
 
 services:
   dashboard:
@@ -25,6 +35,8 @@ services:
     environment:
       GATEWAY_MODE: network
       SWARM_NETWORK: swarm-net
+      # Nest spawned agents under this stack in Docker UIs.
+      SWARM_PROJECT: agent-swarm
       AGENT_IMAGE: agent-swarm/agent:dev
       DASHBOARD_UPSTREAM: http://dashboard:3000
       DOCKER_SOCKET: /var/run/docker.sock

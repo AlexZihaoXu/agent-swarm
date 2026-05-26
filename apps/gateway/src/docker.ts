@@ -70,11 +70,19 @@ export class AgentManager {
     const name = this.containerName(id);
     const portMode = this.cfg.mode === 'ports';
 
+    // Tag with the stack's compose project so Docker UIs (Portainer) nest the
+    // agent under the dashboard, plus our own marker for management.
+    const labels: Record<string, string> = {
+      'swarm.managed': 'true',
+      'com.docker.compose.project': this.cfg.project,
+    };
+    if (username) labels[USERNAME_LABEL] = username;
+
     const container = await this.docker.createContainer({
       name,
       Image: this.cfg.agentImage,
       Hostname: id,
-      Labels: username ? { [USERNAME_LABEL]: username } : undefined,
+      Labels: labels,
       ExposedPorts: { '6080/tcp': {}, '7681/tcp': {} },
       HostConfig: {
         // systemd as PID 1 + GNOME Shell need these — mirrors README run flags.

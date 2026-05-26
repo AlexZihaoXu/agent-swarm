@@ -22,6 +22,12 @@ export const config = {
   mode: (process.env.GATEWAY_MODE as GatewayMode) ?? 'ports',
   /** User-defined Docker network every agent (and, in prod, the gateway) joins. */
   networkName: process.env.SWARM_NETWORK ?? 'swarm-net',
+  /**
+   * Compose project that spawned agents are tagged with, so Docker UIs
+   * (Portainer) nest them under the dashboard stack. Defaults to this stack's
+   * own project name when run via compose.
+   */
+  project: process.env.SWARM_PROJECT ?? process.env.COMPOSE_PROJECT_NAME ?? 'agent-swarm',
   agentImage: process.env.AGENT_IMAGE ?? 'agent-swarm/agent:dev',
   /** Container name = `${agentNamePrefix}${id}`; the id is what the URL carries. */
   agentNamePrefix: 'swarm-agent-',
