@@ -1,17 +1,16 @@
 'use client';
 
-import { Button } from '@heroui/react';
-import { useState } from 'react';
-import { LuLock, LuLockOpen } from 'react-icons/lu';
+import { useDesktopLock } from '../DesktopLock';
 
 /**
  * Embedded noVNC desktop with an input lock. While locked (the default), a
  * transparent overlay sits over the iframe and swallows all pointer events, and
  * because clicks never reach the iframe it never takes focus — so keyboard input
- * doesn't route into noVNC either. Unlock to interact.
+ * doesn't route into noVNC either. The lock toggle lives in the header
+ * (see DesktopLock); this panel just consumes the shared state.
  */
 export function DesktopPanel({ src, title }: { src: string; title: string }) {
-  const [locked, setLocked] = useState(true);
+  const { locked } = useDesktopLock();
 
   return (
     <div className="relative h-full w-full">
@@ -27,18 +26,6 @@ export function DesktopPanel({ src, title }: { src: string; title: string }) {
           aria-hidden="true"
         />
       )}
-
-      {/* Lives in the top-right of the header chrome (fixed), so it never sits
-          over the desktop's own top bar. */}
-      <Button
-        size="sm"
-        variant={locked ? 'secondary' : 'primary'}
-        className="fixed top-2 right-4 z-50 min-w-[8.5rem] justify-center transition-colors duration-300"
-        onPress={() => setLocked((v) => !v)}
-      >
-        {locked ? <LuLock className="size-4" /> : <LuLockOpen className="size-4" />}
-        {locked ? 'Input locked' : 'Input live'}
-      </Button>
     </div>
   );
 }
