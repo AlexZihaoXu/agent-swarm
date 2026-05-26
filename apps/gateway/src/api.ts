@@ -30,8 +30,8 @@ export function applyCors(req: IncomingMessage, res: ServerResponse): boolean {
   return false;
 }
 
-// /api/agents, /api/agents/:id, /api/agents/:id/(start|stop)
-const AGENT_API = /^\/api\/agents(?:\/([^/]+)(?:\/(start|stop))?)?$/;
+// /api/agents, /api/agents/:id, /api/agents/:id/(start|stop|upgrade)
+const AGENT_API = /^\/api\/agents(?:\/([^/]+)(?:\/(start|stop|upgrade))?)?$/;
 
 /**
  * Handle the REST API. Returns true if the request was an /api/* route (and has
@@ -80,6 +80,9 @@ async function handleAgents(
   } else if (!action) {
     if (method === 'DELETE')
       return (await manager.remove(id), sendJson(res, 200, { ok: true }), true);
+  } else if (action === 'upgrade') {
+    if (method === 'GET') return (sendJson(res, 200, await manager.upgradeInfo(id)), true);
+    if (method === 'POST') return (sendJson(res, 200, await manager.upgrade(id)), true);
   } else if (method === 'POST') {
     if (action === 'start') await manager.start(id);
     else await manager.stop(id);

@@ -342,6 +342,35 @@ docker run -d --name agent1 \
 
 </details>
 
+## Upgrading live agents
+
+An agent has a **soft layer** that can be updated in place — the terminal
+supervisor (`/opt/agent-runtime`), the statusLine script, Claude `settings.json`,
+and the noVNC page — and a **hard layer** (base image: GNOME, systemd, apt
+packages) that still needs a rebuilt image + recreate.
+
+The gateway ships **numbered, ordered migrations** ([`apps/gateway/src/migrations.ts`](apps/gateway/src/migrations.ts))
+that bring the soft layer up to date **without recreating** the container. Each
+agent records the highest applied version in `/opt/agent-runtime/.swarm-version`;
+the dashboard shows an **Upgrade** button when an agent is behind, and applying
+it runs the pending migrations in order (restarting the terminal supervisor —
+and thus the always-on `claude` session, whose transcript persists).
+
+```bash
+# status (installed vs latest, + pending migrations)
+curl localhost:8080/api/agents/<id>/upgrade
+# run pending migrations against the live agent
+curl -X POST localhost:8080/api/agents/<id>/upgrade
+```
+
+**To add an upgrade:** append one entry to `migrations.ts` with the next integer
+`version`, a `name`, and an `apply` using the `putDir` / `putFile` / `exec`
+helpers. Ship any new files under `images/agent/` (the bundled build context).
+Keep `apply` idempotent and forward-only. The full contract + recipe is
+documented at the top of `migrations.ts`. Changes that need new apt packages or
+base-image edits are hard-layer — put them in `images/agent/Dockerfile` and
+build a new image instead.
+
 ## Planned: the swarm layer
 
 Out of scope for the initial build, but the structure is designed to absorb it.

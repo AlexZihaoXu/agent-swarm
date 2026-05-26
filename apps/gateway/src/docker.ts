@@ -1,10 +1,19 @@
 import { readdirSync } from 'node:fs';
-import { basename, dirname } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import type { Readable } from 'node:stream';
 import type Docker from 'dockerode';
+import tar from 'tar-fs';
 import { config as defaultConfig, type Config } from './config.js';
 import { getSettings } from './settings.js';
+import { LATEST_VERSION, migrations, VERSION_MARKER, type MigrationCtx } from './migrations.js';
 import type { Agent, CreateAgentOptions, ProxyTarget, ServiceName } from './types.js';
+
+export interface UpgradeInfo {
+  installed: number;
+  latest: number;
+  outdated: boolean;
+  pending: { version: number; name: string }[];
+}
 
 /** Label key for the agent's friendly display name. */
 const USERNAME_LABEL = 'swarm.username';
@@ -119,6 +128,7 @@ export class AgentManager {
       } as Docker.ContainerCreateOptions['HostConfig'],
     });
     await container.start();
+    await this.stampVersion(container);
     return this.toAgent(await container.inspect());
   }
 
@@ -286,6 +296,92 @@ export class AgentManager {
     } finally {
       if (container) await container.remove({ force: true }).catch(() => {});
     }
+  }
+
+  /** Run a command in a container and return its combined stdout/stderr. */
+  private async exec(container: Docker.Container, cmd: string[]): Promise<string> {
+    const ex = await container.exec({
+      Cmd: cmd,
+      AttachStdout: true,
+      AttachStderr: true,
+      Tty: true,
+    });
+    const stream = await ex.start({ Tty: true });
+    return await new Promise<string>((resolve) => {
+      let out = '';
+      stream.on('data', (d: Buffer) => (out += d.toString('utf8')));
+      stream.on('end', () => resolve(out));
+      stream.on('error', () => resolve(out));
+    });
+  }
+
+  /** Migration helpers bound to one container (used by migration `apply`). */
+  private migrationCtx(container: Docker.Container): MigrationCtx {
+    const base = this.cfg.agentContextDir;
+    return {
+      putDir: async (srcRel, dest) => {
+        await container.putArchive(tar.pack(join(base, srcRel)), { path: dest });
+      },
+      putFile: async (srcRel, dest) => {
+        const src = join(base, srcRel);
+        const pack = tar.pack(dirname(src), {
+          entries: [basename(src)],
+          map: (header) => ((header.name = basename(dest)), header),
+        });
+        await container.putArchive(pack, { path: dirname(dest) });
+      },
+      exec: (cmd) => this.exec(container, ['sh', '-c', cmd]),
+    };
+  }
+
+  /** Highest migration version applied in an agent (0 = none/old). */
+  async installedVersion(id: string): Promise<number> {
+    try {
+      const out = await this.exec(this.docker.getContainer(this.containerName(id)), [
+        'sh',
+        '-c',
+        `cat ${VERSION_MARKER} 2>/dev/null || echo 0`,
+      ]);
+      const n = parseInt(out.trim(), 10);
+      return Number.isFinite(n) ? n : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  async upgradeInfo(id: string): Promise<UpgradeInfo> {
+    const installed = await this.installedVersion(id);
+    const pending = migrations
+      .filter((m) => m.version > installed)
+      .sort((a, b) => a.version - b.version)
+      .map((m) => ({ version: m.version, name: m.name }));
+    return { installed, latest: LATEST_VERSION, outdated: installed < LATEST_VERSION, pending };
+  }
+
+  /** Stamp a freshly created container as fully up to date (it ships current). */
+  private async stampVersion(container: Docker.Container): Promise<void> {
+    await this.exec(container, ['sh', '-c', `echo ${LATEST_VERSION} > ${VERSION_MARKER}`]).catch(
+      () => {},
+    );
+  }
+
+  /**
+   * Run every pending migration in order against a live agent, recording the
+   * version after each so a failure leaves a known state. Migrations restart the
+   * terminal supervisor (and thus the always-on claude session — its transcript
+   * is preserved on disk); no recreate.
+   */
+  async upgrade(id: string): Promise<UpgradeInfo> {
+    const container = this.docker.getContainer(this.containerName(id));
+    const ctx = this.migrationCtx(container);
+    const installed = await this.installedVersion(id);
+    for (const m of migrations
+      .filter((x) => x.version > installed)
+      .sort((a, b) => a.version - b.version)) {
+      await m.apply(ctx);
+      await ctx.exec(`echo ${m.version} > ${VERSION_MARKER}`);
+    }
+    return this.upgradeInfo(id);
   }
 
   private toAgent(info: Docker.ContainerInspectInfo): Agent {

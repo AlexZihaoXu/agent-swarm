@@ -45,6 +45,26 @@ workspaces:
 - **CI**: the full `build` plus all of the above.
 - Fixers: `format` (Prettier write) and `lint:fix` (ESLint `--fix`).
 
+## Agent upgrades (soft layer)
+
+Agent containers are upgraded **in place** via numbered migrations rather than
+always recreating them. When you change an agent's **soft layer** — the terminal
+runtime (`images/agent/runtime/`), the statusLine script, Claude `settings.json`,
+or the noVNC page — you **must** add a migration so existing live agents can pick
+it up:
+
+1. Edit the soft-layer file under `images/agent/` (it's the bundled build context).
+2. Append one entry to [`apps/gateway/src/migrations.ts`](apps/gateway/src/migrations.ts)
+   with the next integer `version`, a short `name`, and an `apply` using the
+   `putDir` / `putFile` / `exec` helpers; restart any affected service. Keep it
+   idempotent and forward-only. The contract + recipe live at the top of that file.
+3. If fresh agents should also have it, ensure `images/agent/Dockerfile` installs
+   it (the image is the baseline new agents start from).
+
+Hard-layer changes (apt packages, base image, systemd units) are **not**
+migratable — they require a rebuilt `agent-swarm/agent:dev` image and recreating
+agents. See [README → Upgrading live agents](./README.md#upgrading-live-agents).
+
 ## Milestones
 
 The user will explicitly use the word **milestone** to mark one. When they do,

@@ -96,6 +96,19 @@ export interface AgentStats {
 /** Live session stats for one agent, served by the agent's terminal supervisor. */
 export const getAgentStats = (id: string) => api<AgentStats>(`/a/${id}/terminal/api/stats`);
 
+export interface UpgradeInfo {
+  installed: number;
+  latest: number;
+  outdated: boolean;
+  pending: { version: number; name: string }[];
+}
+
+/** Migration/upgrade status for one agent. */
+export const getUpgradeInfo = (id: string) => api<UpgradeInfo>(`/api/agents/${id}/upgrade`);
+/** Run pending migrations against a live agent (no recreate). */
+export const upgradeAgent = (id: string) =>
+  api<UpgradeInfo>(`/api/agents/${id}/upgrade`, { method: 'POST' });
+
 export const listAgents = () => api<Agent[]>('/api/agents');
 export const createAgent = (opts: CreateAgentOptions = {}) =>
   api<Agent>('/api/agents', {
