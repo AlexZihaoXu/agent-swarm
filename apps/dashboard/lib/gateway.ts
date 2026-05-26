@@ -94,10 +94,12 @@ export interface AgentStats {
   exceeds200k: boolean;
   lastActivity: string | number | null;
   /** An interactive selector (AskUserQuestion/plan/permission) is open and
-   * waiting — these are TUI-only and must be answered in the Terminal. */
+   * waiting. TUI-only, but answerable from chat by driving the selector. */
   awaitingInput?: boolean;
   /** Best-effort text of the pending question, if we could read it. */
   promptText?: string | null;
+  /** Parsed numbered choices of the open selector (for one-click answers). */
+  promptOptions?: { n: number; label: string }[];
 }
 
 /** Live session stats for one agent, served by the agent's terminal supervisor. */

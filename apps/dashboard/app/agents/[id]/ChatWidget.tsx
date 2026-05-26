@@ -103,6 +103,7 @@ export function ChatWidget({ agentId }: { agentId: string }) {
   const stats = useAgentStats(agentId);
   const working = stats?.status === 'busy';
   const awaiting = !!stats?.awaitingInput;
+  const promptOptions = stats?.promptOptions ?? [];
   // Track which turns are newly arrived (so only those type out, not history).
   const seenLen = useRef<number | null>(null);
   const animateIdx = useRef<Set<number>>(new Set());
@@ -209,6 +210,23 @@ export function ChatWidget({ agentId }: { agentId: string }) {
       { role: 'user', ts: Date.now(), items: [{ kind: 'text', text }] },
     ]);
     setInput('');
+  };
+
+  // Answer an open selector by driving it. Claude's selectors always open with
+  // option 1 highlighted, so we step down to the n-th option (↓ × n-1) then
+  // Enter — no ↑ spam (↑ wraps around and a fast burst drops keys). Keys are
+  // sent one at a time, slightly spaced, so none are coalesced/dropped. The
+  // "Type something" option selects into a text field — the user then types in
+  // the composer as usual.
+  const answerOption = (n: number) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== 1) return;
+    const keys = [...Array(Math.max(0, n - 1)).fill('\x1b[B'), '\r'];
+    keys.forEach((k, idx) =>
+      setTimeout(() => {
+        if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'data', data: k }));
+      }, idx * 60),
+    );
   };
 
   return (
@@ -351,9 +369,9 @@ export function ChatWidget({ agentId }: { agentId: string }) {
             </div>
 
             {/* Interactive selectors (AskUserQuestion / plan / permission) are
-                TUI-only and never reach the transcript, so they can't be shown
-                or answered here — detect that one's open and route to the
-                Terminal. */}
+                TUI-only and never reach the transcript. We parse their options
+                off the screen and answer by driving the selector; if we can't
+                parse options, we fall back to routing the user to the Terminal. */}
             <AnimatePresence>
               {awaiting && (
                 <motion.div
@@ -363,27 +381,47 @@ export function ChatWidget({ agentId }: { agentId: string }) {
                   transition={{ duration: 0.2, ease: 'easeOut' }}
                   className="border-warning/40 bg-warning/10 mx-2 mb-1 rounded-xl border p-2.5"
                 >
-                  <p className="text-foreground text-sm font-medium">Waiting for your answer</p>
-                  <p className="text-muted mt-0.5 text-xs">
-                    {stats?.promptText
-                      ? `“${stats.promptText}”`
-                      : 'The agent is asking an interactive question.'}{' '}
-                    It can only be answered in the Terminal.
+                  <p className="text-foreground text-sm font-medium">
+                    {stats?.promptText ? `“${stats.promptText}”` : 'The agent is asking a question'}
                   </p>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    className="mt-2 gap-1.5"
-                    render={(props) => (
-                      <Link
-                        {...(props as React.ComponentProps<typeof Link>)}
-                        href={`/agents/${agentId}/terminal`}
-                      />
-                    )}
-                  >
-                    <LuTerminal className="size-3.5" />
-                    Open Terminal
-                  </Button>
+
+                  {promptOptions.length > 0 ? (
+                    <div className="mt-2 max-h-48 space-y-1 overflow-auto">
+                      {promptOptions.map((o) => (
+                        <button
+                          key={o.n}
+                          onClick={() => answerOption(o.n)}
+                          className="border-separator bg-surface hover:border-accent hover:bg-surface-secondary flex w-full items-baseline gap-2 rounded-lg border px-2.5 py-1.5 text-left text-sm transition-colors"
+                        >
+                          <span className="text-muted shrink-0 font-mono text-xs">{o.n}</span>
+                          <span className="min-w-0">{o.label}</span>
+                        </button>
+                      ))}
+                      <p className="text-muted pt-0.5 text-[11px]">
+                        Tip: pick “Type something” then type your answer below.
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <p className="text-muted mt-0.5 text-xs">
+                        Couldn’t read the choices — answer it in the Terminal.
+                      </p>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        className="mt-2 gap-1.5"
+                        render={(props) => (
+                          <Link
+                            {...(props as React.ComponentProps<typeof Link>)}
+                            href={`/agents/${agentId}/terminal`}
+                          />
+                        )}
+                      >
+                        <LuTerminal className="size-3.5" />
+                        Open Terminal
+                      </Button>
+                    </>
+                  )}
                 </motion.div>
               )}
             </AnimatePresence>

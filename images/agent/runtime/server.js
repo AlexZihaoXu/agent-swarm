@@ -248,20 +248,28 @@ function claudeScreenText() {
 }
 
 // Claude Code's interactive selectors (AskUserQuestion, ExitPlanMode, the
-// permission prompt) are TUI-only — they never reach the transcript. We can't
-// render them in the chat, but we CAN detect that one is open from the screen
-// and route the user to the Terminal to answer. The "↑/↓ to navigate" footer is
-// unique to these selectors (idle shows "? for shortcuts"; busy shows
-// "esc to interrupt"), so it's a reliable, low-false-positive signal.
+// permission prompt) are TUI-only — they never reach the transcript. The
+// "↑/↓ to navigate" footer is unique to these selectors (idle shows
+// "? for shortcuts"; busy shows "esc to interrupt"), so it's a reliable,
+// low-false-positive signal that one is open. We also parse the numbered
+// options off the screen so the chat can offer them as one-click answers
+// (driven by sending the matching arrow-key sequence back to the pty).
 function detectAwaiting(screen) {
   if (!/to navigate/i.test(screen)) return null;
-  // Best-effort: pull the question line (ends with '?') to label the notice.
   let prompt = null;
+  const options = [];
   for (const raw of screen.split('\n')) {
+    // Option line: optional "❯" cursor, then "N. label". Description lines
+    // (no leading number) and box rules are skipped.
+    const mo = raw.match(/^\s*[❯>›]?\s*(\d+)\.\s+(\S.*?)\s*$/);
+    if (mo) {
+      const label = mo[2].replace(/\s+/g, ' ').trim();
+      if (label && label.length <= 120) options.push({ n: parseInt(mo[1], 10), label });
+    }
     const s = raw.replace(/[│┃┆╎|>❯●○◯◉*✻·•\s]+/g, ' ').trim();
     if (s.endsWith('?') && s.length > 4 && s.length <= 160) prompt = s;
   }
-  return { prompt };
+  return { prompt, options };
 }
 
 function readStats() {
@@ -281,6 +289,7 @@ function readStats() {
   const waiting = sess.status === 'waiting';
   const awaitingInput = waiting || !!screen;
   const promptText = (screen && screen.prompt) || (waiting ? sess.waitingFor : null) || null;
+  const promptOptions = (screen && screen.options) || [];
   const total = t.totals.input + t.totals.output + t.totals.cacheRead + t.totals.cacheCreation;
   const cost = sl.cost || {};
   return {
@@ -299,9 +308,11 @@ function readStats() {
     exceeds200k: !!sl.exceeds_200k_tokens,
     lastActivity: t.lastTs || sess.updatedAt || null,
     // True when an interactive selector (AskUserQuestion/plan/permission) is
-    // open and waiting — these can only be answered in the Terminal.
+    // open and waiting; promptOptions lists its numbered choices so the chat
+    // can answer by sending the matching arrow-key sequence to the pty.
     awaitingInput,
     promptText,
+    promptOptions,
   };
 }
 
