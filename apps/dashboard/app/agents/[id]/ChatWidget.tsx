@@ -82,6 +82,7 @@ export function ChatWidget({ agentId }: { agentId: string }) {
   const dragControls = useDragControls();
   const draggedRef = useRef(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const [attaching, setAttaching] = useState(false);
   const stats = useAgentStats(agentId);
   const working = stats?.status === 'busy';
@@ -153,6 +154,21 @@ export function ChatWidget({ agentId }: { agentId: string }) {
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [turns, open, working]);
+
+  // Type-to-focus: while the dock is open, starting to type anywhere (outside a
+  // field) drops focus into the composer so the keystroke lands there.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey || e.key.length !== 1) return;
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || el?.isContentEditable) return;
+      inputRef.current?.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open]);
 
   const send = () => {
     const text = input.trim();
@@ -329,6 +345,7 @@ export function ChatWidget({ agentId }: { agentId: string }) {
             <div className="p-2">
               <div className="border-separator focus-within:border-accent bg-surface flex flex-col gap-2 rounded-2xl border p-2.5 transition-colors">
                 <textarea
+                  ref={inputRef}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => {
