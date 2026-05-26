@@ -108,7 +108,17 @@ export function ChatWidget({ agentId }: { agentId: string }) {
   const multiSelect = !!stats?.promptMultiSelect;
   // Multi-select checkbox state, reset whenever a new question appears.
   const [picked, setPicked] = useState<Set<number>>(new Set());
-  useEffect(() => setPicked(new Set()), [stats?.promptText, awaiting]);
+  // While a selector is open, lock the composer (free typing would corrupt the
+  // selection) — except after picking "Type something", which opens a text
+  // field we want the user to type into.
+  const [freeText, setFreeText] = useState(false);
+  useEffect(() => {
+    setPicked(new Set());
+    setFreeText(false);
+  }, [stats?.promptText, awaiting]);
+  const composerLocked = awaiting && !freeText;
+  const lockedRef = useRef(composerLocked);
+  lockedRef.current = composerLocked;
   // Track which turns are newly arrived (so only those type out, not history).
   const seenLen = useRef<number | null>(null);
   const animateIdx = useRef<Set<number>>(new Set());
@@ -192,6 +202,7 @@ export function ChatWidget({ agentId }: { agentId: string }) {
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
+      if (lockedRef.current) return; // selector open — don't grab keys into composer
       if (e.metaKey || e.ctrlKey || e.altKey || e.key.length !== 1) return;
       const el = e.target as HTMLElement | null;
       const tag = el?.tagName;
@@ -469,10 +480,12 @@ export function ChatWidget({ agentId }: { agentId: string }) {
                           key={o.n}
                           onClick={() => {
                             answerOption(o.n);
-                            // "Type something" opens a free-text field — drop the
-                            // user into the composer so they can type the answer.
-                            if (/^type something/i.test(o.label))
+                            // "Type something" opens a free-text field — unlock the
+                            // composer and focus it so the typed answer lands there.
+                            if (/^type something/i.test(o.label)) {
+                              setFreeText(true);
                               setTimeout(() => inputRef.current?.focus(), 350);
+                            }
                           }}
                           className="border-separator bg-surface hover:border-accent hover:bg-surface-secondary flex w-full items-baseline gap-2 rounded-lg border px-2.5 py-1.5 text-left text-sm transition-colors"
                         >
@@ -510,7 +523,11 @@ export function ChatWidget({ agentId }: { agentId: string }) {
             </AnimatePresence>
 
             <div className="p-2">
-              <div className="border-separator focus-within:border-accent bg-surface flex flex-col gap-2 rounded-2xl border p-2.5 transition-colors">
+              <div
+                className={`border-separator bg-surface flex flex-col gap-2 rounded-2xl border p-2.5 transition-colors ${
+                  composerLocked ? 'opacity-60' : 'focus-within:border-accent'
+                }`}
+              >
                 <textarea
                   ref={inputRef}
                   value={input}
@@ -522,23 +539,30 @@ export function ChatWidget({ agentId }: { agentId: string }) {
                     }
                   }}
                   rows={2}
-                  placeholder="Message the agent…"
-                  className="placeholder:text-muted max-h-32 min-h-0 resize-none bg-transparent text-sm outline-none"
+                  disabled={composerLocked}
+                  placeholder={composerLocked ? 'Pick an option above…' : 'Message the agent…'}
+                  className="placeholder:text-muted max-h-32 min-h-0 resize-none bg-transparent text-sm outline-none disabled:cursor-not-allowed"
                 />
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
                       aria-label="Attach file"
+                      disabled={composerLocked}
                       onClick={() => fileRef.current?.click()}
-                      className="text-muted hover:text-foreground hover:bg-surface-secondary flex size-8 items-center justify-center transition-colors"
+                      className="text-muted hover:text-foreground hover:bg-surface-secondary flex size-8 items-center justify-center transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <LuPaperclip className="size-4" />
                     </button>
                     <input ref={fileRef} type="file" hidden onChange={onPickFile} />
                     {attaching && <span className="text-muted text-xs">uploading…</span>}
                   </div>
-                  <Button isIconOnly aria-label="Send" onPress={send} isDisabled={!input.trim()}>
+                  <Button
+                    isIconOnly
+                    aria-label="Send"
+                    onPress={send}
+                    isDisabled={!input.trim() || composerLocked}
+                  >
                     <LuArrowUp className="size-4" />
                   </Button>
                 </div>
