@@ -135,6 +135,22 @@ function transcriptStats() {
   return { totals, model, turns, lastTs, context, cost };
 }
 
+// A short, human one-liner of what a tool call did (command, path, pattern…).
+function toolDetail(input) {
+  if (!input || typeof input !== 'object') return '';
+  const v =
+    input.command ||
+    input.file_path ||
+    input.path ||
+    input.pattern ||
+    input.url ||
+    input.prompt ||
+    Object.values(input).find((x) => typeof x === 'string') ||
+    '';
+  const s = String(v).replace(/\s+/g, ' ').trim();
+  return s.length > 140 ? s.slice(0, 140) + '…' : s;
+}
+
 // Normalized conversation for the dashboard chat view: user/assistant turns,
 // each with text and tool-call items (tool results & thinking are omitted).
 function readTranscript() {
@@ -158,7 +174,8 @@ function readTranscript() {
     } else if (Array.isArray(content)) {
       for (const b of content) {
         if (b.type === 'text' && b.text) items.push({ kind: 'text', text: b.text });
-        else if (b.type === 'tool_use') items.push({ kind: 'tool', name: b.name });
+        else if (b.type === 'tool_use')
+          items.push({ kind: 'tool', name: b.name, detail: toolDetail(b.input) });
       }
     }
     if (items.length) out.push({ role: o.message.role, ts: o.timestamp || null, items });
