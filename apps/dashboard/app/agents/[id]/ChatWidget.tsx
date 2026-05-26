@@ -59,10 +59,10 @@ function useTypewriter(text: string, duration: number): string {
   return text.slice(0, n);
 }
 
-/** Assistant markdown, typed out on first appearance at ~30 char/s, capped at
+/** Assistant markdown, typed out on first appearance at ~60 char/s, capped at
  * 1.5s for long messages (so short replies reveal quickly, long ones don't drag). */
 function AssistantText({ text, animate }: { text: string; animate: boolean }) {
-  const duration = animate ? Math.min(1500, Math.round((text.length / 30) * 1000)) : 0;
+  const duration = animate ? Math.min(1500, Math.round((text.length / 60) * 1000)) : 0;
   const shown = useTypewriter(text, duration);
   return (
     <div className="chat-md">
