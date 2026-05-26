@@ -3,8 +3,7 @@
 import { Button, Card, Chip, Dropdown, Label, Modal } from '@heroui/react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
-import { LuEllipsis } from 'react-icons/lu';
+import { useCallback, useEffect, useState, type MouseEvent } from 'react';
 import {
   desktopUrl,
   getUpgradeInfo,
@@ -61,6 +60,8 @@ export function AgentCard({ agent, onChanged }: { agent: Agent; onChanged: () =>
   const [dialog, setDialog] = useState<Dialog>(null);
   const [busy, setBusy] = useState(false);
   const [upgrade, setUpgrade] = useState<UpgradeInfo | null>(null);
+  // Cursor position for the right-click context menu (null = closed).
+  const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
 
   const checkUpgrade = useCallback(async () => {
     try {
@@ -85,13 +86,19 @@ export function AgentCard({ agent, onChanged }: { agent: Agent; onChanged: () =>
   };
 
   const onAction = (key: string) => {
+    setMenuPos(null);
     if (key === 'open') router.push(`/agents/${agent.id}/desktop`);
     else if (key === 'start') void act(() => startAgent(agent.id));
     else setDialog(key as Dialog);
   };
 
+  const openMenu = (e: MouseEvent) => {
+    e.preventDefault();
+    setMenuPos({ x: e.clientX, y: e.clientY });
+  };
+
   return (
-    <Card>
+    <Card onContextMenu={openMenu}>
       <div className="flex flex-col gap-4 sm:flex-row">
         {/* Live view: non-interactive scaled noVNC preview; click → open. */}
         <Link
@@ -114,56 +121,68 @@ export function AgentCard({ agent, onChanged }: { agent: Agent; onChanged: () =>
           <span className="absolute inset-0 transition-colors group-hover:bg-white/5" />
         </Link>
 
-        {/* Right column: info + a single actions menu. */}
+        {/* Right column: title, info, then status + live stats. */}
         <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <div className="flex items-start justify-between gap-2">
-            <h3 className="truncate font-semibold">{agent.username || agent.id}</h3>
-            <div className="flex shrink-0 items-center gap-1.5">
-              <Chip color={statusColor(agent.status)} size="sm" variant="soft">
-                {agent.status}
-              </Chip>
-              <Dropdown>
-                <Button isIconOnly size="sm" variant="tertiary" aria-label="Agent actions">
-                  <LuEllipsis className="size-4" />
-                </Button>
-                <Dropdown.Popover>
-                  <Dropdown.Menu onAction={(key) => onAction(String(key))}>
-                    <Dropdown.Item id="open" textValue="Open">
-                      <Label>Open</Label>
-                    </Dropdown.Item>
-                    {running ? (
-                      <Dropdown.Item id="stop" textValue="Stop">
-                        <Label>Stop</Label>
-                      </Dropdown.Item>
-                    ) : (
-                      <Dropdown.Item id="start" textValue="Start">
-                        <Label>Start</Label>
-                      </Dropdown.Item>
-                    )}
-                    {running && upgrade?.outdated ? (
-                      <Dropdown.Item id="upgrade" textValue="Upgrade">
-                        <Label>
-                          Upgrade (v{upgrade.installed} → v{upgrade.latest})
-                        </Label>
-                      </Dropdown.Item>
-                    ) : null}
-                    <Dropdown.Item id="remove" textValue="Remove" variant="danger">
-                      <Label>Remove</Label>
-                    </Dropdown.Item>
-                  </Dropdown.Menu>
-                </Dropdown.Popover>
-              </Dropdown>
-            </div>
-          </div>
-
+          <h3 className="truncate font-semibold">{agent.username || agent.id}</h3>
           {subline(agent) && (
             <p className="text-muted font-mono text-xs break-words">{subline(agent)}</p>
           )}
           <p className="text-muted font-mono text-xs">created {relativeTime(agent.createdAt)}</p>
 
-          {running && <AgentStatsInline agentId={agent.id} />}
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <Chip color={statusColor(agent.status)} size="sm" variant="soft">
+              {agent.status}
+            </Chip>
+            {running && <AgentStatsInline agentId={agent.id} />}
+          </div>
+          <p className="text-muted/70 mt-1 text-[11px]">Right-click for actions</p>
         </div>
       </div>
+
+      {/* Right-click context menu (anchored to an invisible element at the cursor). */}
+      <Dropdown isOpen={menuPos !== null} onOpenChange={(o) => !o && setMenuPos(null)}>
+        <Button
+          aria-hidden="true"
+          excludeFromTabOrder
+          style={{
+            position: 'fixed',
+            left: menuPos?.x ?? 0,
+            top: menuPos?.y ?? 0,
+            width: 0,
+            height: 0,
+            minHeight: 0,
+            padding: 0,
+            opacity: 0,
+            pointerEvents: 'none',
+          }}
+        />
+        <Dropdown.Popover>
+          <Dropdown.Menu onAction={(key) => onAction(String(key))}>
+            <Dropdown.Item id="open" textValue="Open">
+              <Label>Open</Label>
+            </Dropdown.Item>
+            {running ? (
+              <Dropdown.Item id="stop" textValue="Stop">
+                <Label>Stop</Label>
+              </Dropdown.Item>
+            ) : (
+              <Dropdown.Item id="start" textValue="Start">
+                <Label>Start</Label>
+              </Dropdown.Item>
+            )}
+            {running && upgrade?.outdated ? (
+              <Dropdown.Item id="upgrade" textValue="Upgrade">
+                <Label>
+                  Upgrade (v{upgrade.installed} → v{upgrade.latest})
+                </Label>
+              </Dropdown.Item>
+            ) : null}
+            <Dropdown.Item id="remove" textValue="Remove" variant="danger">
+              <Label>Remove</Label>
+            </Dropdown.Item>
+          </Dropdown.Menu>
+        </Dropdown.Popover>
+      </Dropdown>
 
       <ConfirmActionDialog
         isOpen={dialog === 'stop'}
