@@ -135,6 +135,37 @@ function transcriptStats() {
   return { totals, model, turns, lastTs, context, cost };
 }
 
+// Normalized conversation for the dashboard chat view: user/assistant turns,
+// each with text and tool-call items (tool results & thinking are omitted).
+function readTranscript() {
+  const newest = newestFile(path.join(CLAUDE_DIR, 'projects'), '.jsonl');
+  const raw = newest && safeRead(newest.path);
+  if (!raw) return [];
+  const out = [];
+  for (const line of raw.split('\n').slice(-500)) {
+    if (!line.trim()) continue;
+    let o;
+    try {
+      o = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if ((o.type !== 'user' && o.type !== 'assistant') || !o.message) continue;
+    const content = o.message.content;
+    const items = [];
+    if (typeof content === 'string') {
+      if (content.trim()) items.push({ kind: 'text', text: content });
+    } else if (Array.isArray(content)) {
+      for (const b of content) {
+        if (b.type === 'text' && b.text) items.push({ kind: 'text', text: b.text });
+        else if (b.type === 'tool_use') items.push({ kind: 'tool', name: b.name });
+      }
+    }
+    if (items.length) out.push({ role: o.message.role, ts: o.timestamp || null, items });
+  }
+  return out;
+}
+
 let shotCache = { at: 0, buf: null };
 function sendScreenshot(res) {
   if (shotCache.buf && Date.now() - shotCache.at < 1000) {
@@ -296,6 +327,9 @@ const server = http.createServer(async (req, res) => {
   }
   if (u.pathname === '/api/stats' && req.method === 'GET') {
     return sendJson(res, 200, readStats());
+  }
+  if (u.pathname === '/api/transcript' && req.method === 'GET') {
+    return sendJson(res, 200, readTranscript());
   }
   // Low-res JPEG of the desktop for fleet-card previews (cheap; full live view
   // is the noVNC stream). Cached ~1s so multiple viewers don't hammer X.
