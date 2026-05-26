@@ -467,7 +467,13 @@ export function ChatWidget({ agentId }: { agentId: string }) {
                       {promptOptions.map((o) => (
                         <button
                           key={o.n}
-                          onClick={() => answerOption(o.n)}
+                          onClick={() => {
+                            answerOption(o.n);
+                            // "Type something" opens a free-text field — drop the
+                            // user into the composer so they can type the answer.
+                            if (/^type something/i.test(o.label))
+                              setTimeout(() => inputRef.current?.focus(), 350);
+                          }}
                           className="border-separator bg-surface hover:border-accent hover:bg-surface-secondary flex w-full items-baseline gap-2 rounded-lg border px-2.5 py-1.5 text-left text-sm transition-colors"
                         >
                           <span className="text-muted shrink-0 font-mono text-xs">{o.n}</span>
