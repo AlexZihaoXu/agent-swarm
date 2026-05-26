@@ -5,6 +5,7 @@ import { motion } from 'framer-motion';
 import Link from 'next/link';
 import { useSelectedLayoutSegment } from 'next/navigation';
 import { use, type ComponentProps, type ReactNode } from 'react';
+import { LuMonitor, LuTerminal } from 'react-icons/lu';
 import { AgentStatsBar } from '@/app/AgentStats';
 
 // HeroUI's Tab `render` hands generic DOM props; Link wants anchor props. They
@@ -50,11 +51,17 @@ export default function AgentLayout({
           <Tabs.ListContainer>
             <Tabs.List aria-label="Agent views">
               <Tabs.Tab id="desktop" href={`/agents/${id}/desktop`} render={asLink}>
-                Desktop
+                <span className="flex items-center gap-1.5">
+                  <LuMonitor className="size-4" />
+                  Desktop
+                </span>
                 <Tabs.Indicator />
               </Tabs.Tab>
               <Tabs.Tab id="terminal" href={`/agents/${id}/terminal`} render={asLink}>
-                Terminal
+                <span className="flex items-center gap-1.5">
+                  <LuTerminal className="size-4" />
+                  Terminal
+                </span>
                 <Tabs.Indicator />
               </Tabs.Tab>
             </Tabs.List>
