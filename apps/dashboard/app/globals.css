@@ -50,9 +50,9 @@
   --radius: 0;
   --field-radius: 0;
 
-  /* Font Family */
-  /* Make sure to load Instrument Sans font in your app */
-  --font-sans: var(--font-instrument-sans);
+  /* Font Family — open-source stand-ins for Anthropic's brand pair. */
+  --font-sans: var(--font-sans-brand), ui-sans-serif, system-ui, sans-serif;
+  --font-serif: var(--font-serif-brand), ui-serif, Georgia, Cambria, 'Times New Roman', serif;
 }
 
 .dark,
@@ -92,11 +92,18 @@
   --warning-foreground: oklch(21.03% 0.0059 54.72);
 }
 
-/* Compact markdown rendering inside the chat dock. */
+/* Compact markdown rendering inside the chat dock. Assistant prose uses the
+   serif (like Claude's responses); UI chrome stays sans. */
 .chat-md {
-  font-size: 0.875rem;
-  line-height: 1.5;
+  font-family: var(--font-serif);
+  font-size: 0.9rem;
+  line-height: 1.55;
   word-break: break-word;
+}
+/* …but keep code/preformatted in mono, not serif. */
+.chat-md code,
+.chat-md pre {
+  font-family: ui-monospace, monospace;
 }
 .chat-md > :first-child {
   margin-top: 0;
