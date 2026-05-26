@@ -106,17 +106,24 @@ export function useAgentStats(
   return stats;
 }
 
-/** Exponential-smoothing (lerp) toward `target` for animated number readouts. */
-function useLerp(target: number, factor = 0.2): number {
+/**
+ * Exponential-smoothing (lerp) toward `target`. Returns the current display
+ * value and whether it's still animating (so the readout can highlight).
+ */
+function useLerp(target: number, factor = 0.2): [number, boolean] {
   const [display, setDisplay] = useState(target);
+  const [active, setActive] = useState(false);
   const cur = useRef(target);
   useEffect(() => {
+    if (cur.current === target) return;
+    setActive(true);
     let raf = 0;
     const tick = () => {
       const next = cur.current + (target - cur.current) * factor;
       if (Math.abs(target - next) < 0.5) {
         cur.current = target;
         setDisplay(target);
+        setActive(false);
         return;
       }
       cur.current = next;
@@ -126,17 +133,27 @@ function useLerp(target: number, factor = 0.2): number {
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
   }, [target, factor]);
-  return display;
+  return [display, active];
+}
+
+/** Wraps an animated number, highlighting (accent) while it's changing. */
+function Animated({ value, render }: { value: number; render: (v: number) => string }) {
+  const [v, active] = useLerp(value);
+  return (
+    <span className={`transition-colors duration-700 ${active ? 'text-accent' : ''}`}>
+      {render(v)}
+    </span>
+  );
 }
 
 function Tokens({ value }: { value: number }) {
-  return <>{fmtTokens(Math.round(useLerp(value)))}</>;
+  return <Animated value={value} render={(v) => fmtTokens(Math.round(v))} />;
 }
 function Cost({ value }: { value: number }) {
-  return <>{fmtCost(useLerp(value))}</>;
+  return <Animated value={value} render={fmtCost} />;
 }
 function ContextUsage({ value, model }: { value: number; model: string | null }) {
-  return <>{fmtContext(Math.round(useLerp(value)), model)}</>;
+  return <Animated value={value} render={(v) => fmtContext(Math.round(v), model)} />;
 }
 
 /** Maps the container + claude-session status into a single chip. */
