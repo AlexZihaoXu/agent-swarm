@@ -19,6 +19,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const cp = require('child_process');
 const { WebSocketServer } = require('ws');
 const pty = require('node-pty');
 const { Terminal } = require('@xterm/headless');
@@ -116,6 +117,38 @@ function transcriptStats() {
     }
   }
   return { totals, model, turns, lastTs, context };
+}
+
+let shotCache = { at: 0, buf: null };
+function sendScreenshot(res) {
+  if (shotCache.buf && Date.now() - shotCache.at < 1000) {
+    res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'no-store' });
+    return res.end(shotCache.buf);
+  }
+  const p = cp.spawn(
+    'import',
+    ['-silent', '-window', 'root', '-resize', '854x480', '-quality', '55', 'jpeg:-'],
+    { env: { ...process.env, DISPLAY: process.env.DISPLAY || ':1' } },
+  );
+  const chunks = [];
+  let done = false;
+  const fail = () => {
+    if (done) return;
+    done = true;
+    if (!res.headersSent) res.writeHead(503, { 'content-type': 'text/plain' });
+    res.end('screenshot unavailable');
+  };
+  p.stdout.on('data', (d) => chunks.push(d));
+  p.on('error', fail);
+  p.on('close', (code) => {
+    if (done) return;
+    if (code !== 0 || !chunks.length) return fail();
+    done = true;
+    const buf = Buffer.concat(chunks);
+    shotCache = { at: Date.now(), buf };
+    res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'no-store' });
+    res.end(buf);
+  });
 }
 
 function latestSession() {
@@ -245,6 +278,11 @@ const server = http.createServer(async (req, res) => {
   if (u.pathname === '/api/stats' && req.method === 'GET') {
     return sendJson(res, 200, readStats());
   }
+  // Low-res JPEG of the desktop for fleet-card previews (cheap; full live view
+  // is the noVNC stream). Cached ~1s so multiple viewers don't hammer X.
+  if (u.pathname === '/api/screenshot' && req.method === 'GET') {
+    return sendScreenshot(res);
+  }
   const m = u.pathname.match(/^\/api\/sessions\/(.+)$/);
   if (m && req.method === 'DELETE') {
     const ok = killSession(decodeURIComponent(m[1]));
@@ -263,7 +301,37 @@ const server = http.createServer(async (req, res) => {
   res.end('not found');
 });
 
-const wss = new WebSocketServer({ server, path: '/ws' });
+// Live stats stream: push the current stats snapshot once per second. The
+// dashboard fetches one snapshot then subscribes here for real-time updates.
+const statsWss = new WebSocketServer({ noServer: true });
+statsWss.on('connection', (ws) => {
+  const send = () => {
+    if (ws.readyState !== 1) return;
+    try {
+      ws.send(JSON.stringify(readStats()));
+    } catch {
+      /* ignore */
+    }
+  };
+  send();
+  const timer = setInterval(send, 1000);
+  ws.on('close', () => clearInterval(timer));
+  ws.on('error', () => clearInterval(timer));
+});
+
+const wss = new WebSocketServer({ noServer: true });
+// Single upgrade router — multiple WebSocketServers can't each bind the same
+// HTTP server's 'upgrade' event (they'd abort each other's sockets).
+server.on('upgrade', (req, socket, head) => {
+  const { pathname } = new URL(req.url, `http://${req.headers.host}`);
+  if (pathname === '/ws') {
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+  } else if (pathname === '/stats') {
+    statsWss.handleUpgrade(req, socket, head, (ws) => statsWss.emit('connection', ws, req));
+  } else {
+    socket.destroy();
+  }
+});
 wss.on('connection', (ws, req) => {
   const u = new URL(req.url, `http://${req.headers.host}`);
   const sess = sessions.get(u.searchParams.get('session'));
