@@ -81,6 +81,10 @@
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
     <script>
       const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
+      // Base path of the page so every URL is relative — works both at the
+      // container root (:7681/) and behind the gateway (/a/<id>/terminal/).
+      const base = location.pathname.replace(/[^/]*$/, '');
+      const api = (p) => base + 'api/' + p;
       let term,
         fit,
         ws,
@@ -124,7 +128,7 @@
         term.reset();
         fit.fit(); // size to the real container before connecting
         const url =
-          `${wsProto}://${location.host}/ws?session=${encodeURIComponent(name)}` +
+          `${wsProto}://${location.host}${base}ws?session=${encodeURIComponent(name)}` +
           `&cols=${term.cols}&rows=${term.rows}`;
         ws = new WebSocket(url);
         ws.onopen = () => term.focus();
@@ -132,7 +136,7 @@
         renderTabs();
       }
       async function listSessions() {
-        return (await fetch('/api/sessions')).json();
+        return (await fetch(api('sessions'))).json();
       }
       async function renderTabs() {
         const sessions = await listSessions();
@@ -148,7 +152,7 @@
           x.textContent = '✕';
           x.onclick = async (ev) => {
             ev.stopPropagation();
-            await fetch('/api/sessions/' + encodeURIComponent(s.name), { method: 'DELETE' });
+            await fetch(api('sessions/' + encodeURIComponent(s.name)), { method: 'DELETE' });
             const l = await listSessions();
             if (active === s.name) active = l[0] ? l[0].name : null;
             if (active) attach(active);
@@ -165,7 +169,7 @@
         }
       }
       document.getElementById('add').onclick = async () => {
-        const r = await fetch('/api/sessions', {
+        const r = await fetch(api('sessions'), {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: '{}',

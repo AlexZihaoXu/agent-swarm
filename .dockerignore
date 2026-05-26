@@ -1,0 +1,11 @@
+**/node_modules
+**/.next
+**/dist
+**/.turbo
+**/coverage
+**/*.log
+.git
+.env
+.env.*.local
+# images/agent is bundled into the dashboard image as the agent build context,
+# so the gateway can build the agent image on demand.

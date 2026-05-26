@@ -1,0 +1,47 @@
+# The dashboard stack: a single container running the gateway (control plane +
+# reverse proxy) and the Next.js UI together, behind one published port (:8080).
+# The only other containers are the agents the gateway spawns at runtime.
+#
+# Works on Linux and macOS: the gateway runs in a container here, and
+# container-to-container traffic over swarm-net resolves by name on both (only
+# host-to-container DNS is blocked on Docker Desktop, which is why host-run dev
+# uses ports mode instead — see README → Running the stack).
+#
+# Spawned agents are tagged with this project (agent-swarm) so Portainer and
+# other Docker UIs nest them under this stack.
+name: agent-swarm
+
+# swarm-net is shared between this stack and the agents the gateway spawns at
+# runtime, so it's external (create once: `docker network create swarm-net`).
+networks:
+  swarm-net:
+    name: swarm-net
+    external: true
+
+volumes:
+  # Persists runtime settings (e.g. the selected credentials path) across restarts.
+  gateway-data:
+
+services:
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      GATEWAY_MODE: network
+      SWARM_NETWORK: swarm-net
+      # Nest spawned agents under this stack in Docker UIs.
+      SWARM_PROJECT: agent-swarm
+      AGENT_IMAGE: agent-swarm/agent:dev
+      DOCKER_SOCKET: /var/run/docker.sock
+      # IMPORTANT: a HOST path. The gateway only forwards this string to the
+      # Docker daemon as an agent bind mount — the daemon resolves it on the
+      # host, not inside this container. So we do NOT mount it here.
+      CLAUDE_CREDENTIALS_FILE: ${CLAUDE_CREDENTIALS_FILE:-/root/.agent-swarm/.credentials.json}
+    ports:
+      - '8080:8080'
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - gateway-data:/data
+    networks: [swarm-net]
+    restart: unless-stopped
