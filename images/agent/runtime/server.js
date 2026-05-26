@@ -262,12 +262,17 @@ function claudeScreenText() {
 // We parse the numbered options (and any checkbox state) so the chat can drive
 // the selector with the matching key sequence.
 function detectAwaiting(screen) {
-  if (!/to navigate/i.test(screen)) return null;
+  // A selector is open if the footer says so, OR the cursor (❯) is sitting on a
+  // numbered row. The latter catches screens whose footer scrolls out of view
+  // (e.g. the multi-select "Submit answers / Cancel" review).
+  const navFooter = /to navigate/i.test(screen);
+  let cursorOnOption = false;
   let prompt = null;
   let multiSelect = false;
   let hasSubmit = false;
   const options = [];
   for (const raw of screen.split('\n')) {
+    if (/^[\s│┃┆╎]*[❯›]\s?\d+\./.test(raw)) cursorOnOption = true;
     // Drop box rules + a leading cursor marker so the row starts at its label.
     const line = raw
       .replace(/[│┃┆╎]/g, ' ')
@@ -296,6 +301,7 @@ function detectAwaiting(screen) {
     const s = raw.replace(/[│┃┆╎|>❯●○◯◉*✻·•\s]+/g, ' ').trim();
     if (s.endsWith('?') && s.length > 4 && s.length <= 160) prompt = s;
   }
+  if (!navFooter && !cursorOnOption) return null;
   return { prompt, options, multiSelect, hasSubmit };
 }
 
