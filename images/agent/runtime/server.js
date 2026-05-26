@@ -29,9 +29,122 @@ const HOME = process.env.AGENT_HOME || '/home/agent';
 const SHELL = process.env.AGENT_SHELL || '/usr/bin/fish';
 const FIRST_CMD = process.env.FIRST_CMD || 'claude --dangerously-skip-permissions';
 const PUBLIC = path.join(__dirname, 'public');
+const CLAUDE_DIR = path.join(HOME, '.claude');
 
 const sessions = new Map(); // name -> { name, pty, title, clients:Set }
 let counter = 0;
+
+// --- Claude session stats -------------------------------------------------
+// Merges three on-disk sources the Claude Code session leaves behind:
+//   - statusline.json  (model display name, cost, lines) written by our
+//     statusLine command on every TUI update;
+//   - the newest transcript JSONL (exact token usage, summed);
+//   - the newest sessions/*.json (idle/busy status).
+function safeRead(file) {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+function newestFile(dir, ext) {
+  let best = null;
+  let bestMtime = 0;
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  for (const e of entries) {
+    const fp = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      const inner = newestFile(fp, ext);
+      if (inner && inner.mtime > bestMtime) {
+        best = inner;
+        bestMtime = inner.mtime;
+      }
+    } else if (e.name.endsWith(ext)) {
+      let mt = 0;
+      try {
+        mt = fs.statSync(fp).mtimeMs;
+      } catch {
+        continue;
+      }
+      if (mt > bestMtime) {
+        bestMtime = mt;
+        best = { path: fp, mtime: mt };
+      }
+    }
+  }
+  return best;
+}
+
+function transcriptStats() {
+  const totals = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
+  let model = null;
+  let turns = 0;
+  let lastTs = null;
+  const newest = newestFile(path.join(CLAUDE_DIR, 'projects'), '.jsonl');
+  const raw = newest && safeRead(newest.path);
+  if (!raw) return { totals, model, turns, lastTs };
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    let o;
+    try {
+      o = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (o.timestamp) lastTs = o.timestamp;
+    if (o.type === 'assistant' && o.message) {
+      const usage = o.message.usage || {};
+      totals.input += usage.input_tokens || 0;
+      totals.output += usage.output_tokens || 0;
+      totals.cacheRead += usage.cache_read_input_tokens || 0;
+      totals.cacheCreation += usage.cache_creation_input_tokens || 0;
+      if (o.message.model) model = o.message.model;
+      turns++;
+    }
+  }
+  return { totals, model, turns, lastTs };
+}
+
+function latestSession() {
+  const newest = newestFile(path.join(CLAUDE_DIR, 'sessions'), '.json');
+  if (!newest) return {};
+  try {
+    return JSON.parse(safeRead(newest.path) || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function readStats() {
+  let sl = {};
+  try {
+    sl = JSON.parse(safeRead(path.join(CLAUDE_DIR, 'statusline.json')) || '{}');
+  } catch {
+    /* ignore */
+  }
+  const t = transcriptStats();
+  const sess = latestSession();
+  const total = t.totals.input + t.totals.output + t.totals.cacheRead + t.totals.cacheCreation;
+  const cost = sl.cost || {};
+  return {
+    model: (sl.model && sl.model.display_name) || t.model || null,
+    status: sess.status || null,
+    sessionId: sess.sessionId || null,
+    tokens: { ...t.totals, total },
+    turns: t.turns,
+    cost: typeof cost.total_cost_usd === 'number' ? cost.total_cost_usd : null,
+    linesAdded: cost.total_lines_added || 0,
+    linesRemoved: cost.total_lines_removed || 0,
+    exceeds200k: !!sl.exceeds_200k_tokens,
+    lastActivity: t.lastTs || sess.updatedAt || null,
+  };
+}
 
 function spawnPty(command) {
   const args = command ? ['-l', '-c', `${command}; exec ${SHELL}`] : ['-l'];
@@ -120,6 +233,9 @@ const server = http.createServer(async (req, res) => {
     } catch (e) {
       return sendJson(res, 409, { error: String((e && e.message) || e) });
     }
+  }
+  if (u.pathname === '/api/stats' && req.method === 'GET') {
+    return sendJson(res, 200, readStats());
   }
   const m = u.pathname.match(/^\/api\/sessions\/(.+)$/);
   if (m && req.method === 'DELETE') {

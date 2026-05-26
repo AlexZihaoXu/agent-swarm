@@ -5,6 +5,7 @@ import { motion } from 'framer-motion';
 import Link from 'next/link';
 import { useSelectedLayoutSegment } from 'next/navigation';
 import { use, type ComponentProps, type ReactNode } from 'react';
+import { AgentStatsBar } from '@/app/AgentStats';
 
 // HeroUI's Tab `render` hands generic DOM props; Link wants anchor props. They
 // line up at runtime (Tab renders an <a>), so narrow at this single boundary.
@@ -35,7 +36,12 @@ export default function AgentLayout({
       animate={{ opacity: 1 }}
       transition={{ duration: 0.18, ease: 'easeOut' }}
     >
-      <header className="border-separator flex items-center gap-3 border-b px-4 py-2">
+      <header
+        className={`border-separator flex items-center gap-3 border-b py-2 pl-4 ${
+          // Reserve room on the desktop tab for the fixed input-lock button.
+          segment === 'desktop' ? 'pr-40' : 'pr-4'
+        }`}
+      >
         <Link href="/" className={buttonVariants({ variant: 'tertiary', size: 'sm' })}>
           ← Fleet
         </Link>
@@ -54,6 +60,7 @@ export default function AgentLayout({
             </Tabs.List>
           </Tabs.ListContainer>
         </Tabs>
+        <AgentStatsBar agentId={id} />
       </header>
 
       <div className="min-h-0 flex-1">{children}</div>

@@ -74,6 +74,28 @@ export async function buildImage(onChunk: (text: string) => void): Promise<void>
   }
 }
 
+export interface AgentStats {
+  model: string | null;
+  status: string | null;
+  sessionId: string | null;
+  tokens: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheCreation: number;
+    total: number;
+  };
+  turns: number;
+  cost: number | null;
+  linesAdded: number;
+  linesRemoved: number;
+  exceeds200k: boolean;
+  lastActivity: string | number | null;
+}
+
+/** Live session stats for one agent, served by the agent's terminal supervisor. */
+export const getAgentStats = (id: string) => api<AgentStats>(`/a/${id}/terminal/api/stats`);
+
 export const listAgents = () => api<Agent[]>('/api/agents');
 export const createAgent = (opts: CreateAgentOptions = {}) =>
   api<Agent>('/api/agents', {

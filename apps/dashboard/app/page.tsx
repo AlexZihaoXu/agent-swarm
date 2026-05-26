@@ -12,6 +12,7 @@ import {
   stopAgent,
   type Agent,
 } from '@/lib/gateway';
+import { AgentStatsInline } from './AgentStats';
 import { ConfirmActionButton } from './ConfirmActionButton';
 import { CreateAgentModal } from './CreateAgentModal';
 import { ImageBanner } from './ImageBanner';
@@ -137,6 +138,7 @@ export default function HomePage() {
                     {a.username ? `${a.id} · ` : ''}
                     {prettyImage(a.image)} · created {relativeTime(a.createdAt)}
                   </Card.Description>
+                  {running && <AgentStatsInline agentId={a.id} />}
                 </Card.Header>
                 <Card.Footer className="mt-2 flex flex-wrap gap-2">
                   <Link

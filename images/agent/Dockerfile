@@ -159,6 +159,15 @@ COPY agent-terminals.service /etc/systemd/system/agent-terminals.service
 # seed created above; placed here so the node-pty build layer stays cached.
 COPY --chown=agent:agent claude-config.json /home/agent/.claude.json
 
+# statusLine command: capture Claude's status payload (model, cost, lines) to a
+# file the dashboard reads, and print a concise in-TUI line. ~/.claude must be
+# agent-owned so the session can write statusline.json there.
+COPY swarm-statusline.sh /usr/local/bin/swarm-statusline
+RUN chmod +x /usr/local/bin/swarm-statusline \
+    && mkdir -p /home/agent/.claude \
+    && chown -R agent:agent /home/agent/.claude
+COPY --chown=agent:agent claude-settings.json /home/agent/.claude/settings.json
+
 # Boot to multi-user (no gdm greeter — the session comes up via TigerVNC),
 # and enable our services.
 RUN systemctl set-default multi-user.target \
