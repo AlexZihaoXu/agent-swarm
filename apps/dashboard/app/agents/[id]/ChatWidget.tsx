@@ -11,6 +11,63 @@ import { getTranscript, terminalWsUrl, uploadToAgent, type ChatTurn } from '@/li
 import { useAgentStats } from '@/app/AgentStats';
 
 /**
+ * Reveal `text` character-by-character over `duration` ms (0 = show instantly).
+ * Animates once on mount; if the text later changes it snaps to full so polled
+ * updates don't re-type an already-revealed message.
+ */
+function useTypewriter(text: string, duration: number): string {
+  const [n, setN] = useState(duration > 0 ? 0 : text.length);
+  const done = useRef(duration <= 0);
+  useEffect(() => {
+    if (done.current) {
+      setN(text.length);
+      return;
+    }
+    const len = text.length;
+    const start = performance.now();
+    let raf = 0;
+    const tick = (now: number) => {
+      const p = Math.min(1, (now - start) / duration);
+      setN(Math.floor(p * len));
+      if (p < 1) raf = requestAnimationFrame(tick);
+      else {
+        setN(len);
+        done.current = true;
+      }
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [text, duration]);
+  return text.slice(0, n);
+}
+
+/** Assistant markdown, optionally typed out over 1.5s on first appearance. */
+function AssistantText({ text, animate }: { text: string; animate: boolean }) {
+  const shown = useTypewriter(text, animate ? 1500 : 0);
+  return (
+    <div className="chat-md">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{shown}</ReactMarkdown>
+    </div>
+  );
+}
+
+/** Three bouncing dots, shown where the agent's next reply will appear. */
+function TypingDots() {
+  return (
+    <div className="flex items-center gap-1 py-1">
+      {[0, 1, 2].map((i) => (
+        <motion.span
+          key={i}
+          className="bg-muted size-1.5 rounded-full"
+          animate={{ opacity: [0.3, 1, 0.3], y: [0, -2, 0] }}
+          transition={{ duration: 0.9, repeat: Infinity, ease: 'easeInOut', delay: i * 0.15 }}
+        />
+      ))}
+    </div>
+  );
+}
+
+/**
  * Floating chat dock: a small button that expands into a panel (top-right) where
  * you can read the agent's conversation and send messages to the `claude`
  * session — without switching to the Terminal tab. Reading comes from the
@@ -29,6 +86,9 @@ export function ChatWidget({ agentId }: { agentId: string }) {
   const stats = useAgentStats(agentId);
   const working = stats?.status === 'busy';
   const awaiting = !!stats?.awaitingInput;
+  // Track which turns are newly arrived (so only those type out, not history).
+  const seenLen = useRef<number | null>(null);
+  const animateIdx = useRef<Set<number>>(new Set());
 
   const onPickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -47,7 +107,15 @@ export function ChatWidget({ agentId }: { agentId: string }) {
 
   const refresh = useCallback(async () => {
     try {
-      setTurns(await getTranscript(agentId));
+      const next = await getTranscript(agentId);
+      // First load: treat everything as already-seen (no typing of history).
+      // After that, mark each freshly appended turn to be typed out once.
+      if (seenLen.current === null) seenLen.current = next.length;
+      else if (next.length > seenLen.current) {
+        for (let i = seenLen.current; i < next.length; i++) animateIdx.current.add(i);
+        seenLen.current = next.length;
+      }
+      setTurns(next);
     } catch {
       /* unreachable */
     }
@@ -68,6 +136,9 @@ export function ChatWidget({ agentId }: { agentId: string }) {
     return () => {
       clearInterval(poll);
       wsRef.current = null;
+      // Re-baseline so reopening doesn't type out the whole backlog.
+      seenLen.current = null;
+      animateIdx.current.clear();
       if (ws) {
         try {
           ws.close();
@@ -78,10 +149,10 @@ export function ChatWidget({ agentId }: { agentId: string }) {
     };
   }, [open, agentId, refresh]);
 
-  // Stick to the bottom as new turns arrive.
+  // Stick to the bottom as new turns arrive (and as the typing indicator shows).
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [turns, open]);
+  }, [turns, open, working]);
 
   const send = () => {
     const text = input.trim();
@@ -183,9 +254,11 @@ export function ChatWidget({ agentId }: { agentId: string }) {
                             {it.text}
                           </p>
                         ) : (
-                          <div key={j} className="chat-md">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{it.text}</ReactMarkdown>
-                          </div>
+                          <AssistantText
+                            key={j}
+                            text={it.text ?? ''}
+                            animate={animateIdx.current.has(i)}
+                          />
                         )
                       ) : (
                         <div
@@ -201,6 +274,18 @@ export function ChatWidget({ agentId }: { agentId: string }) {
                   </div>
                 </motion.div>
               ))}
+
+              {/* The agent is composing — show a typing indicator right where
+                  its reply will land. */}
+              {working && (
+                <motion.div
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.2, ease: 'easeOut' }}
+                >
+                  <TypingDots />
+                </motion.div>
+              )}
             </div>
 
             {/* Interactive selectors (AskUserQuestion / plan / permission) are
