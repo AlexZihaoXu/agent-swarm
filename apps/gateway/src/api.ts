@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { dirname } from 'node:path';
 import type { AgentManager } from './docker.js';
 import { config } from './config.js';
 import { getSettings, updateSettings } from './settings.js';
@@ -46,6 +47,7 @@ export async function handleApi(
   const method = req.method ?? 'GET';
 
   try {
+    if (pathname === '/api/fs') return await handleFs(req, res, manager, method);
     if (pathname === '/api/settings') return await handleSettings(req, res, manager, method);
     if (pathname === '/api/image') return await handleImageStatus(res, manager, method);
     if (pathname === '/api/image/build') return await handleImageBuild(res, manager, method);
@@ -84,6 +86,20 @@ async function handleAgents(
     return (sendJson(res, 200, { ok: true }), true);
   }
   sendJson(res, 405, { error: 'method not allowed' });
+  return true;
+}
+
+async function handleFs(
+  req: IncomingMessage,
+  res: ServerResponse,
+  manager: AgentManager,
+  method: string,
+): Promise<boolean> {
+  if (method !== 'GET') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  // Default to the directory of the currently-selected credentials file.
+  const path = url.searchParams.get('path') || dirname(getSettings().credentialsFile);
+  sendJson(res, 200, await manager.listHostDir(path));
   return true;
 }
 

@@ -4,6 +4,7 @@ import { Button, buttonVariants, Card, Input, Label, TextField } from '@heroui/r
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { getSettings, updateSettings } from '@/lib/gateway';
+import { FilePickerModal } from './FilePickerModal';
 
 type Status = { kind: 'ok' | 'warn' | 'err'; msg: string } | null;
 
@@ -12,6 +13,7 @@ export default function SettingsPage() {
   const [fallback, setFallback] = useState('');
   const [status, setStatus] = useState<Status>(null);
   const [busy, setBusy] = useState(false);
+  const [picking, setPicking] = useState(false);
 
   useEffect(() => {
     void getSettings()
@@ -65,10 +67,24 @@ export default function SettingsPage() {
           </Card.Description>
         </Card.Header>
         <Card.Content className="mt-2 flex flex-col gap-3">
-          <TextField value={path} onChange={setPath} name="credentialsFile">
-            <Label>Credentials file path</Label>
-            <Input placeholder={fallback || '/home/you/.agent-swarm/.credentials.json'} />
-          </TextField>
+          <div className="flex items-end gap-2">
+            <TextField value={path} onChange={setPath} name="credentialsFile" className="flex-1">
+              <Label>Credentials file path</Label>
+              <Input placeholder={fallback || '/home/you/.agent-swarm/.credentials.json'} />
+            </TextField>
+            <Button variant="secondary" onPress={() => setPicking(true)}>
+              Browse…
+            </Button>
+          </div>
+          <FilePickerModal
+            isOpen={picking}
+            onOpenChange={setPicking}
+            startPath={(path || fallback).replace(/\/[^/]*$/, '') || undefined}
+            onPick={(p) => {
+              setPath(p);
+              setStatus(null);
+            }}
+          />
           {fallback && (
             <p className="text-muted text-xs">
               Default: <span className="font-mono">{fallback}</span>

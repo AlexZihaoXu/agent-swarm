@@ -52,6 +52,15 @@ export const updateSettings = (credentialsFile: string) =>
 
 export const getImageStatus = () => api<ImageStatus>('/api/image');
 
+export interface DirListing {
+  path: string;
+  parent: string | null;
+  entries: { name: string; dir: boolean }[];
+}
+
+export const listHostDir = (path?: string) =>
+  api<DirListing>(`/api/fs${path ? `?path=${encodeURIComponent(path)}` : ''}`);
+
 /** POST the build and stream the daemon's progress text line-by-line. */
 export async function buildImage(onChunk: (text: string) => void): Promise<void> {
   const res = await fetch(`${GATEWAY_BASE}/api/image/build`, { method: 'POST' });
