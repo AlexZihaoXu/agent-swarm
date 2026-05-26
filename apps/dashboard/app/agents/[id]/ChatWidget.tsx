@@ -7,6 +7,9 @@ import Link from 'next/link';
 import { LuArrowUp, LuMessageSquare, LuPaperclip, LuTerminal, LuWrench, LuX } from 'react-icons/lu';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
 import { getTranscript, terminalWsUrl, uploadToAgent, type ChatTurn } from '@/lib/gateway';
 import { useAgentStats } from '@/app/AgentStats';
 
@@ -46,7 +49,9 @@ function AssistantText({ text, animate }: { text: string; animate: boolean }) {
   const shown = useTypewriter(text, animate ? 1500 : 0);
   return (
     <div className="chat-md">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{shown}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+        {shown}
+      </ReactMarkdown>
     </div>
   );
 }
