@@ -166,3 +166,17 @@
   margin: 0.5rem 0;
   padding-bottom: 0.2rem;
 }
+
+/* Faithful terminal render of an interactive selector (serializeAsHTML output).
+   Constrain the height and shrink the cells so wide previews stay compact. */
+.chat-prompt {
+  max-height: 16rem;
+}
+.chat-prompt pre {
+  margin: 0;
+  padding: 0.5rem 0.6rem;
+}
+.chat-prompt pre div {
+  font-size: 11px !important;
+  line-height: 1.25 !important;
+}

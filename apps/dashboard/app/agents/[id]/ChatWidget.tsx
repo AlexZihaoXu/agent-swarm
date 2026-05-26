@@ -19,7 +19,13 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
-import { getTranscript, terminalWsUrl, uploadToAgent, type ChatTurn } from '@/lib/gateway';
+import {
+  getPromptHtml,
+  getTranscript,
+  terminalWsUrl,
+  uploadToAgent,
+  type ChatTurn,
+} from '@/lib/gateway';
 import { useAgentStats } from '@/app/AgentStats';
 
 /**
@@ -117,6 +123,26 @@ export function ChatWidget({ agentId }: { agentId: string }) {
     setFreeText(false);
   }, [stats?.promptText, awaiting]);
   const composerLocked = awaiting && !freeText;
+  // Faithful colored HTML render of the open selector (incl. ASCII previews) —
+  // the text parse is lossy for structured prompts, so we show the real thing.
+  const [promptHtml, setPromptHtml] = useState<string | null>(null);
+  useEffect(() => {
+    if (!open || !awaiting) {
+      setPromptHtml(null);
+      return;
+    }
+    let alive = true;
+    const load = () =>
+      getPromptHtml(agentId)
+        .then((r) => alive && setPromptHtml(r.html))
+        .catch(() => {});
+    void load();
+    const t = setInterval(load, 1500);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [open, awaiting, agentId]);
   const lockedRef = useRef(composerLocked);
   lockedRef.current = composerLocked;
   // Track which turns are newly arrived (so only those type out, not history).
@@ -425,9 +451,19 @@ export function ChatWidget({ agentId }: { agentId: string }) {
                   transition={{ duration: 0.2, ease: 'easeOut' }}
                   className="border-warning/40 bg-warning/10 mx-2 mb-1 rounded-xl border p-2.5"
                 >
-                  <p className="text-foreground text-sm font-medium">
-                    {stats?.promptText ? `“${stats.promptText}”` : 'The agent is asking a question'}
-                  </p>
+                  {promptHtml ? (
+                    // Faithful render of the actual selector (colors, ASCII previews).
+                    <div
+                      className="chat-prompt border-separator mb-1 overflow-auto rounded-lg border"
+                      dangerouslySetInnerHTML={{ __html: promptHtml }}
+                    />
+                  ) : (
+                    <p className="text-foreground text-sm font-medium">
+                      {stats?.promptText
+                        ? `“${stats.promptText}”`
+                        : 'The agent is asking a question'}
+                    </p>
+                  )}
 
                   {multiSelect && promptOptions.some((o) => o.checkable) ? (
                     /* Multi-select: toggle checkboxes, then Submit. */

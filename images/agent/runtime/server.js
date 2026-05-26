@@ -305,6 +305,50 @@ function detectAwaiting(screen) {
   return { prompt, options, multiSelect, hasSubmit };
 }
 
+// Render the open selector to faithful, colored HTML (exact TUI layout incl.
+// ASCII previews/mockups). Text-parsing structured/preview prompts is lossy;
+// this shows the real thing. We serialize the visible screen to HTML, then keep
+// only the selector's rows (box top → footer). Returns <pre>…</pre> or null.
+function renderPromptHtml() {
+  const sess = sessions.get('claude');
+  if (!sess || !sess.serializer) return null;
+  const full = sess.serializer.serializeAsHTML({ scrollback: 0 });
+  // Shape: <pre><div style='WRAP'><div>row</div>…</div></pre>
+  const wrap = full.match(/<pre><div style='([^']*)'>([\s\S]*?)<\/div><\/pre>/);
+  if (!wrap) return null;
+  const wrapStyle = wrap[1];
+  const rowDivs = wrap[2].match(/<div>[\s\S]*?<\/div>/g) || [];
+  const text = (d) =>
+    d
+      .replace(/<[^>]+>/g, '')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&amp;/g, '&')
+      .trimEnd();
+  // Footer marks the bottom; else the row below a cursored numbered option.
+  let footer = -1;
+  rowDivs.forEach((d, i) => {
+    if (/to navigate/i.test(text(d))) footer = i;
+  });
+  if (footer < 0)
+    rowDivs.forEach((d, i) => {
+      if (/^\s*[❯›]\s?\d+\./.test(text(d))) footer = Math.min(rowDivs.length - 1, i + 1);
+    });
+  if (footer < 0) return null;
+  // Start just above the question line; trim leading blank rows.
+  let qi = -1;
+  for (let i = 0; i <= footer; i++) {
+    const s = text(rowDivs[i])
+      .replace(/[│┃|>❯·•]/g, ' ')
+      .trim();
+    if (s.endsWith('?') && s.length > 4) qi = i;
+  }
+  let start = Math.max(0, qi >= 0 ? qi - 1 : footer - 14);
+  while (start < footer && !text(rowDivs[start]).trim()) start++;
+  const rows = rowDivs.slice(start, footer + 1).join('');
+  return `<pre><div style='${wrapStyle}'>${rows}</div></pre>`;
+}
+
 function readStats() {
   let sl = {};
   try {
@@ -368,7 +412,15 @@ function createSession({ name, command } = {}) {
   const p = spawnPty(command);
   // Authoritative server-side terminal: captures the full screen + scrollback
   // so a (re)connecting viewer can be sent a clean snapshot incl. history.
-  const term = new Terminal({ cols: 120, rows: 30, scrollback: 10000, allowProposedApi: true });
+  const term = new Terminal({
+    cols: 120,
+    rows: 30,
+    scrollback: 10000,
+    allowProposedApi: true,
+    // Theme drives default fg/bg in serializeAsHTML (the chat's prompt render) —
+    // match the dashboard terminal so the rendered selector looks native.
+    theme: { background: '#16130e', foreground: '#e6e1d6' },
+  });
   const serializer = new SerializeAddon();
   term.loadAddon(serializer);
   const sess = { name, pty: p, title: command || 'shell', clients: new Set(), term, serializer };
@@ -444,6 +496,16 @@ const server = http.createServer(async (req, res) => {
   }
   if (u.pathname === '/api/transcript' && req.method === 'GET') {
     return sendJson(res, 200, readTranscript());
+  }
+  // Faithful colored HTML of the open interactive selector (for the chat).
+  if (u.pathname === '/api/prompt' && req.method === 'GET') {
+    let html = null;
+    try {
+      html = renderPromptHtml();
+    } catch {
+      /* ignore */
+    }
+    return sendJson(res, 200, { html });
   }
   // Attachment upload: raw body → ~/uploads/<name>; returns the in-agent path
   // so the chat can reference it for claude to read.

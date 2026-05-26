@@ -127,6 +127,10 @@ export interface ChatTurn {
 
 /** Normalized conversation (user/assistant turns) for the chat view. */
 export const getTranscript = (id: string) => api<ChatTurn[]>(`/a/${id}/terminal/api/transcript`);
+
+/** Faithful colored HTML of the open interactive selector (null when none). */
+export const getPromptHtml = (id: string) =>
+  api<{ html: string | null }>(`/a/${id}/terminal/api/prompt`);
 /** WebSocket to a terminal session — used to send chat input to `claude`. */
 export const terminalWsUrl = (id: string, session = 'claude') =>
   `${wsOrigin()}/a/${id}/terminal/ws?session=${encodeURIComponent(session)}&cols=80&rows=24`;
