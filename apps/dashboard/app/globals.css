@@ -180,3 +180,9 @@
   font-size: 11px !important;
   line-height: 1.25 !important;
 }
+/* serializeAsHTML hardcodes a light default fg/bg on the wrapper; force dark to
+   match the dock (per-cell colored spans keep their own colors). */
+.chat-prompt pre > div {
+  background: #16130e !important;
+  color: #e6e1d6 !important;
+}

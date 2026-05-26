@@ -294,8 +294,18 @@ function detectAwaiting(screen) {
         label = cb[2].trim();
         multiSelect = true;
       }
+      // A side-by-side preview sits on the same row, separated by 2+ spaces —
+      // keep only the label, drop the mockup.
+      label = label.split(/\s{2,}/)[0].trim();
       if (label && label.length <= 120)
         options.push({ n: parseInt(mo[1], 10), label, checkable, checked });
+      continue;
+    }
+    // Auto-provided escape hatches are navigable but often unnumbered (below a
+    // rule). Capture them so they're clickable too, numbered after the rest.
+    const meta = line.match(/^(Chat about this|Type something\.?)$/i);
+    if (meta && !options.some((o) => /^(chat about|type someth)/i.test(o.label))) {
+      options.push({ n: options.length + 1, label: meta[1], checkable: false, checked: false });
       continue;
     }
     const s = raw.replace(/[│┃┆╎|>❯●○◯◉*✻·•\s]+/g, ' ').trim();
