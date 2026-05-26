@@ -23,7 +23,7 @@ export function ThemeSwitch() {
   const current = mounted ? (theme ?? 'system') : undefined;
 
   return (
-    <div className="bg-surface-secondary border-separator inline-flex items-center gap-0.5 border p-0.5">
+    <div className="bg-surface-secondary border-separator inline-flex items-center gap-0.5 rounded-[calc(var(--radius)+0.125rem)] border p-0.5">
       {OPTIONS.map(({ key, label, Icon }) => {
         const active = current === key;
         return (
@@ -38,7 +38,7 @@ export function ThemeSwitch() {
             {active && (
               <motion.span
                 layoutId="theme-pill"
-                className="bg-surface shadow-surface absolute inset-0"
+                className="bg-surface shadow-surface absolute inset-0 rounded-[var(--radius)]"
                 transition={{ type: 'spring', stiffness: 400, damping: 32 }}
               />
             )}
