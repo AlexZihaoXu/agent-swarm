@@ -153,6 +153,12 @@ COPY novnc.service /etc/systemd/system/novnc.service
 # Boot-time updater that keeps Claude Code current on each container launch.
 COPY claude-code-update.service /etc/systemd/system/claude-code-update.service
 
+# Apply the agent's timezone (from the TZ env the gateway sets) before the
+# desktop session comes up, so the GNOME clock and CLI tools agree.
+COPY agent-set-timezone.sh /usr/local/bin/agent-set-timezone
+RUN chmod +x /usr/local/bin/agent-set-timezone
+COPY agent-timezone.service /etc/systemd/system/agent-timezone.service
+
 # Agent terminal supervisor: multi-session pty over WebSocket (node-pty + ws).
 # node-pty is a native addon — build-essential + python3 (installed above) build it.
 COPY runtime /opt/agent-runtime
@@ -186,6 +192,7 @@ RUN systemctl set-default multi-user.target \
     && systemctl enable tigervncserver@:1.service \
     && systemctl enable novnc.service \
     && systemctl enable claude-code-update.service \
+    && systemctl enable agent-timezone.service \
     && systemctl enable agent-terminals.service \
     && (systemctl mask gdm3.service 2>/dev/null || true) \
     && echo 'DISABLE_AUTOUPDATER=1' >> /etc/environment

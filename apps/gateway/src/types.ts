@@ -21,11 +21,18 @@ export interface Agent {
   id: string;
   name: string;
   image: string;
-  /** Friendly display name (stored as a container label; the OS user stays `agent`). */
+  /** Friendly display name (editable; source of truth is the on-disk identity
+   *  file so the agent can read it and it can change without recreating). */
   username?: string;
   /** Docker container state, e.g. "running", "exited", "created". */
   status: string;
   createdAt: number;
+  /** Hard CPU limit in cores (if set at creation). */
+  cpus?: number;
+  /** Hard memory limit in MB (if set at creation). */
+  memoryMb?: number;
+  /** IANA timezone the agent runs in (if set at creation). */
+  timezone?: string;
 }
 
 /** Options accepted when creating an agent. */
@@ -34,4 +41,10 @@ export interface CreateAgentOptions {
   hostname?: string;
   /** Friendly display name shown in the dashboard. */
   username?: string;
+  /** Hard CPU limit in cores (e.g. 2 = two cores). Omit for unlimited. */
+  cpus?: number;
+  /** Hard memory limit in MB. Omit for unlimited. */
+  memoryMb?: number;
+  /** IANA timezone, e.g. "America/New_York". Omit to inherit the image default (UTC). */
+  timezone?: string;
 }

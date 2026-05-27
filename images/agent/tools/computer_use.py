@@ -24,6 +24,7 @@ import base64
 import json
 import math
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -60,7 +61,8 @@ INSTRUCTIONS = (
     "glance/look_at with cursor:true so you can see where the pointer currently "
     "is; cursor_shape shows the pointer ICON, so you can tell if a hover landed "
     "on a link (hand) or text field (I-beam). Use list_keys for valid key names "
-    "(keydown/keyup/press/hotkey). Mouse moves are straight and smoothly eased."
+    "(keydown/keyup/press/hotkey). Mouse moves are straight and smoothly eased. "
+    "whoami returns your own identity (name/id) within the swarm."
 )
 
 # X connection is opened lazily (by _connect, before the first tool call) so the
@@ -580,6 +582,22 @@ def list_keys(_args: dict) -> dict:
     return _text(json.dumps(LISTED_KEYS))
 
 
+# --- identity --------------------------------------------------------------
+def whoami(_args: dict) -> dict:
+    # This agent's own identity within the swarm, written to its disk by the
+    # gateway at creation (name is editable later from the dashboard).
+    info: dict = {}
+    try:
+        with open(os.path.expanduser("~/.swarm/identity.json")) as f:
+            info = json.load(f)
+    except Exception:  # noqa: BLE001 — fall back to the hostname
+        pass
+    info.setdefault("hostname", socket.gethostname())
+    info.setdefault("id", info["hostname"])
+    info.setdefault("name", info["id"])
+    return _text(json.dumps(info))
+
+
 # --- registry --------------------------------------------------------------
 def _text(s: str) -> dict:
     return {"content": [{"type": "text", "text": s or "ok"}]}
@@ -635,6 +653,8 @@ TOOLS = [
     ("hotkey", "Press a key combo together (e.g. ['ctrl','c']).", {"keys": {"type": "array", "items": {"type": "string"}}}, ["keys"], hotkey),
     ("type", "Type text at cpm chars/minute (default 150).", {"text": {"type": "string"}, "cpm": {"type": "number"}}, ["text"], type_text),
     ("list_keys", "Valid key names for keydown/keyup/press/hotkey.", {}, [], list_keys),
+    ("whoami", "This agent's own identity within the swarm: {id, name, hostname, project, timezone}. The name is the human-set display name (editable from the dashboard).",
+     {}, [], whoami),
     ("pressed_keys", "Which keys are currently held.", {}, [], pressed_keys),
     ("is_key_pressed", "Whether a specific key is currently held.", {"key": {"type": "string"}}, ["key"], is_key_pressed),
 ]

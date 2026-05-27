@@ -10,11 +10,20 @@ export interface Agent {
   username?: string;
   status: string;
   createdAt: number;
+  cpus?: number;
+  memoryMb?: number;
+  timezone?: string;
 }
 
 export interface CreateAgentOptions {
   hostname?: string;
   username?: string;
+  /** Hard CPU limit in cores. Omit for unlimited. */
+  cpus?: number;
+  /** Hard memory limit in MB. Omit for unlimited. */
+  memoryMb?: number;
+  /** IANA timezone, e.g. "America/New_York". */
+  timezone?: string;
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -213,6 +222,14 @@ export const createAgent = (opts: CreateAgentOptions = {}) =>
 export const startAgent = (id: string) => api(`/api/agents/${id}/start`, { method: 'POST' });
 export const stopAgent = (id: string) => api(`/api/agents/${id}/stop`, { method: 'POST' });
 export const removeAgent = (id: string) => api(`/api/agents/${id}`, { method: 'DELETE' });
+
+/** Rename an agent's display name (live — updates the on-disk identity). */
+export const renameAgent = (id: string, username: string) =>
+  api<Agent>(`/api/agents/${id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username }),
+  });
 
 /** Embeddable desktop (noVNC) URL for an agent. */
 export const desktopUrl = (id: string) => `${GATEWAY_BASE}/a/${id}/desktop/`;

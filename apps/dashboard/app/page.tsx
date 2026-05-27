@@ -69,7 +69,11 @@ export default function HomePage() {
           >
             <LuSettings className="size-4" />
           </Link>
-          <CreateAgentModal onCreated={() => void refresh()} disabled={imagePresent === false} />
+          <CreateAgentModal
+            onCreated={() => void refresh()}
+            disabled={imagePresent === false}
+            taken={agents.map((a) => a.username || a.id)}
+          />
         </div>
       </header>
 
@@ -119,7 +123,11 @@ export default function HomePage() {
                 exit={{ opacity: 0, scale: 0.96 }}
                 transition={{ duration: 0.2, ease: 'easeOut' }}
               >
-                <AgentCard agent={a} onChanged={() => void refresh()} />
+                <AgentCard
+                  agent={a}
+                  onChanged={() => void refresh()}
+                  taken={agents.map((x) => x.username || x.id)}
+                />
               </motion.div>
             ))}
           </AnimatePresence>

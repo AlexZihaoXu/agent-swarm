@@ -1,0 +1,17 @@
+# Apply the agent's timezone before the desktop session starts. The gateway
+# passes the chosen IANA zone as the TZ env var on the container; systemd PID 1
+# inherits it, and this oneshot reads it from /proc/1/environ (services don't
+# inherit container env directly) to set /etc/localtime + /etc/timezone. Runs
+# on every boot, so it re-applies after a restart and works for any TZ.
+[Unit]
+Description=Apply agent timezone from the TZ env var
+Before=tigervncserver@:1.service
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/agent-set-timezone
+
+[Install]
+WantedBy=multi-user.target

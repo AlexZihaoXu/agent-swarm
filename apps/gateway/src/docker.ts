@@ -1,5 +1,13 @@
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { promisify } from 'node:util';
@@ -19,10 +27,26 @@ export interface UpgradeInfo {
   pending: { version: number; name: string }[];
 }
 
-/** Label key for the agent's friendly display name. */
+/** Label key for the agent's friendly display name (seed value; the on-disk
+ *  identity file is the editable source of truth thereafter). */
 const USERNAME_LABEL = 'swarm.username';
+/** Labels recording the resource limits chosen at creation (for display). */
+const CPUS_LABEL = 'swarm.cpus';
+const MEMORY_LABEL = 'swarm.memoryMb';
+const TZ_LABEL = 'swarm.timezone';
 /** Hostname-safe id: alphanumerics + hyphens, 1–31 chars. */
 const VALID_ID = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,30}$/;
+
+/** The agent's self-identity, written to its disk so it (and its MCP tools)
+ *  can read its own name/id within the swarm. */
+interface AgentIdentity {
+  id: string;
+  name: string;
+  hostname: string;
+  project: string;
+  timezone: string | null;
+  createdAt: number;
+}
 
 /** Random `workspace-XXXXXX` id, suffix from 0-9 + A-Z. */
 export function generateAgentId(): string {
@@ -72,6 +96,48 @@ export class AgentManager {
   /** Where built packages (.7z) are stored (gateway-local view). */
   private packagesDir(): string {
     return join(this.cfg.swarmDataMount, 'packages');
+  }
+  /** The agent's identity file, on its persistent disk (gateway-local view).
+   *  Bind-mounted to /home/agent/.swarm/identity.json inside the agent. */
+  private identityFile(id: string): string {
+    return join(this.agentDataDir(id), '.swarm', 'identity.json');
+  }
+
+  /** Read an agent's self-identity from its disk (null if not yet written). */
+  private readIdentity(id: string): AgentIdentity | null {
+    try {
+      return JSON.parse(readFileSync(this.identityFile(id), 'utf8')) as AgentIdentity;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Write/merge the agent's identity to its disk so it can read its own name. */
+  private writeIdentity(id: string, patch: Partial<AgentIdentity>): AgentIdentity {
+    const cur = this.readIdentity(id);
+    const next: AgentIdentity = {
+      id,
+      name: patch.name ?? cur?.name ?? id,
+      hostname: id,
+      project: this.cfg.project,
+      timezone: patch.timezone !== undefined ? patch.timezone : (cur?.timezone ?? null),
+      createdAt: cur?.createdAt ?? Date.now(),
+    };
+    mkdirSync(dirname(this.identityFile(id)), { recursive: true });
+    writeFileSync(this.identityFile(id), JSON.stringify(next, null, 2));
+    return next;
+  }
+
+  /** Rename an agent's display name (live — updates the on-disk identity the
+   *  agent reads). Docker labels can't change on a running container, so the
+   *  identity file is the source of truth. */
+  async setName(id: string, name: string): Promise<Agent> {
+    const display = name.trim();
+    if (!display) throw Object.assign(new Error('name cannot be empty'), { statusCode: 400 });
+    if (!existsSync(this.agentDataDir(id)))
+      throw Object.assign(new Error('agent not found'), { statusCode: 404 });
+    this.writeIdentity(id, { name: display });
+    return this.toAgent(await this.docker.getContainer(this.containerName(id)).inspect());
   }
 
   /**
@@ -138,7 +204,12 @@ export class AgentManager {
         statusCode: 409,
       });
     }
-    const username = opts.username?.trim();
+    // Name defaults to the id so there's always a readable identity; the
+    // dashboard makes it mandatory for human creation.
+    const username = opts.username?.trim() || id;
+    const cpus = opts.cpus && opts.cpus > 0 ? opts.cpus : undefined;
+    const memoryMb = opts.memoryMb && opts.memoryMb > 0 ? Math.round(opts.memoryMb) : undefined;
+    const timezone = opts.timezone?.trim() || undefined;
     const name = this.containerName(id);
     const portMode = this.cfg.mode === 'ports';
     // The credentials path is operator-selectable at runtime (settings).
@@ -149,24 +220,35 @@ export class AgentManager {
     const labels: Record<string, string> = {
       'swarm.managed': 'true',
       'com.docker.compose.project': this.cfg.project,
+      [USERNAME_LABEL]: username,
     };
-    if (username) labels[USERNAME_LABEL] = username;
+    if (cpus) labels[CPUS_LABEL] = String(cpus);
+    if (memoryMb) labels[MEMORY_LABEL] = String(memoryMb);
+    if (timezone) labels[TZ_LABEL] = timezone;
 
     // Persistent disk: seed the home skeleton + credentials (first time only),
-    // then bind-mount it.
+    // then bind-mount it. Write the identity afterwards so the agent can read
+    // its own name/id (the agent-timezone service + whoami MCP tool use it).
     await this.seedAgentDisk(id, credentialsFile);
+    this.writeIdentity(id, { name: username, timezone: timezone ?? null });
 
     const container = await this.docker.createContainer({
       name,
       Image: this.cfg.agentImage,
       Hostname: id,
       Labels: labels,
+      // TZ is read at boot by the agent-timezone service to set /etc/localtime,
+      // and respected directly by CLI tools (claude, node) for timestamps.
+      Env: timezone ? [`TZ=${timezone}`] : undefined,
       ExposedPorts: { '6080/tcp': {}, '7681/tcp': {} },
       HostConfig: {
         // systemd as PID 1 + GNOME Shell need these — mirrors README run flags.
         // `CgroupnsMode` is cast in: it's a valid Docker API field that the
         // current @types/dockerode HostConfig doesn't declare yet.
         CgroupnsMode: 'host',
+        // Hard resource caps (omitted → unlimited). NanoCpus is cores × 1e9.
+        NanoCpus: cpus ? Math.round(cpus * 1e9) : undefined,
+        Memory: memoryMb ? memoryMb * 1024 * 1024 : undefined,
         Binds: [
           '/sys/fs/cgroup:/sys/fs/cgroup:rw',
           // Persistent home (host folder). Credentials are seeded into it (see
@@ -196,14 +278,22 @@ export class AgentManager {
       all: true,
       filters: JSON.stringify({ name: [this.cfg.agentNamePrefix] }),
     });
-    return containers.map((c) => ({
-      id: this.idFromName(c.Names[0] ?? ''),
-      name: (c.Names[0] ?? '').replace(/^\//, ''),
-      image: c.Image,
-      username: c.Labels?.[USERNAME_LABEL],
-      status: c.State,
-      createdAt: c.Created * 1000,
-    }));
+    return containers.map((c) => {
+      const id = this.idFromName(c.Names[0] ?? '');
+      return {
+        id,
+        name: (c.Names[0] ?? '').replace(/^\//, ''),
+        image: c.Image,
+        // Display name: the on-disk identity is the editable source of truth;
+        // fall back to the seed label, then the id.
+        username: this.readIdentity(id)?.name ?? c.Labels?.[USERNAME_LABEL] ?? id,
+        status: c.State,
+        createdAt: c.Created * 1000,
+        cpus: c.Labels?.[CPUS_LABEL] ? Number(c.Labels[CPUS_LABEL]) : undefined,
+        memoryMb: c.Labels?.[MEMORY_LABEL] ? Number(c.Labels[MEMORY_LABEL]) : undefined,
+        timezone: c.Labels?.[TZ_LABEL],
+      };
+    });
   }
 
   async start(id: string): Promise<void> {
@@ -542,13 +632,18 @@ export class AgentManager {
 
   private toAgent(info: Docker.ContainerInspectInfo): Agent {
     const name = info.Name.replace(/^\//, '');
+    const id = this.idFromName(info.Name);
+    const labels = info.Config.Labels ?? {};
     return {
-      id: this.idFromName(info.Name),
+      id,
       name,
       image: info.Config.Image,
-      username: info.Config.Labels?.[USERNAME_LABEL],
+      username: this.readIdentity(id)?.name ?? labels[USERNAME_LABEL] ?? id,
       status: info.State.Status,
       createdAt: Date.parse(info.Created),
+      cpus: labels[CPUS_LABEL] ? Number(labels[CPUS_LABEL]) : undefined,
+      memoryMb: labels[MEMORY_LABEL] ? Number(labels[MEMORY_LABEL]) : undefined,
+      timezone: labels[TZ_LABEL],
     };
   }
 }

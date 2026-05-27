@@ -1,5 +1,6 @@
 'use client';
 
+import { ProgressCircle } from '@heroui/react';
 import { motion } from 'framer-motion';
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -156,6 +157,37 @@ function ContextUsage({ value, model }: { value: number; model: string | null })
   return <Animated value={value} render={(v) => fmtContext(Math.round(v), model)} />;
 }
 
+/**
+ * Context-window usage as a HeroUI progress circle + readout. The arc fills
+ * toward the model's limit (when known) and shifts colour as it nears full;
+ * with no known limit it falls back to a plain gauge readout.
+ */
+function ContextCircle({ used, model }: { used: number; model: string | null }) {
+  const [v] = useLerp(used);
+  const limit = contextLimit(model);
+  const title = `context window usage — ${fmtContext(used, model)}`;
+  if (!limit) {
+    return (
+      <Metric icon={<LuGauge className="size-3" />} title="context window usage" strong>
+        <ContextUsage value={used} model={model} />
+      </Metric>
+    );
+  }
+  const pct = Math.min(100, (v / limit) * 100);
+  const color = pct >= 90 ? 'danger' : pct >= 75 ? 'warning' : 'accent';
+  return (
+    <span className="flex items-center gap-1.5 tabular-nums" title={title}>
+      <ProgressCircle aria-label={title} size="sm" color={color} value={v} maxValue={limit}>
+        <ProgressCircle.Track>
+          <ProgressCircle.TrackCircle />
+          <ProgressCircle.FillCircle />
+        </ProgressCircle.Track>
+      </ProgressCircle>
+      <span className="text-foreground">{fmtContext(Math.round(v), model)}</span>
+    </span>
+  );
+}
+
 /** Maps the container + claude-session status into a single chip. */
 export function agentChip(
   containerStatus: string,
@@ -224,11 +256,7 @@ export function AgentStatsInline({ stats: s }: { stats: AgentStats | null }) {
   return (
     <div className="text-muted flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
       {s.model && <span className="text-foreground font-medium">{s.model}</span>}
-      {s.context > 0 && (
-        <Metric icon={<LuGauge className="size-3" />} title="context window usage" strong>
-          <ContextUsage value={s.context} model={s.model} />
-        </Metric>
-      )}
+      {s.context > 0 && <ContextCircle used={s.context} model={s.model} />}
       {up > 0 && (
         <Metric icon={<LuArrowUp className="size-3" />} title="tokens sent (input + cache)">
           <Tokens value={up} />
@@ -273,11 +301,7 @@ export function AgentStatsBar({ agentId }: { agentId: string }) {
           </Metric>
         </>
       )}
-      {s.context > 0 && (
-        <Metric icon={<LuGauge className="size-3" />} title="context window usage" strong>
-          <ContextUsage value={s.context} model={s.model} />
-        </Metric>
-      )}
+      {s.context > 0 && <ContextCircle used={s.context} model={s.model} />}
       {s.cost != null && s.cost > 0 && (
         <Metric icon={<LuDollarSign className="size-3" />} title="session cost (USD)">
           <Cost value={s.cost} />

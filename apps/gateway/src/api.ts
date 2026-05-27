@@ -21,7 +21,7 @@ function errStatus(err: unknown): number {
 /** Apply permissive CORS for the dashboard origin; answer preflight directly. */
 export function applyCors(req: IncomingMessage, res: ServerResponse): boolean {
   res.setHeader('access-control-allow-origin', config.corsOrigin);
-  res.setHeader('access-control-allow-methods', 'GET,POST,PUT,DELETE,OPTIONS');
+  res.setHeader('access-control-allow-methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
   res.setHeader('access-control-allow-headers', 'content-type');
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
@@ -79,12 +79,22 @@ async function handleAgents(
     if (method === 'GET') return (sendJson(res, 200, await manager.list()), true);
     if (method === 'POST') {
       const body = await readJson(req);
-      const created = await manager.create({ hostname: body.hostname, username: body.username });
+      const created = await manager.create({
+        hostname: body.hostname,
+        username: body.username,
+        cpus: body.cpus,
+        memoryMb: body.memoryMb,
+        timezone: body.timezone,
+      });
       return (sendJson(res, 201, created), true);
     }
   } else if (!action) {
     if (method === 'DELETE')
       return (await manager.remove(id), sendJson(res, 200, { ok: true }), true);
+    if (method === 'PATCH') {
+      const body = await readJson(req);
+      return (sendJson(res, 200, await manager.setName(id, body.username ?? '')), true);
+    }
   } else if (action === 'upgrade') {
     if (method === 'GET') return (sendJson(res, 200, await manager.upgradeInfo(id)), true);
     if (method === 'POST') return (sendJson(res, 200, await manager.upgrade(id)), true);
@@ -233,6 +243,9 @@ async function readJson(req: IncomingMessage): Promise<{
   username?: string;
   credentialsFile?: string;
   paths?: string[];
+  cpus?: number;
+  memoryMb?: number;
+  timezone?: string;
 }> {
   const chunks: Buffer[] = [];
   for await (const c of req) chunks.push(c as Buffer);
