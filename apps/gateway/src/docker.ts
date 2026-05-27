@@ -80,15 +80,26 @@ export class AgentManager {
    * preserves ownership/permissions). An empty bind mount would otherwise
    * shadow the image's prepared home and break the agent.
    */
-  private async seedAgentDisk(id: string): Promise<void> {
+  private async seedAgentDisk(id: string, credentialsFile: string): Promise<void> {
     const local = this.agentDataDir(id);
     mkdirSync(local, { recursive: true });
     if (readdirSync(local).length > 0) return; // existing disk — reuse as-is
+    // Seed the home skeleton AND drop in the credentials. We copy credentials in
+    // (rather than bind-mounting the file into the home) because Docker Desktop
+    // can't nest a file bind inside a bind-mounted dir; the agent then maintains
+    // its own ~/.claude/.credentials.json on its persistent disk thereafter.
     const helper = await this.docker.createContainer({
       Image: this.cfg.agentImage,
       Entrypoint: ['sh', '-c'],
-      Cmd: ['cp -a /home/agent/. /seed/ 2>/dev/null || true'],
-      HostConfig: { Binds: [`${this.agentHostDir(id)}:/seed`] },
+      Cmd: [
+        'cp -a /home/agent/. /seed/ 2>/dev/null || true; ' +
+          'mkdir -p /seed/.claude; ' +
+          'cp /seed-cred /seed/.claude/.credentials.json 2>/dev/null || true; ' +
+          'chown -R 1000:1000 /seed/.claude 2>/dev/null || true',
+      ],
+      HostConfig: {
+        Binds: [`${this.agentHostDir(id)}:/seed`, `${credentialsFile}:/seed-cred:ro`],
+      },
     });
     try {
       await helper.start();
@@ -141,8 +152,9 @@ export class AgentManager {
     };
     if (username) labels[USERNAME_LABEL] = username;
 
-    // Persistent disk: seed the home skeleton (first time) then bind-mount it.
-    await this.seedAgentDisk(id);
+    // Persistent disk: seed the home skeleton + credentials (first time only),
+    // then bind-mount it.
+    await this.seedAgentDisk(id, credentialsFile);
 
     const container = await this.docker.createContainer({
       name,
@@ -157,9 +169,10 @@ export class AgentManager {
         CgroupnsMode: 'host',
         Binds: [
           '/sys/fs/cgroup:/sys/fs/cgroup:rw',
-          // Persistent home (host folder), with the credentials file nested on top.
+          // Persistent home (host folder). Credentials are seeded into it (see
+          // seedAgentDisk) rather than bind-mounted — Docker Desktop can't nest
+          // a file bind inside a bind-mounted dir.
           `${this.agentHostDir(id)}:/home/agent`,
-          `${credentialsFile}:/home/agent/.claude/.credentials.json`,
         ],
         Tmpfs: { '/run': '', '/run/lock': '', '/tmp': '' },
         CapAdd: ['SYS_BOOT', 'SYS_ADMIN'],

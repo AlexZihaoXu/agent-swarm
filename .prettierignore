@@ -5,3 +5,4 @@ build/
 .next/
 out/
 coverage/
+.swarm_data/
