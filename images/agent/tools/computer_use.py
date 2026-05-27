@@ -52,7 +52,9 @@ INSTRUCTIONS = (
     "(dragging, resizing, small targets) — it returns a native crop plus its "
     "full_res origin so a crop pixel (px,py) maps to full coord (origin_x+px, "
     "origin_y+py); 3) act (move/click/type/key); 4) glance/look_at again to verify, "
-    "since the screen changes after actions. Before a relative move (move_rel), "
+    "since the screen changes after actions. Use list_windows to get the exact "
+    "bounds of open app windows (to click inside one or grab its title bar). "
+    "Before a relative move (move_rel), "
     "glance/look_at with cursor:true so you can see where the pointer currently "
     "is. Use list_keys for valid key names (keydown/keyup/press/hotkey). Mouse "
     "moves are straight and smoothly eased automatically."
@@ -303,6 +305,47 @@ def get_buttons(_args: dict) -> dict:
     return _text(json.dumps(held))
 
 
+# --- windows ---------------------------------------------------------------
+def list_windows(args: dict) -> dict:
+    # EWMH _NET_CLIENT_LIST → each managed top-level window with its title, app
+    # class, full_res bounds, and whether it's active. Lets the model target a
+    # window precisely (click inside it, look_at its title bar to drag, etc.).
+    flt = str(args.get("filter") or "").lower()
+    a_clients = d.intern_atom("_NET_CLIENT_LIST")
+    a_name = d.intern_atom("_NET_WM_NAME")
+    a_active = d.intern_atom("_NET_ACTIVE_WINDOW")
+    clients = _root.get_full_property(a_clients, X.AnyPropertyType)
+    ids = list(clients.value) if clients else []
+    act = _root.get_full_property(a_active, X.AnyPropertyType)
+    active_id = int(act.value[0]) if act and len(act.value) else 0
+    out = []
+    for wid in ids:
+        try:
+            win = d.create_resource_object("window", wid)
+            np = win.get_full_property(a_name, 0)
+            title = (
+                np.value.decode("utf-8", "replace")
+                if np and np.value
+                else (win.get_wm_name() or "")
+            )
+            cls = win.get_wm_class()
+            app = cls[1] if cls and len(cls) > 1 else ""
+            g = win.get_geometry()
+            # python-xlib translate_coords: self is the DESTINATION — root's
+            # coords of the window's (0,0) = its absolute screen position.
+            t = _root.translate_coords(win, 0, 0)
+        except Exception:  # noqa: BLE001 — skip windows that vanish mid-iteration
+            continue
+        if flt and flt not in f"{title} {app}".lower():
+            continue
+        out.append({
+            "title": title, "app": app,
+            "x": t.x, "y": t.y, "w": g.width, "h": g.height,
+            "active": int(wid) == active_id,
+        })
+    return _text(json.dumps({"sys": "full", "windows": out}))
+
+
 # --- keyboard --------------------------------------------------------------
 def keydown(args: dict) -> dict:
     xtest.fake_input(d, X.KeyPress, _keycode(args["key"]))
@@ -410,6 +453,8 @@ TOOLS = [
     ("mouse_down", "Press and hold a mouse button.", {"button": BTN}, [], mouse_down),
     ("mouse_up", "Release a mouse button.", {"button": BTN}, [], mouse_up),
     ("get_buttons", "Which mouse buttons are currently held.", {}, [], get_buttons),
+    ("list_windows", "List open app windows with their full_res bounds {x,y,w,h}, title, app class, and which is active. Optional case-insensitive `filter` matches title/app. Use it to target a window precisely.",
+     {"filter": {"type": "string"}}, [], list_windows),
     ("keydown", "Press and hold a key.", {"key": {"type": "string"}}, ["key"], keydown),
     ("keyup", "Release a key.", {"key": {"type": "string"}}, ["key"], keyup),
     ("press", "Press and release a key.", {"key": {"type": "string"}}, ["key"], press),
