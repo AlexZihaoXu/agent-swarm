@@ -1,6 +1,6 @@
-import { createReadStream } from 'node:fs';
+import { createReadStream, createWriteStream } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { dirname } from 'node:path';
+import { basename, dirname } from 'node:path';
 import type { AgentManager } from './docker.js';
 import { config } from './config.js';
 import { getSettings, updateSettings } from './settings.js';
@@ -33,8 +33,8 @@ export function applyCors(req: IncomingMessage, res: ServerResponse): boolean {
 
 // /api/agents, /api/agents/:id, /api/agents/:id/(start|stop|upgrade|paths|package)
 const AGENT_API = /^\/api\/agents(?:\/([^/]+)(?:\/(start|stop|upgrade|paths|package))?)?$/;
-// /api/packages, /api/packages/:file/(download|import)
-const PACKAGE_API = /^\/api\/packages(?:\/([^/]+)\/(download|import))?$/;
+// /api/packages, /api/packages/upload, /api/packages/:file[/(download|import)]
+const PACKAGE_API = /^\/api\/packages(?:\/([^/]+)(?:\/(download|import))?)?$/;
 
 /**
  * Handle the REST API. Returns true if the request was an /api/* route (and has
@@ -118,6 +118,18 @@ async function handlePackages(
 
   if (!file) {
     if (method === 'GET') return (sendJson(res, 200, manager.listPackages()), true);
+  } else if (file === 'upload' && !action) {
+    // Stream a .7z brought from another swarm into this one's packages dir.
+    if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    const dest = manager.uploadDestination(url.searchParams.get('name') || 'package.7z');
+    await new Promise<void>((resolve, reject) => {
+      const out = createWriteStream(dest);
+      req.pipe(out);
+      out.on('finish', () => resolve());
+      out.on('error', reject);
+    });
+    return (sendJson(res, 200, { file: basename(dest) }), true);
   } else if (action === 'download' && method === 'GET') {
     const path = manager.packageFilePath(file);
     if (!path) return (sendJson(res, 404, { error: 'package not found' }), true);
@@ -134,6 +146,8 @@ async function handlePackages(
       username: body.username,
     });
     return (sendJson(res, 201, agent), true);
+  } else if (!action && method === 'DELETE') {
+    return (manager.deletePackage(file), sendJson(res, 200, { ok: true }), true);
   }
   sendJson(res, 405, { error: 'method not allowed' });
   return true;

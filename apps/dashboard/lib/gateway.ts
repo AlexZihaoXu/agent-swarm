@@ -188,6 +188,20 @@ export const importPackage = (file: string, opts: CreateAgentOptions = {}) =>
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(opts),
   });
+/** All built/uploaded packages, newest first. */
+export const listPackages = () => api<PackageInfo[]>('/api/packages');
+/** Delete a package. */
+export const deletePackage = (file: string) =>
+  api(`/api/packages/${encodeURIComponent(file)}`, { method: 'DELETE' });
+/** Upload a .7z brought from another swarm into this one's packages. */
+export async function uploadPackage(file: File): Promise<{ file: string }> {
+  const res = await fetch(
+    `${GATEWAY_BASE}/api/packages/upload?name=${encodeURIComponent(file.name)}`,
+    { method: 'POST', body: file },
+  );
+  if (!res.ok) throw new Error(`upload failed → ${res.status}`);
+  return res.json();
+}
 
 export const listAgents = () => api<Agent[]>('/api/agents');
 export const createAgent = (opts: CreateAgentOptions = {}) =>

@@ -1,20 +1,22 @@
 'use client';
 
-import { buttonVariants, Card } from '@heroui/react';
+import { Button, buttonVariants, Card } from '@heroui/react';
 import { AnimatePresence, motion } from 'framer-motion';
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { LuSettings } from 'react-icons/lu';
+import { LuPackage, LuSettings } from 'react-icons/lu';
 import { getImageStatus, listAgents, type Agent } from '@/lib/gateway';
 import { AgentCard } from './AgentCard';
 import { CreateAgentModal } from './CreateAgentModal';
 import { ImageBanner } from './ImageBanner';
+import { PackagesModal } from './PackagesModal';
 import { ThemeSwitch } from './ThemeSwitch';
 
 export default function HomePage() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [imagePresent, setImagePresent] = useState<boolean | null>(null);
+  const [packagesOpen, setPackagesOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -50,6 +52,16 @@ export default function HomePage() {
         </div>
         <div className="flex items-center gap-3">
           <ThemeSwitch />
+          <Button
+            size="sm"
+            variant="tertiary"
+            aria-label="Packages"
+            className="gap-1.5"
+            onPress={() => setPackagesOpen(true)}
+          >
+            <LuPackage className="size-4" />
+            Packages
+          </Button>
           <Link
             href="/settings"
             aria-label="Settings"
@@ -60,6 +72,12 @@ export default function HomePage() {
           <CreateAgentModal onCreated={() => void refresh()} disabled={imagePresent === false} />
         </div>
       </header>
+
+      <PackagesModal
+        isOpen={packagesOpen}
+        onOpenChange={setPackagesOpen}
+        onChanged={() => void refresh()}
+      />
 
       <AnimatePresence>
         {imagePresent === false && (

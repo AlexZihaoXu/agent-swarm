@@ -283,6 +283,21 @@ export class AgentManager {
     return existsSync(p) ? p : null;
   }
 
+  /** Delete a built/uploaded package. */
+  deletePackage(file: string): void {
+    const p = this.packageFilePath(file);
+    if (p) rmSync(p, { force: true });
+  }
+
+  /** Destination path for an uploaded package (sanitized, .7z), for streaming
+   * a package brought from another swarm into this one. */
+  uploadDestination(name: string): string {
+    mkdirSync(this.packagesDir(), { recursive: true });
+    let safe = basename(name).replace(/[^\w.-]/g, '_') || 'package';
+    if (!safe.endsWith('.7z')) safe += '.7z';
+    return join(this.packagesDir(), safe);
+  }
+
   /** Create a NEW agent and restore a package over its seeded home (duplicate /
    * import from another swarm). */
   async importPackage(file: string, opts: CreateAgentOptions = {}): Promise<Agent> {
