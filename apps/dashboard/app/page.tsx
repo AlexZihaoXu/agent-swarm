@@ -8,6 +8,7 @@ import { LuPackage, LuSettings } from 'react-icons/lu';
 import { getImageStatus, listAgents, type Agent } from '@/lib/gateway';
 import { AgentCard } from './AgentCard';
 import { CreateAgentModal } from './CreateAgentModal';
+import { DashboardChat } from './DashboardChat';
 import { ImageBanner } from './ImageBanner';
 import { PackagesModal } from './PackagesModal';
 import { ThemeSwitch } from './ThemeSwitch';
@@ -133,6 +134,8 @@ export default function HomePage() {
           </AnimatePresence>
         </div>
       )}
+
+      <DashboardChat agents={agents} />
     </main>
   );
 }

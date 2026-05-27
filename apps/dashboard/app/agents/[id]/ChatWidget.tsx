@@ -122,7 +122,16 @@ function TypingDots() {
  * session — without switching to the Terminal tab. Reading comes from the
  * transcript (polled); sending writes to the session's pty over its WebSocket.
  */
-export function ChatWidget({ agentId }: { agentId: string }) {
+export function ChatWidget({
+  agentId,
+  agents,
+  onSelectAgent,
+}: {
+  agentId: string;
+  /** When provided, the dock header shows a picker to switch agents (dashboard). */
+  agents?: { id: string; name: string }[];
+  onSelectAgent?: (id: string) => void;
+}) {
   const [open, setOpen] = useState(false);
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [input, setInput] = useState('');
@@ -138,6 +147,13 @@ export function ChatWidget({ agentId }: { agentId: string }) {
   const [attaching, setAttaching] = useState(false);
   const stats = useAgentStats(agentId);
   const working = stats?.status === 'busy';
+
+  // Switching agents (dashboard picker) clears the conversation so stale turns
+  // from the previous agent don't linger before the new transcript loads.
+  useEffect(() => {
+    setTurns([]);
+    setInput('');
+  }, [agentId]);
   const awaiting = !!stats?.awaitingInput;
   const promptOptions = stats?.promptOptions ?? [];
   const multiSelect = !!stats?.promptMultiSelect;
@@ -380,9 +396,25 @@ export function ChatWidget({ agentId }: { agentId: string }) {
               onPointerDown={(e) => dragControls.start(e)}
               className="border-separator bg-surface-secondary flex cursor-grab items-center justify-between border-b px-3.5 py-3 select-none active:cursor-grabbing"
             >
-              <span className="flex items-center gap-2 text-sm font-semibold">
+              <span className="flex min-w-0 items-center gap-2 text-sm font-semibold">
                 <LuMessageSquare className="text-muted size-4 shrink-0" />
-                {agentId}
+                {agents ? (
+                  <select
+                    value={agentId}
+                    onChange={(e) => onSelectAgent?.(e.target.value)}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    className="max-w-[180px] cursor-pointer truncate bg-transparent font-semibold outline-none"
+                    aria-label="Choose agent"
+                  >
+                    {agents.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  agentId
+                )}
                 {working && (
                   <span className="text-success flex items-center gap-1 text-xs font-normal">
                     <motion.span
