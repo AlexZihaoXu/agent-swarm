@@ -83,9 +83,14 @@ RUN set -eux; \
       ffmpeg build-essential python3-pip python3-venv pipx \
       jq unzip zip wget htop vim ripgrep imagemagick tree xdotool \
     ; \
-    sed -i -E 's#^Exec=/usr/share/code/code#Exec=/usr/share/code/code --no-sandbox#' \
+    sed -i -E 's#^Exec=/usr/share/code/code#Exec=/usr/share/code/code --no-sandbox --password-store=basic#' \
       /usr/share/applications/code.desktop; \
     rm -rf /var/lib/apt/lists/*
+
+# Also wrap the `code` CLI so terminal launches use the basic password store
+# too (otherwise VS Code prompts to create a GNOME keyring on a headless agent).
+RUN printf '#!/bin/sh\nexec /usr/bin/code --password-store=basic "$@"\n' > /usr/local/bin/code \
+    && chmod +x /usr/local/bin/code
 
 # uv — fast Python package/project manager (system-wide; installer picks the arch).
 RUN curl -LsSf https://astral.sh/uv/install.sh \
