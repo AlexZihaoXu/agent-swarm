@@ -158,6 +158,37 @@ export const getUpgradeInfo = (id: string) => api<UpgradeInfo>(`/api/agents/${id
 export const upgradeAgent = (id: string) =>
   api<UpgradeInfo>(`/api/agents/${id}/upgrade`, { method: 'POST' });
 
+// --- Packaging (persistent disk → portable .7z) ---------------------------
+export interface AgentPath {
+  name: string;
+  dir: boolean;
+}
+export interface PackageInfo {
+  file: string;
+  bytes: number;
+  createdAt?: number;
+}
+
+/** Top-level folders/files of an agent's persistent home (for the picker). */
+export const getAgentPaths = (id: string) => api<AgentPath[]>(`/api/agents/${id}/paths`);
+/** Stop the agent and 7z the selected sub-paths of its disk. */
+export const packageAgent = (id: string, paths: string[]) =>
+  api<PackageInfo>(`/api/agents/${id}/package`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ paths }),
+  });
+/** Direct download URL for a built package (.7z). */
+export const packageDownloadUrl = (file: string) =>
+  `${GATEWAY_BASE}/api/packages/${encodeURIComponent(file)}/download`;
+/** Create a NEW agent restored from a package (duplicate / import). */
+export const importPackage = (file: string, opts: CreateAgentOptions = {}) =>
+  api<Agent>(`/api/packages/${encodeURIComponent(file)}/import`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(opts),
+  });
+
 export const listAgents = () => api<Agent[]>('/api/agents');
 export const createAgent = (opts: CreateAgentOptions = {}) =>
   api<Agent>('/api/agents', {

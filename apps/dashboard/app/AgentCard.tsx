@@ -17,6 +17,7 @@ import {
 } from '@/lib/gateway';
 import { agentChip, AgentStatsInline, useAgentStats } from './AgentStats';
 import { ConfirmActionDialog } from './ConfirmActionDialog';
+import { PackageModal } from './PackageModal';
 
 const DEFAULT_IMAGE = 'agent-swarm/agent:dev';
 
@@ -38,7 +39,7 @@ function subline(agent: Agent): string {
   return parts.join(' · ');
 }
 
-type Dialog = 'stop' | 'remove' | 'upgrade' | null;
+type Dialog = 'stop' | 'remove' | 'upgrade' | 'package' | null;
 
 /** Low-res desktop thumbnail that refreshes every few seconds (cheap, unlike a
  *  live VNC stream per card). Keeps retrying if a frame fails to load. */
@@ -193,6 +194,9 @@ export function AgentCard({ agent, onChanged }: { agent: Agent; onChanged: () =>
                 </Label>
               </Dropdown.Item>
             ) : null}
+            <Dropdown.Item id="package" textValue="Package">
+              <Label>Package…</Label>
+            </Dropdown.Item>
             <Dropdown.Item id="remove" textValue="Remove" variant="danger">
               <Label>Remove</Label>
             </Dropdown.Item>
@@ -219,8 +223,21 @@ export function AgentCard({ agent, onChanged }: { agent: Agent; onChanged: () =>
         confirmWord={agent.id}
         action="Remove"
         title="Remove agent"
-        description="This permanently deletes the container and its workspace. This cannot be undone."
+        description={
+          <>
+            This permanently deletes the container <strong>and its persistent disk</strong> (
+            <code>.swarm_data/agents/{agent.id}</code> — Desktop, Documents, configs, everything).
+            This cannot be undone. To keep its data, <strong>Package</strong> it first.
+          </>
+        }
         onConfirm={() => act(() => removeAgent(agent.id))}
+      />
+
+      <PackageModal
+        agentId={agent.id}
+        isOpen={dialog === 'package'}
+        onOpenChange={(o) => !o && setDialog(null)}
+        onChanged={onChanged}
       />
 
       <Modal>
