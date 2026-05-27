@@ -12,7 +12,10 @@ import {
   type PackageInfo,
 } from '@/lib/gateway';
 
-const DEFAULTS = new Set(['Desktop', 'Documents', '.claude', '.config']);
+// Default selection. `.claude` (memory, sessions, transcripts, settings) and
+// `.claude.json` (project history, MCP config, account) together are Claude's
+// full memory/state.
+const DEFAULTS = new Set(['Desktop', 'Documents', '.claude', '.claude.json', '.config']);
 
 function humanSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
