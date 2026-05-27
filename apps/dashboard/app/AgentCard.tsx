@@ -130,11 +130,9 @@ export function AgentCard({
 
         {/* Right column: title, info, then status + live stats. */}
         <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <h3 className="truncate font-semibold">{agent.username || agent.id}</h3>
-          <p className="text-muted truncate font-mono text-xs">{agent.id}</p>
-
-          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
-            <Chip color={chip.color} size="sm" variant="soft">
+          <div className="flex items-center gap-2">
+            <h3 className="min-w-0 truncate font-semibold">{agent.username || agent.id}</h3>
+            <Chip color={chip.color} size="sm" variant="soft" className="shrink-0">
               {chip.working && (
                 <motion.span
                   className="bg-success mr-1 inline-block size-1.5 rounded-full align-middle"
@@ -144,6 +142,10 @@ export function AgentCard({
               )}
               {chip.label}
             </Chip>
+          </div>
+          <p className="text-muted truncate font-mono text-xs">{agent.id}</p>
+
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
             <AgentStatsInline stats={stats} />
           </div>
           <p className="text-muted/70 mt-1 text-[11px]">Right-click for actions</p>
