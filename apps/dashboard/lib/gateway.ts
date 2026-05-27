@@ -212,6 +212,13 @@ export async function uploadPackage(file: File): Promise<{ file: string }> {
   return res.json();
 }
 
+export interface HostInfo {
+  cpus: number;
+  memoryMb: number;
+}
+/** Host hardware limits, to cap the per-agent resource sliders. */
+export const getHostInfo = () => api<HostInfo>('/api/host');
+
 export const listAgents = () => api<Agent[]>('/api/agents');
 export const createAgent = (opts: CreateAgentOptions = {}) =>
   api<Agent>('/api/agents', {

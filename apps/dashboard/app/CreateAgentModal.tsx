@@ -2,11 +2,13 @@
 
 import { Button, Input, Label, Modal, Slider, TextField, toast } from '@heroui/react';
 import { useState } from 'react';
-import { LuDices } from 'react-icons/lu';
-import { createAgent } from '@/lib/gateway';
+import { LuChevronRight, LuDices } from 'react-icons/lu';
+import { createAgent, getHostInfo } from '@/lib/gateway';
 import { randomName } from '@/lib/names';
 
 const ALL_TAKEN = 'All names are in use — type one manually.';
+const DEFAULT_CPUS = 2;
+const DEFAULT_MEM_GB = 4;
 
 /** A resource-cap slider where 0 means "unlimited". */
 function LimitSlider({
@@ -82,8 +84,11 @@ export function CreateAgentModal({
   const [open, setOpen] = useState(false);
   const [hostname, setHostname] = useState('');
   const [name, setName] = useState('');
-  const [cpus, setCpus] = useState(0);
-  const [memGb, setMemGb] = useState(0);
+  const [advanced, setAdvanced] = useState(false);
+  const [cpus, setCpus] = useState(DEFAULT_CPUS);
+  const [memGb, setMemGb] = useState(DEFAULT_MEM_GB);
+  const [maxCpus, setMaxCpus] = useState(8);
+  const [maxMemGb, setMaxMemGb] = useState(16);
   const [timezone, setTimezone] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -99,11 +104,24 @@ export function CreateAgentModal({
     const next = randomName(taken);
     setName(next ?? '');
     if (!next) toast.warning(ALL_TAKEN);
-    setCpus(0);
-    setMemGb(0);
+    setAdvanced(false);
+    setCpus(DEFAULT_CPUS);
+    setMemGb(DEFAULT_MEM_GB);
     setTimezone(systemTimezone());
     setError(null);
     setOpen(true);
+    // Cap the sliders at the host's real hardware (and pull the defaults down
+    // if the machine has less than 2 cores / 4 GB).
+    getHostInfo()
+      .then((h) => {
+        const mc = Math.max(1, Math.floor(h.cpus || 8));
+        const mm = Math.max(0.25, Math.floor((h.memoryMb || 16384) / 256) * 0.25);
+        setMaxCpus(mc);
+        setMaxMemGb(mm);
+        setCpus((c) => Math.min(c, mc));
+        setMemGb((m) => Math.min(m, mm));
+      })
+      .catch(() => {});
   };
 
   const submit = async () => {
@@ -174,29 +192,41 @@ export function CreateAgentModal({
                   <Input placeholder="workspace-A3F9K2" />
                 </TextField>
 
-                <div className="flex flex-col gap-5 pt-1">
-                  <LimitSlider
-                    label="CPUs"
-                    value={cpus}
-                    onChange={setCpus}
-                    max={16}
-                    step={0.5}
-                    unit="cores"
+                <button
+                  type="button"
+                  onClick={() => setAdvanced((a) => !a)}
+                  className="text-muted hover:text-foreground -mb-1 flex items-center gap-1.5 self-start text-sm"
+                >
+                  <LuChevronRight
+                    className={`size-4 transition-transform ${advanced ? 'rotate-90' : ''}`}
                   />
-                  <LimitSlider
-                    label="Max memory"
-                    value={memGb}
-                    onChange={setMemGb}
-                    max={32}
-                    step={1}
-                    unit="GB"
-                  />
-                </div>
+                  Advanced settings
+                </button>
 
-                <TextField name="timezone" value={timezone} onChange={setTimezone}>
-                  <Label>Timezone</Label>
-                  <Input placeholder="e.g. America/Toronto" />
-                </TextField>
+                {advanced && (
+                  <div className="flex flex-col gap-5">
+                    <LimitSlider
+                      label="CPUs"
+                      value={cpus}
+                      onChange={setCpus}
+                      max={maxCpus}
+                      step={1}
+                      unit="cores"
+                    />
+                    <LimitSlider
+                      label="Max memory"
+                      value={memGb}
+                      onChange={setMemGb}
+                      max={maxMemGb}
+                      step={0.25}
+                      unit="GB"
+                    />
+                    <TextField name="timezone" value={timezone} onChange={setTimezone}>
+                      <Label>Timezone</Label>
+                      <Input placeholder="e.g. America/Toronto" />
+                    </TextField>
+                  </div>
+                )}
 
                 {error && <p className="text-danger text-sm">{error}</p>}
               </form>

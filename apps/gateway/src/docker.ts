@@ -179,6 +179,16 @@ export class AgentManager {
     return name.replace(/^\//, '').slice(this.cfg.agentNamePrefix.length);
   }
 
+  /** Host hardware limits (from the Docker daemon), so the UI can cap the
+   *  per-agent CPU/memory sliders at what the machine actually has. */
+  async hostInfo(): Promise<{ cpus: number; memoryMb: number }> {
+    const info = await this.docker.info();
+    return {
+      cpus: Number(info.NCPU) || 0,
+      memoryMb: Math.round(Number(info.MemTotal || 0) / (1024 * 1024)),
+    };
+  }
+
   /** Create the shared network if it doesn't exist yet (idempotent). */
   async ensureNetwork(): Promise<void> {
     const nets = await this.docker.listNetworks({
@@ -207,8 +217,14 @@ export class AgentManager {
     // Name defaults to the id so there's always a readable identity; the
     // dashboard makes it mandatory for human creation.
     const username = opts.username?.trim() || id;
-    const cpus = opts.cpus && opts.cpus > 0 ? opts.cpus : undefined;
-    const memoryMb = opts.memoryMb && opts.memoryMb > 0 ? Math.round(opts.memoryMb) : undefined;
+    // Clamp resource caps to the host's actual hardware (the UI does too, but
+    // the API could be called directly).
+    const hw = await this.hostInfo();
+    const cpus = opts.cpus && opts.cpus > 0 ? Math.min(opts.cpus, hw.cpus || opts.cpus) : undefined;
+    const memoryMb =
+      opts.memoryMb && opts.memoryMb > 0
+        ? Math.min(Math.round(opts.memoryMb), hw.memoryMb || Math.round(opts.memoryMb))
+        : undefined;
     const timezone = opts.timezone?.trim() || undefined;
     const name = this.containerName(id);
     const portMode = this.cfg.mode === 'ports';
