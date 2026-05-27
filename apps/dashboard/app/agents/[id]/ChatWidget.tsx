@@ -73,6 +73,33 @@ function AssistantText({ text, animate }: { text: string; animate: boolean }) {
   );
 }
 
+/** A tool call. MCP tools follow `mcp__<server>__<tool>` — render the server as
+ * a small badge and the bare tool name, instead of the raw underscored id. */
+function ToolItem({ name, detail }: { name: string; detail?: string }) {
+  let server: string | null = null;
+  let tool = name;
+  if (name.startsWith('mcp__')) {
+    const rest = name.slice(5);
+    const i = rest.indexOf('__');
+    if (i >= 0) {
+      server = rest.slice(0, i);
+      tool = rest.slice(i + 2);
+    }
+  }
+  return (
+    <div className="text-muted bg-surface-secondary/60 flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs">
+      <LuWrench className="size-3 shrink-0" />
+      {server && (
+        <span className="bg-surface-tertiary text-muted shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide uppercase">
+          {server}
+        </span>
+      )}
+      <span className="shrink-0 font-mono font-semibold">{tool}</span>
+      {detail && <span className="truncate font-mono opacity-80">{detail}</span>}
+    </div>
+  );
+}
+
 /** Three bouncing dots, shown where the agent's next reply will appear. */
 function TypingDots() {
   return (
@@ -412,14 +439,7 @@ export function ChatWidget({ agentId }: { agentId: string }) {
                             />
                           )
                         ) : (
-                          <div
-                            key={j}
-                            className="text-muted bg-surface-secondary/60 flex items-center gap-1.5 rounded-lg px-2 py-1 font-mono text-xs"
-                          >
-                            <LuWrench className="size-3 shrink-0" />
-                            <span className="shrink-0 font-semibold">{it.name}</span>
-                            {it.detail && <span className="truncate opacity-80">{it.detail}</span>}
-                          </div>
+                          <ToolItem key={j} name={it.name ?? ''} detail={it.detail} />
                         ),
                       )}
                     </div>

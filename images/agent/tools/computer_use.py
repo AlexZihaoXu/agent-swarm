@@ -7,7 +7,7 @@
 
 A minimal Model Context Protocol stdio server — JSON-RPC 2.0 over
 stdin/stdout, newline-delimited, hand-rolled (no MCP SDK). Vision via
-ImageMagick `import`; typing via `xdotool`; everything else (smooth bezier
+ImageMagick `import`; typing via `xdotool`; everything else (smooth
 motion, button/key synthesis, and querying which buttons/keys are currently
 held) via the X protocol through python-xlib + XTEST.
 
@@ -55,7 +55,7 @@ INSTRUCTIONS = (
     "since the screen changes after actions. Before a relative move (move_rel), "
     "glance/look_at with cursor:true so you can see where the pointer currently "
     "is. Use list_keys for valid key names (keydown/keyup/press/hotkey). Mouse "
-    "moves follow a smooth ease-in-out curve automatically."
+    "moves are straight and smoothly eased automatically."
 )
 
 # X connection is opened lazily (by _connect, before the first tool call) so the
@@ -231,19 +231,13 @@ def _move_curve(nx: int, ny: int, duration: float | None) -> None:
         return
     dur = duration if duration is not None else min(1.2, max(0.12, dist / 2200))
     steps = max(2, int(dur * 300))  # cap at 300fps
-    # Quadratic bezier with a perpendicular bow for human-like motion.
-    mx, my = (sx + nx) / 2, (sy + ny) / 2
-    bow = min(dist * 0.18, 120)
-    px, py = -(ny - sy) / dist, (nx - sx) / dist
-    side = 1 if (int(nx) + int(ny)) % 2 else -1
-    cxp, cyp = mx + px * bow * side, my + py * bow * side
+    # Straight point-to-point, but smooth: smootherstep ease-in-out on the path
+    # parameter → accelerate out of the start, decelerate into the target.
     for i in range(1, steps + 1):
-        # Smootherstep ease-in-out on the path parameter → the cursor
-        # accelerates out of the start and decelerates into the target.
         u = i / steps
         t = u * u * u * (u * (u * 6 - 15) + 10)
-        x = (1 - t) ** 2 * sx + 2 * (1 - t) * t * cxp + t * t * nx
-        y = (1 - t) ** 2 * sy + 2 * (1 - t) * t * cyp + t * t * ny
+        x = sx + (nx - sx) * t
+        y = sy + (ny - sy) * t
         _warp(round(x), round(y))
         time.sleep(dur / steps)
     _warp(nx, ny)
@@ -405,9 +399,9 @@ TOOLS = [
      {"detail": {"type": "string", "enum": ["low", "normal"]}, "cursor": {"type": "boolean"}}, [], glance),
     ("look_at", "Native-resolution crop centered on a point, for precision (dragging/resizing). Returns the crop + its full_res origin. Uses the 'full' coordinate system. w/h default 256, clamped to 128..1024. cursor:true marks the pointer.",
      {"center": COORD, "w": {"type": "integer"}, "h": {"type": "integer"}, "cursor": {"type": "boolean"}}, ["center"], look_at),
-    ("move_to", "Move the cursor to a point along a smooth curve.",
+    ("move_to", "Move the cursor to a point in a straight line, smoothly (eased).",
      {"pos": COORD, "duration": {"type": "number"}}, ["pos"], move_to),
-    ("move_rel", "Move the cursor by (dx, dy) in a coordinate system, along a smooth curve.",
+    ("move_rel", "Move the cursor by (dx, dy) in a coordinate system, straight and smooth (eased).",
      {"dx": {"type": "number"}, "dy": {"type": "number"}, "sys": {"type": "string", "enum": ["low", "medium", "full"]}, "duration": {"type": "number"}},
      ["dx", "dy"], move_rel),
     ("get_pos", "Current cursor position in all coordinate systems.", {}, [], get_pos),
