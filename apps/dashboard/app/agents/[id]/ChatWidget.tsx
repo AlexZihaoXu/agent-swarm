@@ -268,8 +268,23 @@ export function ChatWidget({ agentId }: { agentId: string }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [open]);
 
+  // Insert a newline at the caret (Ctrl/Cmd+Enter). The value's \n is sent to
+  // the TUI as Ctrl+J (= a newline in Claude Code), so messages stay multi-line.
+  const insertNewline = () => {
+    const ta = inputRef.current;
+    const start = ta?.selectionStart ?? input.length;
+    const end = ta?.selectionEnd ?? input.length;
+    const next = `${input.slice(0, start)}\n${input.slice(end)}`;
+    setInput(next);
+    requestAnimationFrame(() => {
+      if (ta) ta.selectionStart = ta.selectionEnd = start + 1;
+    });
+  };
+
   const send = () => {
-    const text = input.trim();
+    // Normalize to \n; in Claude's TUI a raw \n (0x0A) is Ctrl+J = newline,
+    // while \r (0x0D) is Enter = submit — so newlines never submit early.
+    const text = input.trim().replace(/\r\n?/g, '\n');
     const ws = wsRef.current;
     if (!text || !ws || ws.readyState !== 1) return;
     ws.send(JSON.stringify({ type: 'data', data: text }));
@@ -589,7 +604,12 @@ export function ChatWidget({ agentId }: { agentId: string }) {
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
+                    if (e.key !== 'Enter') return;
+                    if (e.ctrlKey || e.metaKey) {
+                      // Ctrl/Cmd+Enter (and Shift+Enter) → newline, not send.
+                      e.preventDefault();
+                      insertNewline();
+                    } else if (!e.shiftKey) {
                       e.preventDefault();
                       send();
                     }
