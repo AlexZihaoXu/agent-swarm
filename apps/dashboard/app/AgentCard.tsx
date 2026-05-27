@@ -1,7 +1,6 @@
 'use client';
 
-import { Button, Card, Chip, Dropdown, Input, Label, Modal, TextField, toast } from '@heroui/react';
-import { motion } from 'framer-motion';
+import { Button, Card, Dropdown, Input, Label, Modal, TextField, toast } from '@heroui/react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState, type MouseEvent } from 'react';
@@ -18,7 +17,7 @@ import {
   type UpgradeInfo,
 } from '@/lib/gateway';
 import { randomName } from '@/lib/names';
-import { agentChip, AgentStatsInline, useAgentStats } from './AgentStats';
+import { AgentActivity, AgentStatsInline, useAgentStats } from './AgentStats';
 import { ConfirmActionDialog } from './ConfirmActionDialog';
 import { PackageModal } from './PackageModal';
 
@@ -64,7 +63,6 @@ export function AgentCard({
   const router = useRouter();
   const running = agent.status === 'running';
   const stats = useAgentStats(agent.id, { enabled: running });
-  const chip = agentChip(agent.status, stats?.status);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [renameValue, setRenameValue] = useState('');
   const [busy, setBusy] = useState(false);
@@ -130,25 +128,19 @@ export function AgentCard({
 
         {/* Right column: title, info, then status + live stats. */}
         <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <div className="flex items-center gap-2">
-            <h3 className="min-w-0 truncate font-semibold">{agent.username || agent.id}</h3>
-            <Chip color={chip.color} size="sm" variant="soft" className="shrink-0">
-              {chip.working && (
-                <motion.span
-                  className="bg-success mr-1 inline-block size-1.5 rounded-full align-middle"
-                  animate={{ opacity: [1, 0.25, 1], scale: [1, 1.3, 1] }}
-                  transition={{ duration: 1, repeat: Infinity, ease: 'easeInOut' }}
-                />
-              )}
-              {chip.label}
-            </Chip>
-          </div>
+          <h3 className="truncate font-semibold">{agent.username || agent.id}</h3>
           <p className="text-muted truncate font-mono text-xs">{agent.id}</p>
 
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
             <AgentStatsInline stats={stats} />
           </div>
-          <p className="text-muted/70 mt-1 text-[11px]">Right-click for actions</p>
+          <div className="mt-1">
+            <AgentActivity
+              containerStatus={agent.status}
+              sessionStatus={stats?.status}
+              lastActivity={stats?.lastActivity}
+            />
+          </div>
         </div>
       </div>
 

@@ -218,6 +218,98 @@ export function agentChip(
   return { label: 'running', color: 'success', working: false };
 }
 
+/** A clock that re-renders every `ms` (for live durations). */
+function useNow(ms = 1000): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), ms);
+    return () => clearInterval(t);
+  }, [ms]);
+  return now;
+}
+
+/** Timestamp (ms) the current status began. On the first sighting we anchor to
+ *  the agent's last activity (so "idle for 2h" is right after a reload); on a
+ *  later status change we stamp the moment we saw it flip. */
+function useStatusSince(
+  status: string | null,
+  lastActivity: string | number | null,
+): number | null {
+  const [since, setSince] = useState<number | null>(null);
+  const prev = useRef<string | null>(null);
+  useEffect(() => {
+    if (!status) {
+      prev.current = null;
+      setSince(null);
+      return;
+    }
+    if (prev.current === null) {
+      const anchor = lastActivity != null ? new Date(lastActivity).getTime() : Number.NaN;
+      setSince(Number.isFinite(anchor) ? anchor : Date.now());
+    } else if (prev.current !== status) {
+      setSince(Date.now());
+    }
+    prev.current = status;
+  }, [status, lastActivity]);
+  return since;
+}
+
+/** "12s", "5m", "3h 4m", "2d 1h". */
+function fmtDuration(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ${m % 60}m`;
+  return `${Math.floor(h / 24)}d ${h % 24}h`;
+}
+
+const DOT_BG: Record<'success' | 'warning' | 'danger' | 'default', string> = {
+  success: 'bg-success',
+  warning: 'bg-warning',
+  danger: 'bg-danger',
+  default: 'bg-muted',
+};
+
+/**
+ * Live activity line for a fleet card: a status dot + "idle for 5m" /
+ * "working for 12s" (running agents), or just the container state otherwise.
+ */
+export function AgentActivity({
+  containerStatus,
+  sessionStatus,
+  lastActivity,
+}: {
+  containerStatus: string;
+  sessionStatus?: string | null;
+  lastActivity?: string | number | null;
+}) {
+  const running = containerStatus === 'running';
+  const since = useStatusSince(running ? (sessionStatus ?? null) : null, lastActivity ?? null);
+  const now = useNow();
+  const chip = agentChip(containerStatus, sessionStatus);
+  const showDuration =
+    running && since != null && (sessionStatus === 'idle' || sessionStatus === 'busy');
+  return (
+    <span
+      className={`flex items-center gap-1.5 text-xs ${chip.working ? 'text-success' : 'text-muted'}`}
+    >
+      <motion.span
+        className={`inline-block size-1.5 rounded-full ${DOT_BG[chip.color]}`}
+        animate={
+          chip.working ? { opacity: [1, 0.25, 1], scale: [1, 1.3, 1] } : { opacity: 1, scale: 1 }
+        }
+        transition={
+          chip.working ? { duration: 1, repeat: Infinity, ease: 'easeInOut' } : { duration: 0.2 }
+        }
+      />
+      {chip.label}
+      {showDuration ? ` for ${fmtDuration(now - since)}` : ''}
+    </span>
+  );
+}
+
 function Metric({
   icon,
   title,
