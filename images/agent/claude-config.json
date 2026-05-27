@@ -7,5 +7,12 @@
       "hasCompletedProjectOnboarding": true,
       "allowedTools": []
     }
+  },
+  "mcpServers": {
+    "computer-use": {
+      "command": "/usr/local/bin/uv",
+      "args": ["run", "--script", "/opt/agent-tools/computer_use.py"],
+      "env": { "DISPLAY": ":1" }
+    }
   }
 }

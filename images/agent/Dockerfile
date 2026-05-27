@@ -81,7 +81,7 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends \
       code \
       ffmpeg build-essential python3-pip python3-venv pipx \
-      jq unzip zip wget htop vim ripgrep imagemagick tree \
+      jq unzip zip wget htop vim ripgrep imagemagick tree xdotool \
     ; \
     sed -i -E 's#^Exec=/usr/share/code/code#Exec=/usr/share/code/code --no-sandbox#' \
       /usr/share/applications/code.desktop; \
@@ -154,9 +154,16 @@ COPY runtime /opt/agent-runtime
 RUN cd /opt/agent-runtime && npm install --omit=dev
 COPY agent-terminals.service /etc/systemd/system/agent-terminals.service
 
+# MCP tools for Claude Code (computer-use: control the X desktop). Pre-warm the
+# uv cache as the agent (resolves python-xlib at build, cached in the home → the
+# MCP server starts instantly; no X needed since the script connects lazily).
+COPY --chown=agent:agent tools /opt/agent-tools
+RUN su - agent -c '/usr/local/bin/uv run --quiet --script /opt/agent-tools/computer_use.py < /dev/null' || true
+
 # Pre-accept Claude's onboarding + workspace-trust so the auto-started session
 # drops straight to a usable prompt (no trust dialog). Overwrites the simpler
 # seed created above; placed here so the node-pty build layer stays cached.
+# (claude-config.json also registers the computer-use MCP server.)
 COPY --chown=agent:agent claude-config.json /home/agent/.claude.json
 
 # statusLine command: capture Claude's status payload (model, cost, lines) to a
