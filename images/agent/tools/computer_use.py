@@ -52,8 +52,9 @@ INSTRUCTIONS = (
     "(dragging, resizing, small targets) — it returns a native crop plus its "
     "full_res origin so a crop pixel (px,py) maps to full coord (origin_x+px, "
     "origin_y+py); 3) act (move/click/type/key); 4) glance/look_at again to verify, "
-    "since the screen changes after actions. Use list_windows to get the exact "
-    "bounds of open app windows (to click inside one or grab its title bar). "
+    "since the screen changes after actions. Use list_windows to get window "
+    "bounds/ids, and set_window/focus_window/close_window to arrange windows — "
+    "prefer these over shelling out to xdotool/wmctrl. "
     "Before a relative move (move_rel), "
     "glance/look_at with cursor:true so you can see where the pointer currently "
     "is. Use list_keys for valid key names (keydown/keyup/press/hotkey). Mouse "
@@ -339,11 +340,38 @@ def list_windows(args: dict) -> dict:
         if flt and flt not in f"{title} {app}".lower():
             continue
         out.append({
-            "title": title, "app": app,
+            "id": str(int(wid)), "title": title, "app": app,
             "x": t.x, "y": t.y, "w": g.width, "h": g.height,
             "active": int(wid) == active_id,
         })
     return _text(json.dumps({"sys": "full", "windows": out}))
+
+
+def _win_target(args: dict) -> tuple[int, int, int, int]:
+    sys = args.get("sys", "full")
+    nx, ny = _to_native(args["x"], args["y"], sys)
+    sw, sh = SYS_DIMS[sys]
+    return nx, ny, round(args["w"] * NATIVE_W / sw), round(args["h"] * NATIVE_H / sh)
+
+
+def set_window(args: dict) -> dict:
+    # Move + resize a window (by id from list_windows) — for tiling/arranging.
+    wid = str(args["id"])
+    nx, ny, nw, nh = _win_target(args)
+    subprocess.run(
+        ["xdotool", "windowmove", wid, str(nx), str(ny), "windowsize", wid, str(nw), str(nh)]
+    )
+    return _text(f"set window {wid} to full ({nx},{ny}) {nw}x{nh}." + _bounds_warn(nx, ny))
+
+
+def focus_window(args: dict) -> dict:
+    subprocess.run(["xdotool", "windowactivate", "--sync", str(args["id"])])
+    return _text(f"focused window {args['id']}")
+
+
+def close_window(args: dict) -> dict:
+    subprocess.run(["xdotool", "windowclose", str(args["id"])])
+    return _text(f"closed window {args['id']}")
 
 
 # --- keyboard --------------------------------------------------------------
@@ -453,8 +481,15 @@ TOOLS = [
     ("mouse_down", "Press and hold a mouse button.", {"button": BTN}, [], mouse_down),
     ("mouse_up", "Release a mouse button.", {"button": BTN}, [], mouse_up),
     ("get_buttons", "Which mouse buttons are currently held.", {}, [], get_buttons),
-    ("list_windows", "List open app windows with their full_res bounds {x,y,w,h}, title, app class, and which is active. Optional case-insensitive `filter` matches title/app. Use it to target a window precisely.",
+    ("list_windows", "List open app windows: each has id, title, app class, full_res bounds {x,y,w,h}, and active flag. Optional case-insensitive `filter` matches title/app. Use the id with set_window/focus_window/close_window.",
      {"filter": {"type": "string"}}, [], list_windows),
+    ("set_window", "Move AND resize a window (by id from list_windows) — for tiling/arranging. Coordinates in the given sys (default full).",
+     {"id": {"type": "string"}, "x": {"type": "number"}, "y": {"type": "number"}, "w": {"type": "number"}, "h": {"type": "number"}, "sys": {"type": "string", "enum": ["low", "medium", "full"]}},
+     ["id", "x", "y", "w", "h"], set_window),
+    ("focus_window", "Raise and focus a window (by id from list_windows).",
+     {"id": {"type": "string"}}, ["id"], focus_window),
+    ("close_window", "Close a window (by id from list_windows).",
+     {"id": {"type": "string"}}, ["id"], close_window),
     ("keydown", "Press and hold a key.", {"key": {"type": "string"}}, ["key"], keydown),
     ("keyup", "Release a key.", {"key": {"type": "string"}}, ["key"], keyup),
     ("press", "Press and release a key.", {"key": {"type": "string"}}, ["key"], press),
