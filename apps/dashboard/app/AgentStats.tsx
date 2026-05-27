@@ -171,6 +171,13 @@ function ContextCircle({ used, model }: { used: number; model: string | null }) 
   const [v] = useLerp(used);
   const limit = contextLimit(model);
   const title = `context window usage — ${fmtContext(used, model)}`;
+  if (used <= 0) {
+    return (
+      <Metric icon={<LuGauge className="size-3" />} title="context window usage" strong>
+        --
+      </Metric>
+    );
+  }
   if (!limit) {
     return (
       <Metric icon={<LuGauge className="size-3" />} title="context window usage" strong>
@@ -254,24 +261,24 @@ function ActivityBadge({ status }: { status: string }) {
   );
 }
 
-/** Compact one-line stats for a fleet card (presentational — caller supplies stats). */
+/**
+ * Compact one-line stats for a fleet card. Always renders the metric row —
+ * context circle, tokens up, tokens down — falling back to "--" when there's no
+ * data yet, so the line is consistent across every card.
+ */
 export function AgentStatsInline({ stats: s }: { stats: AgentStats | null }) {
-  if (!s || (!s.model && !s.tokens.total)) return null;
-  const up = s.tokens.input + s.tokens.cacheCreation + s.tokens.cacheRead;
+  const up = s ? s.tokens.input + s.tokens.cacheCreation + s.tokens.cacheRead : 0;
+  const out = s?.tokens.output ?? 0;
   return (
     <div className="text-muted flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-      {s.model && <span className="text-foreground font-medium">{cleanModel(s.model)}</span>}
-      {s.context > 0 && <ContextCircle used={s.context} model={s.model} />}
-      {up > 0 && (
-        <Metric icon={<LuArrowUp className="size-3" />} title="tokens sent (input + cache)">
-          <Tokens value={up} />
-        </Metric>
-      )}
-      {s.tokens.output > 0 && (
-        <Metric icon={<LuArrowDown className="size-3" />} title="tokens received (output)">
-          <Tokens value={s.tokens.output} />
-        </Metric>
-      )}
+      {s?.model && <span className="text-foreground font-medium">{cleanModel(s.model)}</span>}
+      <ContextCircle used={s?.context ?? 0} model={s?.model ?? null} />
+      <Metric icon={<LuArrowUp className="size-3" />} title="tokens sent (input + cache)">
+        {up > 0 ? <Tokens value={up} /> : '--'}
+      </Metric>
+      <Metric icon={<LuArrowDown className="size-3" />} title="tokens received (output)">
+        {out > 0 ? <Tokens value={out} /> : '--'}
+      </Metric>
     </div>
   );
 }
