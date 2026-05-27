@@ -38,10 +38,17 @@ services:
       # Docker daemon as an agent bind mount — the daemon resolves it on the
       # host, not inside this container. So we do NOT mount it here.
       CLAUDE_CREDENTIALS_FILE: ${CLAUDE_CREDENTIALS_FILE:-/root/.agent-swarm/.credentials.json}
+      # Persistent agent disks. SWARM_DATA_HOST is a HOST path (the daemon
+      # resolves it when bind-mounting each agent's home); SWARM_DATA_MOUNT is
+      # where this container sees that same tree (the volume below) so the
+      # gateway can seed/package/delete it directly.
+      SWARM_DATA_HOST: ${PWD}/.swarm_data
+      SWARM_DATA_MOUNT: /swarmdata
     ports:
       - '8080:8080'
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - gateway-data:/data
+      - ${PWD}/.swarm_data:/swarmdata
     networks: [swarm-net]
     restart: unless-stopped

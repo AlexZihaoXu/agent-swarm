@@ -25,3 +25,6 @@ coverage/
 
 # os
 .DS_Store
+
+# Persistent agent disks + packages (never commit)
+.swarm_data/

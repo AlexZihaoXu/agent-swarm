@@ -1,6 +1,10 @@
-import { readdirSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import type { Readable } from 'node:stream';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 import type Docker from 'dockerode';
 import tar from 'tar-fs';
 import { config as defaultConfig, type Config } from './config.js';
@@ -57,6 +61,43 @@ export class AgentManager {
     return `${this.cfg.agentNamePrefix}${id}`;
   }
 
+  /** Agent's persistent home as the HOST sees it (for bind mounts → daemon). */
+  private agentHostDir(id: string): string {
+    return join(this.cfg.swarmDataHost, 'agents', id);
+  }
+  /** Same tree as THIS container sees it (for seed/package/delete). */
+  private agentDataDir(id: string): string {
+    return join(this.cfg.swarmDataMount, 'agents', id);
+  }
+  /** Where built packages (.7z) are stored (gateway-local view). */
+  private packagesDir(): string {
+    return join(this.cfg.swarmDataMount, 'packages');
+  }
+
+  /**
+   * Ensure the agent's persistent home exists and, if brand new (empty), seed
+   * it from the image's `/home/agent` skeleton via a one-shot helper (cp -a
+   * preserves ownership/permissions). An empty bind mount would otherwise
+   * shadow the image's prepared home and break the agent.
+   */
+  private async seedAgentDisk(id: string): Promise<void> {
+    const local = this.agentDataDir(id);
+    mkdirSync(local, { recursive: true });
+    if (readdirSync(local).length > 0) return; // existing disk — reuse as-is
+    const helper = await this.docker.createContainer({
+      Image: this.cfg.agentImage,
+      Entrypoint: ['sh', '-c'],
+      Cmd: ['cp -a /home/agent/. /seed/ 2>/dev/null || true'],
+      HostConfig: { Binds: [`${this.agentHostDir(id)}:/seed`] },
+    });
+    try {
+      await helper.start();
+      await helper.wait();
+    } finally {
+      await helper.remove({ force: true }).catch(() => {});
+    }
+  }
+
   private idFromName(name: string): string {
     return name.replace(/^\//, '').slice(this.cfg.agentNamePrefix.length);
   }
@@ -100,6 +141,9 @@ export class AgentManager {
     };
     if (username) labels[USERNAME_LABEL] = username;
 
+    // Persistent disk: seed the home skeleton (first time) then bind-mount it.
+    await this.seedAgentDisk(id);
+
     const container = await this.docker.createContainer({
       name,
       Image: this.cfg.agentImage,
@@ -113,6 +157,8 @@ export class AgentManager {
         CgroupnsMode: 'host',
         Binds: [
           '/sys/fs/cgroup:/sys/fs/cgroup:rw',
+          // Persistent home (host folder), with the credentials file nested on top.
+          `${this.agentHostDir(id)}:/home/agent`,
           `${credentialsFile}:/home/agent/.claude/.credentials.json`,
         ],
         Tmpfs: { '/run': '', '/run/lock': '', '/tmp': '' },
@@ -157,6 +203,88 @@ export class AgentManager {
 
   async remove(id: string): Promise<void> {
     await this.docker.getContainer(this.containerName(id)).remove({ force: true });
+    // Also delete the agent's persistent disk (the caller must have warned the
+    // user — this is irreversible).
+    rmSync(this.agentDataDir(id), { recursive: true, force: true });
+  }
+
+  /** Top-level entries of an agent's persistent home (for the package picker). */
+  listAgentPaths(id: string): { name: string; dir: boolean }[] {
+    const dir = this.agentDataDir(id);
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir, { withFileTypes: true })
+      .map((e) => ({ name: e.name, dir: e.isDirectory() }))
+      .sort((a, b) => Number(b.dir) - Number(a.dir) || a.name.localeCompare(b.name));
+  }
+
+  /**
+   * Package selected sub-paths of an agent's home into a .7z. The agent MUST be
+   * stopped first (so files are at rest) — we stop it if it's running.
+   */
+  async packageAgent(id: string, paths: string[]): Promise<{ file: string; bytes: number }> {
+    const dir = this.agentDataDir(id);
+    if (!existsSync(dir))
+      throw Object.assign(new Error('agent has no persistent disk'), { statusCode: 404 });
+    try {
+      const info = await this.docker.getContainer(this.containerName(id)).inspect();
+      if (info.State.Running) await this.stop(id);
+    } catch {
+      /* no container (disk-only) — fine */
+    }
+    // Sanitize: relative, no traversal, must exist.
+    const safe = [...new Set(paths.map((p) => p.replace(/^[/\s]+|[/\s]+$/g, '')))].filter(
+      (p) => p && !p.split('/').includes('..') && existsSync(join(dir, p)),
+    );
+    if (!safe.length)
+      throw Object.assign(new Error('no valid paths selected'), { statusCode: 400 });
+    mkdirSync(this.packagesDir(), { recursive: true });
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const file = `${id}-${ts}.7z`;
+    await execFileAsync(
+      '7z',
+      ['a', '-mx=5', '-bso0', '-bsp0', join(this.packagesDir(), file), ...safe],
+      {
+        cwd: dir,
+        maxBuffer: 1 << 26,
+      },
+    );
+    return { file, bytes: statSync(join(this.packagesDir(), file)).size };
+  }
+
+  /** Built packages, newest first. */
+  listPackages(): { file: string; bytes: number; createdAt: number }[] {
+    const dir = this.packagesDir();
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir)
+      .filter((f) => f.endsWith('.7z'))
+      .map((f) => {
+        const st = statSync(join(dir, f));
+        return { file: f, bytes: st.size, createdAt: st.mtimeMs };
+      })
+      .sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  /** Absolute path of a package by name, or null if it doesn't exist. */
+  packageFilePath(file: string): string | null {
+    const p = join(this.packagesDir(), basename(file));
+    return existsSync(p) ? p : null;
+  }
+
+  /** Create a NEW agent and restore a package over its seeded home (duplicate /
+   * import from another swarm). */
+  async importPackage(file: string, opts: CreateAgentOptions = {}): Promise<Agent> {
+    const src = this.packageFilePath(file);
+    if (!src) throw Object.assign(new Error('package not found'), { statusCode: 404 });
+    const agent = await this.create(opts);
+    await this.stop(agent.id).catch(() => {});
+    const dir = this.agentDataDir(agent.id);
+    await execFileAsync('7z', ['x', '-y', '-bso0', '-bsp0', src, `-o${dir}`], {
+      maxBuffer: 1 << 26,
+    });
+    // 7z may restore files as root; the agent runs as uid 1000.
+    await execFileAsync('chown', ['-R', '1000:1000', dir]).catch(() => {});
+    await this.start(agent.id);
+    return agent;
   }
 
   /** Resolve where the proxy should connect to reach an agent's service. */

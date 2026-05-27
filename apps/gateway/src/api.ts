@@ -1,3 +1,4 @@
+import { createReadStream } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { dirname } from 'node:path';
 import type { AgentManager } from './docker.js';
@@ -30,8 +31,10 @@ export function applyCors(req: IncomingMessage, res: ServerResponse): boolean {
   return false;
 }
 
-// /api/agents, /api/agents/:id, /api/agents/:id/(start|stop|upgrade)
-const AGENT_API = /^\/api\/agents(?:\/([^/]+)(?:\/(start|stop|upgrade))?)?$/;
+// /api/agents, /api/agents/:id, /api/agents/:id/(start|stop|upgrade|paths|package)
+const AGENT_API = /^\/api\/agents(?:\/([^/]+)(?:\/(start|stop|upgrade|paths|package))?)?$/;
+// /api/packages, /api/packages/:file/(download|import)
+const PACKAGE_API = /^\/api\/packages(?:\/([^/]+)\/(download|import))?$/;
 
 /**
  * Handle the REST API. Returns true if the request was an /api/* route (and has
@@ -51,6 +54,8 @@ export async function handleApi(
     if (pathname === '/api/settings') return await handleSettings(req, res, manager, method);
     if (pathname === '/api/image') return await handleImageStatus(res, manager, method);
     if (pathname === '/api/image/build') return await handleImageBuild(res, manager, method);
+    if (pathname.startsWith('/api/packages'))
+      return await handlePackages(req, res, manager, method);
     if (pathname.startsWith('/api/agents')) return await handleAgents(req, res, manager, method);
     sendJson(res, 404, { error: 'unknown endpoint' });
   } catch (err) {
@@ -83,10 +88,52 @@ async function handleAgents(
   } else if (action === 'upgrade') {
     if (method === 'GET') return (sendJson(res, 200, await manager.upgradeInfo(id)), true);
     if (method === 'POST') return (sendJson(res, 200, await manager.upgrade(id)), true);
+  } else if (action === 'paths') {
+    if (method === 'GET') return (sendJson(res, 200, manager.listAgentPaths(id)), true);
+  } else if (action === 'package') {
+    if (method === 'POST') {
+      const body = await readJson(req);
+      const result = await manager.packageAgent(id, Array.isArray(body.paths) ? body.paths : []);
+      return (sendJson(res, 200, result), true);
+    }
   } else if (method === 'POST') {
     if (action === 'start') await manager.start(id);
     else await manager.stop(id);
     return (sendJson(res, 200, { ok: true }), true);
+  }
+  sendJson(res, 405, { error: 'method not allowed' });
+  return true;
+}
+
+async function handlePackages(
+  req: IncomingMessage,
+  res: ServerResponse,
+  manager: AgentManager,
+  method: string,
+): Promise<boolean> {
+  const { pathname } = new URL(req.url ?? '/', 'http://localhost');
+  const m = PACKAGE_API.exec(pathname);
+  if (!m) return (sendJson(res, 404, { error: 'unknown endpoint' }), true);
+  const [, file, action] = m;
+
+  if (!file) {
+    if (method === 'GET') return (sendJson(res, 200, manager.listPackages()), true);
+  } else if (action === 'download' && method === 'GET') {
+    const path = manager.packageFilePath(file);
+    if (!path) return (sendJson(res, 404, { error: 'package not found' }), true);
+    res.writeHead(200, {
+      'content-type': 'application/x-7z-compressed',
+      'content-disposition': `attachment; filename="${file}"`,
+    });
+    createReadStream(path).pipe(res);
+    return true;
+  } else if (action === 'import' && method === 'POST') {
+    const body = await readJson(req);
+    const agent = await manager.importPackage(file, {
+      hostname: body.hostname,
+      username: body.username,
+    });
+    return (sendJson(res, 201, agent), true);
   }
   sendJson(res, 405, { error: 'method not allowed' });
   return true;
@@ -167,9 +214,12 @@ async function handleImageBuild(
 }
 
 /** Read and parse a JSON request body; tolerate an empty/invalid body. */
-async function readJson(
-  req: IncomingMessage,
-): Promise<{ hostname?: string; username?: string; credentialsFile?: string }> {
+async function readJson(req: IncomingMessage): Promise<{
+  hostname?: string;
+  username?: string;
+  credentialsFile?: string;
+  paths?: string[];
+}> {
   const chunks: Buffer[] = [];
   for await (const c of req) chunks.push(c as Buffer);
   const raw = Buffer.concat(chunks).toString('utf8').trim();

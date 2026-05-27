@@ -47,6 +47,15 @@ export const config = {
   /** Where runtime settings (e.g. the selected credentials path) are persisted. */
   settingsFile:
     process.env.SETTINGS_FILE ?? join(homedir(), '.agent-swarm', 'gateway-settings.json'),
+  /**
+   * Persistent agent disks. Each agent's home is bind-mounted from
+   * `${swarmDataHost}/agents/<id>` on the HOST (the daemon resolves this), and
+   * the gateway sees that same tree at `${swarmDataMount}` (mounted into this
+   * container) so it can seed / package / delete it directly. Packages live in
+   * `${swarmDataMount}/packages`.
+   */
+  swarmDataHost: process.env.SWARM_DATA_HOST ?? join(homedir(), '.agent-swarm', 'swarm_data'),
+  swarmDataMount: process.env.SWARM_DATA_MOUNT ?? '/swarmdata',
   /** Where to send everything that isn't /api or /a/:id — the Next.js dashboard. */
   dashboardUpstream: process.env.DASHBOARD_UPSTREAM ?? 'http://localhost:3000',
   /** In-container service ports (fixed by the agent image). */

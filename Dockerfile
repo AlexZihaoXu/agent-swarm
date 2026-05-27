@@ -22,6 +22,10 @@ RUN pnpm --filter @agent-swarm/gateway build \
 FROM node:22-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+# 7z, for packaging/restoring agent disks.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends p7zip-full \
+  && rm -rf /var/lib/apt/lists/*
 # Where the gateway finds the agent build context and persists runtime settings.
 ENV AGENT_CONTEXT_DIR=/app/agent-context
 ENV SETTINGS_FILE=/data/settings.json
