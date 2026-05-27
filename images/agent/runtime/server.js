@@ -405,6 +405,23 @@ function readStats() {
   };
 }
 
+// Resume across container restarts. The agent's home is a persistent disk, so
+// Claude's transcripts survive a restart. If one exists for the working dir,
+// continue the most recent conversation (with a fresh session as fallback if
+// the resume fails); on first boot there's nothing to continue, so start clean
+// (`--continue` errors with no prior conversation). An explicit FIRST_CMD wins.
+function claudeBootCommand() {
+  if (process.env.FIRST_CMD) return FIRST_CMD;
+  try {
+    const projDir = path.join(CLAUDE_DIR, 'projects', HOME.replace(/[^a-zA-Z0-9]/g, '-'));
+    if (fs.readdirSync(projDir).some((f) => f.endsWith('.jsonl')))
+      return `claude --continue --dangerously-skip-permissions || ${FIRST_CMD}`;
+  } catch {
+    /* no prior transcripts — start fresh */
+  }
+  return FIRST_CMD;
+}
+
 function spawnPty(command) {
   const args = command ? ['-l', '-c', `${command}; exec ${SHELL}`] : ['-l'];
   return pty.spawn(SHELL, args, {
@@ -659,7 +676,7 @@ wss.on('connection', (ws, req) => {
 server.listen(PORT, () => {
   console.log(`agent-runtime terminal supervisor listening on :${PORT}`);
   try {
-    createSession({ name: 'claude', command: FIRST_CMD }); // always-on, from boot
+    createSession({ name: 'claude', command: claudeBootCommand() }); // always-on, from boot
   } catch (e) {
     console.error('failed to start first session:', e);
   }
