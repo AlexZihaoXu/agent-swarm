@@ -22,26 +22,6 @@ import { agentChip, AgentStatsInline, useAgentStats } from './AgentStats';
 import { ConfirmActionDialog } from './ConfirmActionDialog';
 import { PackageModal } from './PackageModal';
 
-const DEFAULT_IMAGE = 'agent-swarm/agent:dev';
-
-function prettyImage(image: string): string {
-  const sha = image.match(/^sha256:([0-9a-f]{12})/);
-  return sha ? `image ${sha[1]}` : image;
-}
-
-/**
- * Secondary line under the title: the hostname (when a display name is set) and
- * the image — but only when it's a custom image. The default agent image (or its
- * untagged sha) is hidden, since every agent uses it.
- */
-function subline(agent: Agent): string {
-  const parts: string[] = [];
-  if (agent.username) parts.push(agent.id);
-  const isDefault = agent.image === DEFAULT_IMAGE || /^sha256:/.test(agent.image);
-  if (!isDefault) parts.push(prettyImage(agent.image));
-  return parts.join(' · ');
-}
-
 type Dialog = 'stop' | 'remove' | 'upgrade' | 'package' | 'rename' | null;
 
 /** Low-res desktop thumbnail that refreshes every few seconds (cheap, unlike a
@@ -151,9 +131,7 @@ export function AgentCard({
         {/* Right column: title, info, then status + live stats. */}
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <h3 className="truncate font-semibold">{agent.username || agent.id}</h3>
-          {subline(agent) && (
-            <p className="text-muted font-mono text-xs break-words">{subline(agent)}</p>
-          )}
+          <p className="text-muted truncate font-mono text-xs">{agent.id}</p>
 
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
             <Chip color={chip.color} size="sm" variant="soft">
@@ -166,7 +144,7 @@ export function AgentCard({
               )}
               {chip.label}
             </Chip>
-            {running && <AgentStatsInline stats={stats} />}
+            <AgentStatsInline stats={stats} />
           </div>
           <p className="text-muted/70 mt-1 text-[11px]">Right-click for actions</p>
         </div>

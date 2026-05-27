@@ -39,6 +39,11 @@ function fmtContext(used: number, model: string | null): string {
   return `${fmtTokens(used)}${lim}`;
 }
 
+/** Drop the "(1M context)" suffix — the progress circle conveys that. */
+function cleanModel(model: string): string {
+  return model.replace(/\s*\([^)]*context\)/i, '').trim();
+}
+
 /**
  * One agent's live session stats: a single snapshot request for immediate data,
  * then a WebSocket stream (pushes ~1/s) for real-time updates. Reconnects if the
@@ -254,8 +259,8 @@ export function AgentStatsInline({ stats: s }: { stats: AgentStats | null }) {
   if (!s || (!s.model && !s.tokens.total)) return null;
   const up = s.tokens.input + s.tokens.cacheCreation + s.tokens.cacheRead;
   return (
-    <div className="text-muted flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-      {s.model && <span className="text-foreground font-medium">{s.model}</span>}
+    <div className="text-muted flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+      {s.model && <span className="text-foreground font-medium">{cleanModel(s.model)}</span>}
       {s.context > 0 && <ContextCircle used={s.context} model={s.model} />}
       {up > 0 && (
         <Metric icon={<LuArrowUp className="size-3" />} title="tokens sent (input + cache)">
@@ -265,11 +270,6 @@ export function AgentStatsInline({ stats: s }: { stats: AgentStats | null }) {
       {s.tokens.output > 0 && (
         <Metric icon={<LuArrowDown className="size-3" />} title="tokens received (output)">
           <Tokens value={s.tokens.output} />
-        </Metric>
-      )}
-      {s.cost != null && s.cost > 0 && (
-        <Metric icon={<LuDollarSign className="size-3" />} title="money spent (USD)">
-          <Cost value={s.cost} />
         </Metric>
       )}
     </div>
