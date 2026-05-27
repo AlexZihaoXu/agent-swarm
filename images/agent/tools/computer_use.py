@@ -52,8 +52,10 @@ INSTRUCTIONS = (
     "(dragging, resizing, small targets) — it returns a native crop plus its "
     "full_res origin so a crop pixel (px,py) maps to full coord (origin_x+px, "
     "origin_y+py); 3) act (move/click/type/key); 4) glance/look_at again to verify, "
-    "since the screen changes after actions. Use list_keys for valid key names "
-    "(keydown/keyup/press/hotkey). Mouse moves follow a smooth curve automatically."
+    "since the screen changes after actions. Before a relative move (move_rel), "
+    "glance/look_at with cursor:true so you can see where the pointer currently "
+    "is. Use list_keys for valid key names (keydown/keyup/press/hotkey). Mouse "
+    "moves follow a smooth ease-in-out curve automatically."
 )
 
 # X connection is opened lazily (by _connect, before the first tool call) so the
@@ -140,6 +142,22 @@ def _capture(args: list[str], fmt: str) -> bytes | None:
     return r.stdout if r.returncode == 0 and r.stdout else None
 
 
+def _overlay_cursor(data: bytes, fmt: str, mx: int, my: int) -> bytes:
+    # `import` doesn't capture the hardware cursor, so draw a marker (ring +
+    # crosshair) at the pointer position, with a white halo for visibility.
+    marker = (
+        f"circle {mx},{my} {mx},{my + 8} "
+        f"line {mx - 13},{my} {mx + 13},{my} line {mx},{my - 13} {mx},{my + 13}"
+    )
+    r = subprocess.run(
+        ["convert", "-", "-fill", "none",
+         "-stroke", "white", "-strokewidth", "4", "-draw", marker,
+         "-stroke", "red", "-strokewidth", "2", "-draw", marker, f"{fmt}:-"],
+        input=data, capture_output=True,
+    )
+    return r.stdout if r.returncode == 0 and r.stdout else data
+
+
 def _image(data: bytes, mime: str, note: str) -> dict:
     return {
         "content": [
@@ -157,13 +175,22 @@ def glance(args: dict) -> dict:
     img = _capture(["-resize", f"{w}x{h}!", "-quality", "60"], "jpeg")
     if not img:
         return _err("screenshot failed")
-    return _image(img, "image/jpeg", f"glance {detail} — {w}x{h}, coordinate system '{sys_name}'.")
+    note = f"glance {detail} — {w}x{h}, coordinate system '{sys_name}'."
+    if args.get("cursor"):
+        nx, ny, _ = _pointer()
+        img = _overlay_cursor(img, "jpeg", round(nx * w / NATIVE_W), round(ny * h / NATIVE_H))
+        note += " Cursor marked (red crosshair)."
+    return _image(img, "image/jpeg", note)
+
+
+LOOK_MIN, LOOK_MAX = 128, 1024
 
 
 def look_at(args: dict) -> dict:
     cx, cy = _coord(args["center"])
-    w = int(args.get("w", 256))
-    h = int(args.get("h", 256))
+    rw, rh = int(args.get("w", 256)), int(args.get("h", 256))
+    w = max(LOOK_MIN, min(LOOK_MAX, rw))
+    h = max(LOOK_MIN, min(LOOK_MAX, rh))
     x0, y0 = cx - w // 2, cy - h // 2
     # Clip to the screen, note if we had to.
     cx0, cy0 = max(0, x0), max(0, y0)
@@ -174,13 +201,24 @@ def look_at(args: dict) -> dict:
     png = _capture(["-crop", f"{cw}x{ch}+{cx0}+{cy0}", "+repage"], "png")
     if not png:
         return _err("screenshot failed")
-    clipped = (cx0, cy0, cw, ch) != (x0, y0, w, h)
     note = (
         f"look_at — full_res region origin=({cx0},{cy0}) size={cw}x{ch}. "
         f"Pixel (px,py) in this crop is full coord ({cx0}+px, {cy0}+py)."
     )
-    if clipped:
-        note = "WARNING: clipped to screen bounds. " + note
+    warns = []
+    if (w, h) != (rw, rh):
+        warns.append(f"size clamped to {w}x{h} (allowed {LOOK_MIN}..{LOOK_MAX})")
+    if (cx0, cy0, cw, ch) != (x0, y0, w, h):
+        warns.append("clipped to screen bounds")
+    if warns:
+        note = "WARNING: " + "; ".join(warns) + ". " + note
+    if args.get("cursor"):
+        nx, ny, _ = _pointer()
+        if cx0 <= nx < cx0 + cw and cy0 <= ny < cy0 + ch:
+            png = _overlay_cursor(png, "png", nx - cx0, ny - cy0)
+            note += " Cursor marked (red crosshair)."
+        else:
+            note += " (cursor is outside this region)"
     return _image(png, "image/png", note)
 
 
@@ -200,7 +238,10 @@ def _move_curve(nx: int, ny: int, duration: float | None) -> None:
     side = 1 if (int(nx) + int(ny)) % 2 else -1
     cxp, cyp = mx + px * bow * side, my + py * bow * side
     for i in range(1, steps + 1):
-        t = i / steps
+        # Smootherstep ease-in-out on the path parameter → the cursor
+        # accelerates out of the start and decelerates into the target.
+        u = i / steps
+        t = u * u * u * (u * (u * 6 - 15) + 10)
         x = (1 - t) ** 2 * sx + 2 * (1 - t) * t * cxp + t * t * nx
         y = (1 - t) ** 2 * sy + 2 * (1 - t) * t * cyp + t * t * ny
         _warp(round(x), round(y))
@@ -360,10 +401,10 @@ BTN = {"type": "string", "enum": ["left", "middle", "right"]}
 
 # (name, description, inputSchema-properties, required, handler)
 TOOLS = [
-    ("glance", "Screenshot for polling/coarse tasks. detail 'low' (720x480, system 'low') or 'normal' (1280x720, system 'medium').",
-     {"detail": {"type": "string", "enum": ["low", "normal"]}}, [], glance),
-    ("look_at", "Native-resolution crop centered on a point, for precision (dragging/resizing). Returns the crop + its full_res origin. Uses the 'full' coordinate system.",
-     {"center": COORD, "w": {"type": "integer"}, "h": {"type": "integer"}}, ["center"], look_at),
+    ("glance", "Screenshot for polling/coarse tasks. detail 'low' (720x480, system 'low') or 'normal' (1280x720, system 'medium'). Set cursor:true to mark the pointer (useful before move_rel).",
+     {"detail": {"type": "string", "enum": ["low", "normal"]}, "cursor": {"type": "boolean"}}, [], glance),
+    ("look_at", "Native-resolution crop centered on a point, for precision (dragging/resizing). Returns the crop + its full_res origin. Uses the 'full' coordinate system. w/h default 256, clamped to 128..1024. cursor:true marks the pointer.",
+     {"center": COORD, "w": {"type": "integer"}, "h": {"type": "integer"}, "cursor": {"type": "boolean"}}, ["center"], look_at),
     ("move_to", "Move the cursor to a point along a smooth curve.",
      {"pos": COORD, "duration": {"type": "number"}}, ["pos"], move_to),
     ("move_rel", "Move the cursor by (dx, dy) in a coordinate system, along a smooth curve.",
