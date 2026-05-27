@@ -1,12 +1,51 @@
 'use client';
 
-import { Button, Input, Label, Modal, TextField, toast } from '@heroui/react';
+import { Button, Input, Label, Modal, Slider, TextField, toast } from '@heroui/react';
 import { useState } from 'react';
 import { LuDices } from 'react-icons/lu';
 import { createAgent } from '@/lib/gateway';
 import { randomName } from '@/lib/names';
 
 const ALL_TAKEN = 'All names are in use — type one manually.';
+
+/** A resource-cap slider where 0 means "unlimited". */
+function LimitSlider({
+  label,
+  value,
+  onChange,
+  max,
+  step,
+  unit,
+}: {
+  label: string;
+  value: number;
+  onChange: (v: number) => void;
+  max: number;
+  step: number;
+  unit: string;
+}) {
+  return (
+    <Slider
+      className="flex-1"
+      value={value}
+      onChange={(v) => onChange(Array.isArray(v) ? v[0]! : v)}
+      minValue={0}
+      maxValue={max}
+      step={step}
+    >
+      <div className="flex items-center justify-between">
+        <Label>{label}</Label>
+        <span className="text-muted text-xs tabular-nums">
+          {value === 0 ? 'unlimited' : `${value} ${unit}`}
+        </span>
+      </div>
+      <Slider.Track>
+        <Slider.Fill />
+        <Slider.Thumb />
+      </Slider.Track>
+    </Slider>
+  );
+}
 
 /** Random `workspace-XXXXXX` id, suffix from 0-9 + A-Z (mirrors the gateway). */
 function defaultHostname(): string {
@@ -43,8 +82,8 @@ export function CreateAgentModal({
   const [open, setOpen] = useState(false);
   const [hostname, setHostname] = useState('');
   const [name, setName] = useState('');
-  const [cpus, setCpus] = useState('');
-  const [memGb, setMemGb] = useState('');
+  const [cpus, setCpus] = useState(0);
+  const [memGb, setMemGb] = useState(0);
   const [timezone, setTimezone] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -60,8 +99,8 @@ export function CreateAgentModal({
     const next = randomName(taken);
     setName(next ?? '');
     if (!next) toast.warning(ALL_TAKEN);
-    setCpus('');
-    setMemGb('');
+    setCpus(0);
+    setMemGb(0);
     setTimezone(systemTimezone());
     setError(null);
     setOpen(true);
@@ -71,13 +110,11 @@ export function CreateAgentModal({
     setBusy(true);
     setError(null);
     try {
-      const cpuNum = parseFloat(cpus);
-      const memNum = parseFloat(memGb);
       await createAgent({
         hostname: hostname.trim(),
         username: name.trim(),
-        cpus: cpuNum > 0 ? cpuNum : undefined,
-        memoryMb: memNum > 0 ? Math.round(memNum * 1024) : undefined,
+        cpus: cpus > 0 ? cpus : undefined,
+        memoryMb: memGb > 0 ? Math.round(memGb * 1024) : undefined,
         timezone: timezone.trim() || undefined,
       });
       setOpen(false);
@@ -137,27 +174,23 @@ export function CreateAgentModal({
                   <Input placeholder="workspace-A3F9K2" />
                 </TextField>
 
-                <div className="flex gap-3">
-                  <TextField
-                    className="flex-1"
-                    name="cpus"
+                <div className="flex flex-col gap-5 pt-1">
+                  <LimitSlider
+                    label="CPUs"
                     value={cpus}
                     onChange={setCpus}
-                    type="number"
-                  >
-                    <Label>CPUs</Label>
-                    <Input placeholder="unlimited" min={0} step={0.5} />
-                  </TextField>
-                  <TextField
-                    className="flex-1"
-                    name="memGb"
+                    max={16}
+                    step={0.5}
+                    unit="cores"
+                  />
+                  <LimitSlider
+                    label="Max memory"
                     value={memGb}
                     onChange={setMemGb}
-                    type="number"
-                  >
-                    <Label>Max memory (GB)</Label>
-                    <Input placeholder="unlimited" min={0} step={0.5} />
-                  </TextField>
+                    max={32}
+                    step={1}
+                    unit="GB"
+                  />
                 </div>
 
                 <TextField name="timezone" value={timezone} onChange={setTimezone}>
