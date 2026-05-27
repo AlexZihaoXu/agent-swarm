@@ -54,8 +54,9 @@ INSTRUCTIONS = (
     "origin_y+py); 3) act (move/click/type/key); 4) glance/look_at again to verify, "
     "since the screen changes after actions. list_windows gives an overview of "
     "open windows; get_window(id|filter, sys) gives one window's detailed bounds "
-    "(in any coordinate system), frame, and state; focus_window/close_window "
-    "raise or close one. Before a relative move (move_rel), "
+    "(in any coordinate system), frame, and state; get_focused_window gives the "
+    "same for whatever has keyboard focus (check it before typing); "
+    "focus_window/close_window raise or close one. Before a relative move (move_rel), "
     "glance/look_at with cursor:true so you can see where the pointer currently "
     "is; cursor_shape shows the pointer ICON, so you can tell if a hover landed "
     "on a link (hand) or text field (I-beam). Use list_keys for valid key names "
@@ -386,58 +387,29 @@ def list_windows(args: dict) -> dict:
     return _text(json.dumps({"sys": "full", "windows": out}))
 
 
-def get_window(args: dict) -> dict:
-    # Detailed info for one window, with bounds in the requested coordinate
-    # system. Target it by id (from list_windows), by `filter` (first title/app
-    # match), or — if neither is given — the currently active window.
-    sys_name = args.get("sys", "full")
-    if sys_name not in SYS_DIMS:
-        raise ValueError(f"unknown coordinate system {sys_name!r} (low|medium|full)")
-    a_clients = d.intern_atom("_NET_CLIENT_LIST")
-    a_name = d.intern_atom("_NET_WM_NAME")
-    a_active = d.intern_atom("_NET_ACTIVE_WINDOW")
-    a_state = d.intern_atom("_NET_WM_STATE")
-    a_frame = d.intern_atom("_NET_FRAME_EXTENTS")
-    a_pid = d.intern_atom("_NET_WM_PID")
-    clients = _root.get_full_property(a_clients, X.AnyPropertyType)
+def _client_ids() -> tuple[list[int], int]:
+    clients = _root.get_full_property(d.intern_atom("_NET_CLIENT_LIST"), X.AnyPropertyType)
     ids = [int(i) for i in clients.value] if clients else []
-    act = _root.get_full_property(a_active, X.AnyPropertyType)
-    active_id = int(act.value[0]) if act and len(act.value) else 0
+    act = _root.get_full_property(d.intern_atom("_NET_ACTIVE_WINDOW"), X.AnyPropertyType)
+    return ids, (int(act.value[0]) if act and len(act.value) else 0)
 
-    target = None
-    if args.get("id"):
-        wid = int(args["id"])
-        target = wid if wid in ids else None
-    elif args.get("filter"):
-        flt = str(args["filter"]).lower()
-        for wid in ids:
-            try:
-                w = d.create_resource_object("window", wid)
-                np = w.get_full_property(a_name, 0)
-                title = np.value.decode("utf-8", "replace") if np and np.value else (w.get_wm_name() or "")
-                cls = w.get_wm_class()
-                app = cls[1] if cls and len(cls) > 1 else ""
-            except Exception:  # noqa: BLE001
-                continue
-            if flt in f"{title} {app}".lower():
-                target = wid
-                break
-    else:
-        target = active_id if active_id in ids else None
-    if not target:
-        return _err("no matching window (try list_windows)")
 
-    win = d.create_resource_object("window", target)
-    np = win.get_full_property(a_name, 0)
+def _title_app(win) -> tuple[str, str]:
+    np = win.get_full_property(d.intern_atom("_NET_WM_NAME"), 0)
     title = np.value.decode("utf-8", "replace") if np and np.value else (win.get_wm_name() or "")
     cls = win.get_wm_class()
-    app = cls[1] if cls and len(cls) > 1 else ""
+    return title, (cls[1] if cls and len(cls) > 1 else "")
+
+
+def _window_detail(target: int, active_id: int, sys_name: str) -> dict:
+    win = d.create_resource_object("window", target)
+    title, app = _title_app(win)
     g = win.get_geometry()
     t = _root.translate_coords(win, 0, 0)
     nx, ny, w, h = t.x, t.y, g.width, g.height
     sw, sh = SYS_DIMS[sys_name]
 
-    st = win.get_full_property(a_state, X.AnyPropertyType)
+    st = win.get_full_property(d.intern_atom("_NET_WM_STATE"), X.AnyPropertyType)
     states = set()
     if st:
         for atom in st.value:
@@ -445,9 +417,9 @@ def get_window(args: dict) -> dict:
                 states.add(d.get_atom_name(atom))
             except Exception:  # noqa: BLE001
                 pass
-    fr = win.get_full_property(a_frame, X.AnyPropertyType)
+    fr = win.get_full_property(d.intern_atom("_NET_FRAME_EXTENTS"), X.AnyPropertyType)
     frame = list(fr.value) if fr and len(fr.value) >= 4 else [0, 0, 0, 0]
-    pidp = win.get_full_property(a_pid, X.AnyPropertyType)
+    pidp = win.get_full_property(d.intern_atom("_NET_WM_PID"), X.AnyPropertyType)
     pid = int(pidp.value[0]) if pidp and len(pidp.value) else None
 
     return _text(json.dumps({
@@ -468,6 +440,64 @@ def get_window(args: dict) -> dict:
         "fullscreen": "_NET_WM_STATE_FULLSCREEN" in states,
         "pid": pid,
     }))
+
+
+def get_window(args: dict) -> dict:
+    # Detailed info for one window, with bounds in the requested coordinate
+    # system. Target it by id (from list_windows), by `filter` (first title/app
+    # match), or — if neither is given — the currently active window.
+    sys_name = args.get("sys", "full")
+    if sys_name not in SYS_DIMS:
+        raise ValueError(f"unknown coordinate system {sys_name!r} (low|medium|full)")
+    ids, active_id = _client_ids()
+
+    target = None
+    if args.get("id"):
+        wid = int(args["id"])
+        target = wid if wid in ids else None
+    elif args.get("filter"):
+        flt = str(args["filter"]).lower()
+        for wid in ids:
+            try:
+                title, app = _title_app(d.create_resource_object("window", wid))
+            except Exception:  # noqa: BLE001
+                continue
+            if flt in f"{title} {app}".lower():
+                target = wid
+                break
+    else:
+        target = active_id if active_id in ids else None
+    if not target:
+        return _err("no matching window (try list_windows)")
+    return _window_detail(target, active_id, sys_name)
+
+
+def get_focused_window(args: dict) -> dict:
+    # The window with keyboard input focus right now (where typing goes), with
+    # bounds in the requested sys. Uses the X input focus walked up to its
+    # managed top-level window, falling back to the WM's active window.
+    sys_name = args.get("sys", "full")
+    if sys_name not in SYS_DIMS:
+        raise ValueError(f"unknown coordinate system {sys_name!r} (low|medium|full)")
+    ids, active_id = _client_ids()
+    target = 0
+    try:
+        w = d.get_input_focus().focus
+        for _ in range(12):  # walk up the parent chain to a managed client
+            if not isinstance(w, int) and int(w.id) in ids:
+                target = int(w.id)
+                break
+            parent = (w.query_tree().parent if not isinstance(w, int) else None)
+            if not parent or parent == _root:
+                break
+            w = parent
+    except Exception:  # noqa: BLE001 — fall back to the WM's active window
+        pass
+    if not target:
+        target = active_id if active_id in ids else 0
+    if not target:
+        return _err("no focused window (try list_windows)")
+    return _window_detail(target, active_id, sys_name)
 
 
 def focus_window(args: dict) -> dict:
@@ -593,6 +623,8 @@ TOOLS = [
      {"filter": {"type": "string"}}, [], list_windows),
     ("get_window", "Detailed info for ONE window, with bounds in the requested coordinate system (sys, default full): id, title, app, bounds {x,y,w,h}, full_bounds (native), frame extents (decoration sizes), active/minimized/maximized/fullscreen, pid. Target by id OR filter (first title/app match) OR neither (the active window).",
      {"id": {"type": "string"}, "filter": {"type": "string"}, "sys": {"type": "string", "enum": ["low", "medium", "full"]}}, [], get_window),
+    ("get_focused_window", "Same detail as get_window, but for the window that currently has keyboard focus (where typing goes). Useful to confirm which app/field is focused before typing or sending hotkeys.",
+     {"sys": {"type": "string", "enum": ["low", "medium", "full"]}}, [], get_focused_window),
     ("focus_window", "Raise and focus a window (by id from list_windows).",
      {"id": {"type": "string"}}, ["id"], focus_window),
     ("close_window", "Close a window (by id from list_windows).",
