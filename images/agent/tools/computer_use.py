@@ -40,7 +40,7 @@ def _log(tag: str, s: str) -> None:
             pass
 
 from Xlib import X, XK, display
-from Xlib.ext import xtest
+from Xlib.ext import xfixes, xtest
 
 PROTOCOL_VERSION = "2025-06-18"
 
@@ -52,13 +52,14 @@ INSTRUCTIONS = (
     "(dragging, resizing, small targets) — it returns a native crop plus its "
     "full_res origin so a crop pixel (px,py) maps to full coord (origin_x+px, "
     "origin_y+py); 3) act (move/click/type/key); 4) glance/look_at again to verify, "
-    "since the screen changes after actions. Use list_windows to get window "
-    "bounds/ids, and set_window/focus_window/close_window to arrange windows — "
-    "prefer these over shelling out to xdotool/wmctrl. "
-    "Before a relative move (move_rel), "
+    "since the screen changes after actions. list_windows gives an overview of "
+    "open windows; get_window(id|filter, sys) gives one window's detailed bounds "
+    "(in any coordinate system), frame, and state; focus_window/close_window "
+    "raise or close one. Before a relative move (move_rel), "
     "glance/look_at with cursor:true so you can see where the pointer currently "
-    "is. Use list_keys for valid key names (keydown/keyup/press/hotkey). Mouse "
-    "moves are straight and smoothly eased automatically."
+    "is; cursor_shape shows the pointer ICON, so you can tell if a hover landed "
+    "on a link (hand) or text field (I-beam). Use list_keys for valid key names "
+    "(keydown/keyup/press/hotkey). Mouse moves are straight and smoothly eased."
 )
 
 # X connection is opened lazily (by _connect, before the first tool call) so the
@@ -225,6 +226,44 @@ def look_at(args: dict) -> dict:
     return _image(png, "image/png", note)
 
 
+_xfixes_ready = False
+
+
+def cursor_shape(_args: dict) -> dict:
+    # The hardware cursor isn't in screenshots, so read its actual icon via the
+    # XFixes extension. `serial` changes whenever the shape changes — compare it
+    # across calls to tell if e.g. an arrow became a hand (link) or I-beam (text).
+    global _xfixes_ready
+    if not _xfixes_ready:
+        d.xfixes_query_version()
+        _xfixes_ready = True
+    ci = d.xfixes_get_cursor_image(_root)
+    w, h = int(ci.width), int(ci.height)
+    buf = bytearray(w * h * 4)
+    for i, p in enumerate(ci.cursor_image):
+        a = (p >> 24) & 0xFF
+        r, g, b = (p >> 16) & 0xFF, (p >> 8) & 0xFF, p & 0xFF
+        if 0 < a < 255:  # XFixes pixels are premultiplied — undo for true colors
+            r, g, b = min(255, r * 255 // a), min(255, g * 255 // a), min(255, b * 255 // a)
+        j = i * 4
+        buf[j], buf[j + 1], buf[j + 2], buf[j + 3] = r, g, b, a
+    scale = max(1, round(160 / max(w, h)))  # upscale so a ~24px cursor is legible
+    out = subprocess.run(
+        ["convert", "-size", f"{w * scale}x{h * scale}", "xc:#808080",
+         "(", "-size", f"{w}x{h}", "-depth", "8", "rgba:-",
+         "-filter", "point", "-resize", f"{scale * 100}%", ")",
+         "-compose", "over", "-composite", "png:-"],
+        input=bytes(buf), capture_output=True,
+    )
+    if out.returncode != 0 or not out.stdout:
+        return _err("cursor render failed: " + out.stderr.decode("utf-8", "replace")[:200])
+    note = (
+        f"cursor icon — {w}x{h}, hotspot ({ci.xhot},{ci.yhot}), serial {ci.cursor_serial} "
+        f"(shown {scale}x on gray). The serial changes whenever the cursor shape changes."
+    )
+    return _image(out.stdout, "image/png", note)
+
+
 # --- mouse -----------------------------------------------------------------
 def _move_curve(nx: int, ny: int, duration: float | None) -> None:
     sx, sy, _ = _pointer()
@@ -347,21 +386,88 @@ def list_windows(args: dict) -> dict:
     return _text(json.dumps({"sys": "full", "windows": out}))
 
 
-def _win_target(args: dict) -> tuple[int, int, int, int]:
-    sys = args.get("sys", "full")
-    nx, ny = _to_native(args["x"], args["y"], sys)
-    sw, sh = SYS_DIMS[sys]
-    return nx, ny, round(args["w"] * NATIVE_W / sw), round(args["h"] * NATIVE_H / sh)
+def get_window(args: dict) -> dict:
+    # Detailed info for one window, with bounds in the requested coordinate
+    # system. Target it by id (from list_windows), by `filter` (first title/app
+    # match), or — if neither is given — the currently active window.
+    sys_name = args.get("sys", "full")
+    if sys_name not in SYS_DIMS:
+        raise ValueError(f"unknown coordinate system {sys_name!r} (low|medium|full)")
+    a_clients = d.intern_atom("_NET_CLIENT_LIST")
+    a_name = d.intern_atom("_NET_WM_NAME")
+    a_active = d.intern_atom("_NET_ACTIVE_WINDOW")
+    a_state = d.intern_atom("_NET_WM_STATE")
+    a_frame = d.intern_atom("_NET_FRAME_EXTENTS")
+    a_pid = d.intern_atom("_NET_WM_PID")
+    clients = _root.get_full_property(a_clients, X.AnyPropertyType)
+    ids = [int(i) for i in clients.value] if clients else []
+    act = _root.get_full_property(a_active, X.AnyPropertyType)
+    active_id = int(act.value[0]) if act and len(act.value) else 0
 
+    target = None
+    if args.get("id"):
+        wid = int(args["id"])
+        target = wid if wid in ids else None
+    elif args.get("filter"):
+        flt = str(args["filter"]).lower()
+        for wid in ids:
+            try:
+                w = d.create_resource_object("window", wid)
+                np = w.get_full_property(a_name, 0)
+                title = np.value.decode("utf-8", "replace") if np and np.value else (w.get_wm_name() or "")
+                cls = w.get_wm_class()
+                app = cls[1] if cls and len(cls) > 1 else ""
+            except Exception:  # noqa: BLE001
+                continue
+            if flt in f"{title} {app}".lower():
+                target = wid
+                break
+    else:
+        target = active_id if active_id in ids else None
+    if not target:
+        return _err("no matching window (try list_windows)")
 
-def set_window(args: dict) -> dict:
-    # Move + resize a window (by id from list_windows) — for tiling/arranging.
-    wid = str(args["id"])
-    nx, ny, nw, nh = _win_target(args)
-    subprocess.run(
-        ["xdotool", "windowmove", wid, str(nx), str(ny), "windowsize", wid, str(nw), str(nh)]
-    )
-    return _text(f"set window {wid} to full ({nx},{ny}) {nw}x{nh}." + _bounds_warn(nx, ny))
+    win = d.create_resource_object("window", target)
+    np = win.get_full_property(a_name, 0)
+    title = np.value.decode("utf-8", "replace") if np and np.value else (win.get_wm_name() or "")
+    cls = win.get_wm_class()
+    app = cls[1] if cls and len(cls) > 1 else ""
+    g = win.get_geometry()
+    t = _root.translate_coords(win, 0, 0)
+    nx, ny, w, h = t.x, t.y, g.width, g.height
+    sw, sh = SYS_DIMS[sys_name]
+
+    st = win.get_full_property(a_state, X.AnyPropertyType)
+    states = set()
+    if st:
+        for atom in st.value:
+            try:
+                states.add(d.get_atom_name(atom))
+            except Exception:  # noqa: BLE001
+                pass
+    fr = win.get_full_property(a_frame, X.AnyPropertyType)
+    frame = list(fr.value) if fr and len(fr.value) >= 4 else [0, 0, 0, 0]
+    pidp = win.get_full_property(a_pid, X.AnyPropertyType)
+    pid = int(pidp.value[0]) if pidp and len(pidp.value) else None
+
+    return _text(json.dumps({
+        "id": str(target),
+        "title": title,
+        "app": app,
+        "active": target == active_id,
+        "sys": sys_name,
+        "bounds": {
+            "x": round(nx * sw / NATIVE_W), "y": round(ny * sh / NATIVE_H),
+            "w": round(w * sw / NATIVE_W), "h": round(h * sh / NATIVE_H), "sys": sys_name,
+        },
+        "full_bounds": {"x": nx, "y": ny, "w": w, "h": h},
+        "frame": {"left": frame[0], "right": frame[1], "top": frame[2], "bottom": frame[3]},
+        "minimized": "_NET_WM_STATE_HIDDEN" in states,
+        "maximized": "_NET_WM_STATE_MAXIMIZED_VERT" in states
+        and "_NET_WM_STATE_MAXIMIZED_HORZ" in states,
+        "fullscreen": "_NET_WM_STATE_FULLSCREEN" in states,
+        "pid": pid,
+    }))
 
 
 def focus_window(args: dict) -> dict:
@@ -476,16 +582,17 @@ TOOLS = [
      {"dx": {"type": "number"}, "dy": {"type": "number"}, "sys": {"type": "string", "enum": ["low", "medium", "full"]}, "duration": {"type": "number"}},
      ["dx", "dy"], move_rel),
     ("get_pos", "Current cursor position in all coordinate systems.", {}, [], get_pos),
+    ("cursor_shape", "Image of the current mouse-cursor icon (arrow vs hand over a link, I-beam over text, watch while loading). Returns a `serial` that changes whenever the shape changes — useful to confirm a hover landed on a clickable/text target.",
+     {}, [], cursor_shape),
     ("click", "Click at the current position. button (default left), num_clicks (default 1), interval seconds between clicks (default 0.15).",
      {"button": BTN, "num_clicks": {"type": "integer"}, "interval": {"type": "number"}}, [], click),
     ("mouse_down", "Press and hold a mouse button.", {"button": BTN}, [], mouse_down),
     ("mouse_up", "Release a mouse button.", {"button": BTN}, [], mouse_up),
     ("get_buttons", "Which mouse buttons are currently held.", {}, [], get_buttons),
-    ("list_windows", "List open app windows: each has id, title, app class, full_res bounds {x,y,w,h}, and active flag. Optional case-insensitive `filter` matches title/app. Use the id with set_window/focus_window/close_window.",
+    ("list_windows", "List open app windows: each has id, title, app class, full_res bounds {x,y,w,h}, and active flag. Optional case-insensitive `filter` matches title/app. Use get_window for one window's details.",
      {"filter": {"type": "string"}}, [], list_windows),
-    ("set_window", "Move AND resize a window (by id from list_windows) — for tiling/arranging. Coordinates in the given sys (default full).",
-     {"id": {"type": "string"}, "x": {"type": "number"}, "y": {"type": "number"}, "w": {"type": "number"}, "h": {"type": "number"}, "sys": {"type": "string", "enum": ["low", "medium", "full"]}},
-     ["id", "x", "y", "w", "h"], set_window),
+    ("get_window", "Detailed info for ONE window, with bounds in the requested coordinate system (sys, default full): id, title, app, bounds {x,y,w,h}, full_bounds (native), frame extents (decoration sizes), active/minimized/maximized/fullscreen, pid. Target by id OR filter (first title/app match) OR neither (the active window).",
+     {"id": {"type": "string"}, "filter": {"type": "string"}, "sys": {"type": "string", "enum": ["low", "medium", "full"]}}, [], get_window),
     ("focus_window", "Raise and focus a window (by id from list_windows).",
      {"id": {"type": "string"}}, ["id"], focus_window),
     ("close_window", "Close a window (by id from list_windows).",
