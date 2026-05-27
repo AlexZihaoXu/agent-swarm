@@ -23,14 +23,38 @@ Register with:
 import base64
 import json
 import math
+import os
 import subprocess
 import sys
 import time
+
+_DEBUG = os.environ.get("CU_DEBUG")
+
+
+def _log(tag: str, s: str) -> None:
+    if _DEBUG:
+        try:
+            with open(_DEBUG, "a") as f:
+                f.write(f"{tag} {s}\n")
+        except OSError:
+            pass
 
 from Xlib import X, XK, display
 from Xlib.ext import xtest
 
 PROTOCOL_VERSION = "2025-06-18"
+
+INSTRUCTIONS = (
+    "Control this Linux desktop. Coordinates are objects {x, y, sys} where sys is "
+    "'low' (720x480), 'medium' (1280x720), or 'full' (native res); you may mix "
+    "systems freely and the tool converts. WORKFLOW: 1) `glance` (low/normal) to "
+    "see the screen cheaply and locate UI; 2) `look_at` for pixel-precise work "
+    "(dragging, resizing, small targets) — it returns a native crop plus its "
+    "full_res origin so a crop pixel (px,py) maps to full coord (origin_x+px, "
+    "origin_y+py); 3) act (move/click/type/key); 4) glance/look_at again to verify, "
+    "since the screen changes after actions. Use list_keys for valid key names "
+    "(keydown/keyup/press/hotkey). Mouse moves follow a smooth curve automatically."
+)
 
 # X connection is opened lazily (by _connect, before the first tool call) so the
 # server starts cleanly even if the X display isn't up yet at launch.
@@ -184,18 +208,28 @@ def _move_curve(nx: int, ny: int, duration: float | None) -> None:
     _warp(nx, ny)
 
 
+def _bounds_warn(nx: int, ny: int) -> str:
+    if 0 <= nx < NATIVE_W and 0 <= ny < NATIVE_H:
+        return ""
+    return (
+        f" WARNING: target ({nx},{ny}) is off-screen "
+        f"[0..{NATIVE_W - 1}]x[0..{NATIVE_H - 1}] — clamped by X."
+    )
+
+
 def move_to(args: dict) -> dict:
     nx, ny = _coord(args["pos"])
     _move_curve(nx, ny, args.get("duration"))
-    return _text(f"moved to full ({nx},{ny})")
+    return _text(f"moved to full ({nx},{ny})." + _bounds_warn(nx, ny))
 
 
 def move_rel(args: dict) -> dict:
     sx, sy, _ = _pointer()
     dnx, dny = _to_native(args["dx"], args["dy"], args.get("sys", "full"))
     # _to_native scales as if from origin — that's exactly the delta scale.
-    _move_curve(sx + dnx, sy + dny, args.get("duration"))
-    return _text(f"moved by full ({dnx},{dny})")
+    tx, ty = sx + dnx, sy + dny
+    _move_curve(tx, ty, args.get("duration"))
+    return _text(f"moved by full ({dnx},{dny}) to ({tx},{ty})." + _bounds_warn(tx, ty))
 
 
 def get_pos(_args: dict) -> dict:
@@ -361,7 +395,9 @@ def _specs() -> list[dict]:
 
 
 def _send(obj: dict) -> None:
-    sys.stdout.write(json.dumps(obj) + "\n")
+    line = json.dumps(obj)
+    _log("OUT", line)
+    sys.stdout.write(line + "\n")
     sys.stdout.flush()
 
 
@@ -372,7 +408,8 @@ def _handle(msg: dict) -> None:
         ver = (msg.get("params") or {}).get("protocolVersion") or PROTOCOL_VERSION
         _send({"jsonrpc": "2.0", "id": mid, "result": {
             "protocolVersion": ver, "capabilities": {"tools": {}},
-            "serverInfo": {"name": "computer-use", "version": "0.1.0"}}})
+            "serverInfo": {"name": "computer-use", "version": "0.1.0"},
+            "instructions": INSTRUCTIONS}})
     elif method == "ping":
         _send({"jsonrpc": "2.0", "id": mid, "result": {}})
     elif method == "tools/list":
@@ -400,11 +437,15 @@ def main() -> None:
         line = line.strip()
         if not line:
             continue
+        _log("IN", line)
         try:
             msg = json.loads(line)
         except json.JSONDecodeError:
             continue
-        _handle(msg)
+        try:
+            _handle(msg)
+        except Exception as e:  # noqa: BLE001 — never let one bad message kill the server
+            _log("ERR", f"{type(e).__name__}: {e}")
 
 
 if __name__ == "__main__":
