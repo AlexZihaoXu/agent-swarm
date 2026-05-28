@@ -1,7 +1,7 @@
 'use client';
 
 import { Button } from '@heroui/react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { animate, motion, AnimatePresence } from 'framer-motion';
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -292,6 +292,34 @@ function TasksPanel({ tasks }: { tasks: AgentTask[] }) {
       </div>
     </div>
   );
+}
+
+/** Live generated-token count that eases (lerps) to each new value and shifts
+ *  colour by magnitude as it climbs — same idea as the dashboard usage rings. */
+function AnimatedTokens({ value }: { value: number }) {
+  const [display, setDisplay] = useState(value);
+  const prev = useRef(value);
+  useEffect(() => {
+    const controls = animate(prev.current, value, {
+      duration: 0.6,
+      ease: 'easeOut',
+      onUpdate: (v) => setDisplay(v),
+    });
+    prev.current = value;
+    return () => controls.stop();
+  }, [value]);
+  const n = Math.round(display);
+  const text = n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+  // muted → accent → warning → danger as the response grows.
+  const color =
+    n >= 30000
+      ? 'text-danger'
+      : n >= 10000
+        ? 'text-warning'
+        : n >= 2000
+          ? 'text-accent'
+          : 'text-muted/70';
+  return <span className={`tabular-nums transition-colors duration-700 ${color}`}>{text}</span>;
 }
 
 /** Three bouncing dots, shown where the agent's next reply will appear. */
@@ -641,10 +669,7 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
                     <span className="flex items-center gap-0.5">
                       {stats.activity.elapsed && <span className="mr-0.5">·</span>}
                       <LuArrowDown className="size-3" />
-                      {stats.activity.genTokens >= 1000
-                        ? `${(stats.activity.genTokens / 1000).toFixed(1)}k`
-                        : stats.activity.genTokens}{' '}
-                      tokens
+                      <AnimatedTokens value={stats.activity.genTokens} /> tokens
                     </span>
                   )}
                 </span>
