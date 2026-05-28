@@ -1,21 +1,22 @@
 'use client';
 
-import { Button, Input, Label, Modal, Slider, Switch, TextField, toast } from '@heroui/react';
+import { Button, Input, Label, Modal, Slider, Switch, Tabs, TextField, toast } from '@heroui/react';
 import { useEffect, useState } from 'react';
 import { LuDices } from 'react-icons/lu';
 import { getAgent, startAgent, stopAgent, updateAgent, type Agent } from '@/lib/gateway';
 import { randomName } from '@/lib/names';
+import { IntegrationsPanel } from './IntegrationsPanel';
 
 /** Slider default when first enabling the override (a touch earlier than the
  *  ~83% claude default, so it's a meaningful change). */
 const DEFAULT_PCT = 80;
 
 /**
- * Per-agent settings: display name (rename) + the auto-compact threshold
- * (CLAUDE_AUTOCOMPACT_PCT_OVERRIDE). The name applies live; changing the
- * threshold needs the agent to restart (stop → start) so the supervisor
- * relaunches `claude` with the new env — so we prompt to restart when it
- * changes on a running agent.
+ * Per-agent settings, in two tabs:
+ *  - General: display name (rename, live) + auto-compact threshold
+ *    (CLAUDE_AUTOCOMPACT_PCT_OVERRIDE; needs a restart to take effect, so we
+ *    prompt to restart when it changes on a running agent).
+ *  - Integrations: connect the agent to outside platforms (Discord first).
  */
 export function AgentSettingsModal({
   agentId,
@@ -37,11 +38,13 @@ export function AgentSettingsModal({
   const [pct, setPct] = useState(DEFAULT_PCT);
   const [busy, setBusy] = useState(false);
   const [phase, setPhase] = useState<'form' | 'restart'>('form');
+  const [tab, setTab] = useState('general');
 
   // Load fresh settings each time the modal opens.
   useEffect(() => {
     if (!isOpen) return;
     setPhase('form');
+    setTab('general');
     let alive = true;
     getAgent(agentId)
       .then((a) => {
@@ -105,7 +108,7 @@ export function AgentSettingsModal({
         isDismissable={!busy}
       >
         <Modal.Container>
-          <Modal.Dialog className="sm:max-w-[440px]">
+          <Modal.Dialog className="sm:max-w-[520px]">
             <Modal.CloseTrigger />
             <Modal.Header>
               <Modal.Heading>
@@ -115,75 +118,110 @@ export function AgentSettingsModal({
 
             {phase === 'form' ? (
               <>
-                <Modal.Body className="space-y-5">
-                  <div className="flex items-end gap-2">
-                    <TextField className="flex-1" value={name} onChange={setName} isRequired>
-                      <Label>Display name</Label>
-                      <Input placeholder="brave-otter" />
-                    </TextField>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      aria-label="Shuffle name"
-                      onPress={() => {
-                        const next = randomName(taken);
-                        if (next) setName(next);
-                        else toast.warning('All names are in use — type one manually.');
-                      }}
-                    >
-                      <LuDices className="size-4" />
-                    </Button>
-                  </div>
+                <Modal.Body>
+                  <Tabs selectedKey={tab} onSelectionChange={(k) => setTab(String(k))}>
+                    <Tabs.ListContainer>
+                      <Tabs.List aria-label="Settings sections">
+                        <Tabs.Tab id="general">
+                          General
+                          <Tabs.Indicator />
+                        </Tabs.Tab>
+                        <Tabs.Tab id="integrations">
+                          Integrations
+                          <Tabs.Indicator />
+                        </Tabs.Tab>
+                      </Tabs.List>
+                    </Tabs.ListContainer>
 
-                  <div className="space-y-3">
-                    <Switch isSelected={override} onChange={setOverride}>
-                      <Switch.Control>
-                        <Switch.Thumb />
-                      </Switch.Control>
-                      <Switch.Content>
-                        <Label className="text-sm">Override auto-compact threshold</Label>
-                        <p className="text-muted text-xs">
-                          When context usage reaches this %, <code>claude</code> auto-compacts. Off
-                          = the default (~83%).
-                        </p>
-                      </Switch.Content>
-                    </Switch>
+                    <Tabs.Panel id="general" className="space-y-5 pt-5">
+                      <div className="flex items-end gap-2">
+                        <TextField className="flex-1" value={name} onChange={setName} isRequired>
+                          <Label>Display name</Label>
+                          <Input placeholder="brave-otter" />
+                        </TextField>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          aria-label="Shuffle name"
+                          onPress={() => {
+                            const next = randomName(taken);
+                            if (next) setName(next);
+                            else toast.warning('All names are in use — type one manually.');
+                          }}
+                        >
+                          <LuDices className="size-4" />
+                        </Button>
+                      </div>
 
-                    {override && (
-                      <Slider
-                        value={pct}
-                        onChange={(v) => setPct(typeof v === 'number' ? v : (v[0] ?? DEFAULT_PCT))}
-                        minValue={1}
-                        maxValue={100}
-                        step={1}
-                      >
-                        <div className="flex items-center justify-between">
-                          <Label className="text-sm">Compact at</Label>
-                          <span className="text-sm font-medium tabular-nums">
-                            {Math.round(pct)}%
-                          </span>
-                        </div>
-                        <Slider.Track>
-                          <Slider.Fill />
-                          <Slider.Thumb />
-                        </Slider.Track>
-                      </Slider>
-                    )}
+                      <div className="space-y-3">
+                        <Switch isSelected={override} onChange={setOverride}>
+                          <Switch.Control>
+                            <Switch.Thumb />
+                          </Switch.Control>
+                          <Switch.Content>
+                            <Label className="text-sm">Override auto-compact threshold</Label>
+                            <p className="text-muted text-xs">
+                              When context usage reaches this %, <code>claude</code> auto-compacts.
+                              Off = the default (~83%).
+                            </p>
+                          </Switch.Content>
+                        </Switch>
 
-                    {running && pctChanged && (
-                      <p className="text-warning text-xs">
-                        Changing the threshold requires restarting the agent to take effect.
-                      </p>
-                    )}
-                  </div>
+                        {override && (
+                          <Slider
+                            value={pct}
+                            onChange={(v) =>
+                              setPct(typeof v === 'number' ? v : (v[0] ?? DEFAULT_PCT))
+                            }
+                            minValue={1}
+                            maxValue={100}
+                            step={1}
+                          >
+                            <div className="flex items-center justify-between">
+                              <Label className="text-sm">Compact at</Label>
+                              <span className="text-sm font-medium tabular-nums">
+                                {Math.round(pct)}%
+                              </span>
+                            </div>
+                            <Slider.Track>
+                              <Slider.Fill />
+                              <Slider.Thumb />
+                            </Slider.Track>
+                          </Slider>
+                        )}
+
+                        {running && pctChanged && (
+                          <p className="text-warning text-xs">
+                            Changing the threshold requires restarting the agent to take effect.
+                          </p>
+                        )}
+                      </div>
+                    </Tabs.Panel>
+
+                    <Tabs.Panel id="integrations" className="pt-5">
+                      <IntegrationsPanel
+                        agentId={agentId}
+                        active={isOpen && tab === 'integrations'}
+                      />
+                    </Tabs.Panel>
+                  </Tabs>
                 </Modal.Body>
+
                 <Modal.Footer>
-                  <Button slot="close" variant="tertiary" isDisabled={busy}>
-                    Cancel
-                  </Button>
-                  <Button onPress={() => void save()} isDisabled={busy || !name.trim()}>
-                    {busy ? 'Saving…' : 'Save'}
-                  </Button>
+                  {tab === 'general' ? (
+                    <>
+                      <Button slot="close" variant="tertiary" isDisabled={busy}>
+                        Cancel
+                      </Button>
+                      <Button onPress={() => void save()} isDisabled={busy || !name.trim()}>
+                        {busy ? 'Saving…' : 'Save'}
+                      </Button>
+                    </>
+                  ) : (
+                    <Button slot="close" variant="tertiary" isDisabled={busy}>
+                      Close
+                    </Button>
+                  )}
                 </Modal.Footer>
               </>
             ) : (

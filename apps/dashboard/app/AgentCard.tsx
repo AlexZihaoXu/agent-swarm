@@ -16,11 +16,10 @@ import {
 } from '@/lib/gateway';
 import { AgentActivity, AgentStatsInline, useAgentStats } from './AgentStats';
 import { AgentSettingsModal } from './AgentSettingsModal';
-import { IntegrationsModal } from './IntegrationsModal';
 import { ConfirmActionDialog } from './ConfirmActionDialog';
 import { PackageModal } from './PackageModal';
 
-type Dialog = 'stop' | 'remove' | 'upgrade' | 'package' | 'settings' | 'integrations' | null;
+type Dialog = 'stop' | 'remove' | 'upgrade' | 'package' | 'settings' | null;
 
 /** Low-res desktop thumbnail that refreshes every few seconds (cheap, unlike a
  *  live VNC stream per card). Keeps retrying if a frame fails to load. */
@@ -180,9 +179,6 @@ export function AgentCard({
             <Dropdown.Item id="settings" textValue="Settings">
               <Label>Settings…</Label>
             </Dropdown.Item>
-            <Dropdown.Item id="integrations" textValue="Integrations">
-              <Label>Integrations…</Label>
-            </Dropdown.Item>
             <Dropdown.Item id="package" textValue="Package">
               <Label>Package…</Label>
             </Dropdown.Item>
@@ -234,12 +230,6 @@ export function AgentCard({
         onOpenChange={(o) => !o && setDialog(null)}
         onChanged={onChanged}
         taken={taken}
-      />
-
-      <IntegrationsModal
-        agentId={agent.id}
-        isOpen={dialog === 'integrations'}
-        onOpenChange={(o) => !o && setDialog(null)}
       />
 
       <Modal>
