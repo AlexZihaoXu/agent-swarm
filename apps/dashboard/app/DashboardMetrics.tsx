@@ -49,13 +49,30 @@ const TOOLTIP = {
  * extrapolation): green = surely safe, orange = dangerously close, red = will
  * exceed. The arc still shows current usage.
  */
-function UsageRing({ label, w, windowMs }: { label: string; w: RateWindow; windowMs: number }) {
+function UsageRing({
+  label,
+  w,
+  windowMs,
+  outdated,
+}: {
+  label: string;
+  w: RateWindow;
+  windowMs: number;
+  /** No fresh data for >5m (account idle): grey the ring, drop the projection. */
+  outdated: boolean;
+}) {
   const pct = Math.min(100, Math.max(0, w.usedPercent));
   const elapsedFrac = Math.min(1, Math.max(0, 1 - (w.resetsAt - Date.now()) / windowMs));
   // Project to the reset at the current average rate (ignore the first slice of
   // the window where the rate is too noisy to trust).
   const projected = elapsedFrac > 0.05 ? w.usedPercent / elapsedFrac : w.usedPercent;
-  const color = projected >= 100 ? 'danger' : projected >= 80 ? 'warning' : 'success';
+  const color = outdated
+    ? 'default'
+    : projected >= 100
+      ? 'danger'
+      : projected >= 80
+        ? 'warning'
+        : 'success';
   return (
     <div className="flex items-center gap-3">
       <div className="relative grid place-items-center">
@@ -65,14 +82,22 @@ function UsageRing({ label, w, windowMs }: { label: string; w: RateWindow; windo
             <ProgressCircle.FillCircle />
           </ProgressCircle.Track>
         </ProgressCircle>
-        <span className="absolute text-xs font-semibold tabular-nums">{Math.round(pct)}%</span>
+        <span
+          className={`absolute text-xs font-semibold tabular-nums ${outdated ? 'text-muted' : ''}`}
+        >
+          {Math.round(pct)}%
+        </span>
       </div>
       <div className="min-w-0">
         <div className="text-sm font-semibold">{label}</div>
         <div className="text-muted text-xs">{resetsIn(w.resetsAt)}</div>
-        <div className="text-muted/70 text-[11px] tabular-nums">
-          ~{Math.round(projected)}% projected
-        </div>
+        {outdated ? (
+          <div className="text-muted/70 text-[11px]">outdated</div>
+        ) : (
+          <div className="text-muted/70 text-[11px] tabular-nums">
+            ~{Math.round(projected)}% projected
+          </div>
+        )}
       </div>
     </div>
   );
@@ -114,10 +139,25 @@ export function DashboardMetrics() {
         {/* Rate-limit rings + 24h totals */}
         <div className="flex flex-wrap items-center gap-x-8 gap-y-4">
           {m.rateLimits ? (
-            <>
-              <UsageRing label="5h window" w={m.rateLimits.fiveHour} windowMs={5 * 3_600_000} />
-              <UsageRing label="7d window" w={m.rateLimits.sevenDay} windowMs={7 * 86_400_000} />
-            </>
+            (() => {
+              const outdated = Date.now() - m.rateLimits.updatedAt > 5 * 60_000;
+              return (
+                <>
+                  <UsageRing
+                    label="5h window"
+                    w={m.rateLimits.fiveHour}
+                    windowMs={5 * 3_600_000}
+                    outdated={outdated}
+                  />
+                  <UsageRing
+                    label="7d window"
+                    w={m.rateLimits.sevenDay}
+                    windowMs={7 * 86_400_000}
+                    outdated={outdated}
+                  />
+                </>
+              );
+            })()
           ) : (
             <span className="text-muted text-sm">No usage data yet.</span>
           )}

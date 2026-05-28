@@ -11,6 +11,7 @@ import {
   LuChevronDown,
   LuCircle,
   LuCircleCheck,
+  LuImageOff,
   LuListChecks,
   LuListTodo,
   LuPaperclip,
@@ -309,6 +310,43 @@ function TypingDots() {
 }
 
 /**
+ * A captured screenshot in the chat. Screenshots live in a size-capped temp
+ * folder on the agent and are evicted once it fills up, so an older one may be
+ * gone (404 / failed load). When that happens we replace the broken <img> with
+ * a tidy "no longer available" notice instead of a broken-image glyph.
+ */
+function ChatImage({
+  agentId,
+  file,
+  onOpen,
+}: {
+  agentId: string;
+  file: string;
+  onOpen: (url: string) => void;
+}) {
+  const [lost, setLost] = useState(false);
+  const url = `${terminalHttpBase(agentId)}api/shots/${file}`;
+  if (lost) {
+    return (
+      <div className="border-separator text-muted/80 flex items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-xs">
+        <LuImageOff className="size-4 shrink-0" />
+        Screenshot no longer available
+      </div>
+    );
+  }
+  return (
+    <img
+      src={url}
+      alt="screenshot"
+      loading="lazy"
+      onError={() => setLost(true)}
+      onClick={() => onOpen(url)}
+      className="border-separator max-h-80 w-auto max-w-full cursor-zoom-in rounded-lg border"
+    />
+  );
+}
+
+/**
  * One agent's chat: the conversation (polled transcript, typed-out replies,
  * tool calls, interactive-selector answering) plus the composer. Container-
  * agnostic — fills its parent. `active` gates the transcript poll + send socket
@@ -563,16 +601,7 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
                     ) : it.kind === 'todos' ? (
                       <TodosCard key={j} todos={it.todos ?? []} />
                     ) : it.kind === 'image' && it.file ? (
-                      <img
-                        key={j}
-                        src={`${terminalHttpBase(agentId)}api/shots/${it.file}`}
-                        alt="screenshot"
-                        loading="lazy"
-                        onClick={() =>
-                          setLightbox(`${terminalHttpBase(agentId)}api/shots/${it.file}`)
-                        }
-                        className="border-separator max-h-80 w-auto max-w-full cursor-zoom-in rounded-lg border"
-                      />
+                      <ChatImage key={j} agentId={agentId} file={it.file} onOpen={setLightbox} />
                     ) : (
                       <ToolItem key={j} name={it.name ?? ''} detail={it.detail} />
                     ),
@@ -587,14 +616,28 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.2, ease: 'easeOut' }}
-              className="text-muted flex items-center gap-2 text-xs"
+              className="flex items-center gap-2 text-xs"
             >
-              <TypingDots />
-              {stats?.activity && (
-                <span>
-                  {stats.activity.thinking ? 'thinking' : 'working'}
+              {stats?.activity?.verb ? (
+                // Mirror the TUI's flashing gerund (e.g. "Flibbertigibbeting…").
+                <motion.span
+                  className="text-warning font-medium"
+                  animate={{ opacity: [1, 0.45, 1] }}
+                  transition={{ duration: 1.4, repeat: Infinity, ease: 'easeInOut' }}
+                >
+                  {stats.activity.verb}…
+                </motion.span>
+              ) : (
+                <span className="text-muted flex items-center gap-2">
+                  <TypingDots />
+                  working
+                </span>
+              )}
+              {stats?.activity && (stats.activity.elapsed || stats.activity.genTokens != null) && (
+                <span className="text-muted/70 tabular-nums">
+                  {stats.activity.elapsed ?? ''}
                   {stats.activity.genTokens
-                    ? ` · ${
+                    ? `${stats.activity.elapsed ? ' · ' : ''}↓ ${
                         stats.activity.genTokens >= 1000
                           ? `${(stats.activity.genTokens / 1000).toFixed(1)}k`
                           : stats.activity.genTokens

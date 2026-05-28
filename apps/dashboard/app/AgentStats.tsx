@@ -1,6 +1,6 @@
 'use client';
 
-import { ProgressCircle } from '@heroui/react';
+import { ProgressCircle, Tooltip } from '@heroui/react';
 import { motion } from 'framer-motion';
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -199,24 +199,29 @@ function ContextCircle({
   const pct = Math.min(100, (v / lim) * 100);
   const color = pct >= 90 ? 'danger' : pct >= 75 ? 'warning' : 'accent';
   return (
-    <span className="flex items-center gap-1.5 tabular-nums" title={title}>
-      <ProgressCircle
-        aria-label={title}
-        size="sm"
-        color={color}
-        value={v}
-        maxValue={lim}
-        className="scale-75"
-      >
-        <ProgressCircle.Track>
-          <ProgressCircle.TrackCircle />
-          <ProgressCircle.FillCircle />
-        </ProgressCircle.Track>
-      </ProgressCircle>
-      <span className="text-foreground">
-        {compact ? fmtTokens(Math.round(v)) : fmtContext(Math.round(v), lim)}
-      </span>
-    </span>
+    <Tooltip delay={300}>
+      <Tooltip.Trigger>
+        <span className="flex items-center gap-1.5 tabular-nums">
+          <ProgressCircle
+            aria-label={title}
+            size="sm"
+            color={color}
+            value={v}
+            maxValue={lim}
+            className="scale-75"
+          >
+            <ProgressCircle.Track>
+              <ProgressCircle.TrackCircle />
+              <ProgressCircle.FillCircle />
+            </ProgressCircle.Track>
+          </ProgressCircle>
+          <span className="text-foreground">
+            {compact ? fmtTokens(Math.round(v)) : fmtContext(Math.round(v), lim)}
+          </span>
+        </span>
+      </Tooltip.Trigger>
+      <Tooltip.Content>{title}</Tooltip.Content>
+    </Tooltip>
   );
 }
 
@@ -342,13 +347,15 @@ function Metric({
   strong?: boolean;
 }) {
   return (
-    <span
-      title={title}
-      className={`flex items-center gap-1 tabular-nums ${strong ? 'text-foreground' : ''}`}
-    >
-      <span className="opacity-60">{icon}</span>
-      {children}
-    </span>
+    <Tooltip delay={300}>
+      <Tooltip.Trigger>
+        <span className={`flex items-center gap-1 tabular-nums ${strong ? 'text-foreground' : ''}`}>
+          <span className="opacity-60">{icon}</span>
+          {children}
+        </span>
+      </Tooltip.Trigger>
+      <Tooltip.Content>{title}</Tooltip.Content>
+    </Tooltip>
   );
 }
 

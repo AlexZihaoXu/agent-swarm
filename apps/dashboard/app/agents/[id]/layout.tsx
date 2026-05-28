@@ -1,11 +1,12 @@
 'use client';
 
-import { buttonVariants, Tabs } from '@heroui/react';
+import { Button, buttonVariants, Tabs } from '@heroui/react';
 import { motion } from 'framer-motion';
 import Link from 'next/link';
 import { useSelectedLayoutSegment } from 'next/navigation';
-import { use, type ComponentProps, type ReactNode } from 'react';
-import { LuChevronLeft, LuMonitor, LuTerminal } from 'react-icons/lu';
+import { use, useState, type ComponentProps, type ReactNode } from 'react';
+import { LuChevronLeft, LuMonitor, LuSettings, LuTerminal } from 'react-icons/lu';
+import { AgentSettingsModal } from '@/app/AgentSettingsModal';
 import { AgentStatsBar } from '@/app/AgentStats';
 import { ChatWidget } from './ChatWidget';
 import { DesktopLockButton, DesktopLockProvider } from './DesktopLock';
@@ -31,6 +32,7 @@ export default function AgentLayout({
 }) {
   const { id } = use(params);
   const segment = useSelectedLayoutSegment() ?? 'desktop';
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   return (
     <motion.div
@@ -40,7 +42,7 @@ export default function AgentLayout({
       transition={{ duration: 0.18, ease: 'easeOut' }}
     >
       <DesktopLockProvider>
-        <header className="border-separator flex items-center gap-3 border-b py-2 pr-4 pl-4">
+        <header className="border-separator flex flex-wrap items-center gap-x-3 gap-y-2 border-b py-2 pr-4 pl-4">
           <Link
             href="/"
             className={`${buttonVariants({ variant: 'tertiary', size: 'sm' })} gap-1.5`}
@@ -48,7 +50,7 @@ export default function AgentLayout({
             <LuChevronLeft className="size-4" />
             Dashboard
           </Link>
-          <span className="text-sm font-semibold">{id}</span>
+          <span className="hidden text-sm font-semibold sm:inline">{id}</span>
           <Tabs selectedKey={segment} className="ml-2">
             <Tabs.ListContainer>
               <Tabs.List aria-label="Agent views">
@@ -69,12 +71,27 @@ export default function AgentLayout({
               </Tabs.List>
             </Tabs.ListContainer>
           </Tabs>
-          <AgentStatsBar agentId={id} />
-          {segment === 'desktop' && <DesktopLockButton />}
+          <Button
+            size="sm"
+            variant="tertiary"
+            aria-label="Agent settings"
+            onPress={() => setSettingsOpen(true)}
+          >
+            <LuSettings className="size-4" />
+          </Button>
+          <div className="ml-auto hidden min-w-0 md:flex">
+            <AgentStatsBar agentId={id} />
+          </div>
+          {segment === 'desktop' && (
+            <div className="ml-auto md:ml-0">
+              <DesktopLockButton />
+            </div>
+          )}
         </header>
 
         <div className="min-h-0 flex-1">{children}</div>
       </DesktopLockProvider>
+      <AgentSettingsModal agentId={id} isOpen={settingsOpen} onOpenChange={setSettingsOpen} />
       <ChatWidget agentId={id} />
     </motion.div>
   );
