@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   LuArrowUp,
   LuCheck,
+  LuChevronDown,
   LuCircle,
   LuCircleCheck,
   LuListChecks,
@@ -183,36 +184,44 @@ function StatusIcon({ status }: { status: string }) {
 }
 
 /** Live task checklist (TaskCreate/TaskUpdate), pinned above the conversation —
- * shows steps getting marked off as the agent works through them. */
+ * shows steps getting marked off as the agent works. Collapsible; when open it
+ * may take up to half the panel height (scrolling beyond that). */
 function TasksPanel({ tasks }: { tasks: AgentTask[] }) {
+  const [open, setOpen] = useState(true);
   const done = tasks.filter((t) => t.status === 'completed').length;
   return (
-    <div className="border-separator bg-surface-secondary/50 shrink-0 border-b px-3 py-2">
-      <div className="text-muted mb-1.5 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase">
+    <div className="border-separator bg-surface-secondary/50 flex max-h-[50%] shrink-0 flex-col border-b">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="text-muted hover:text-foreground flex shrink-0 items-center gap-1.5 px-3 py-2 text-xs font-semibold tracking-wide uppercase"
+      >
+        <LuChevronDown className={`size-3.5 transition-transform ${open ? '' : '-rotate-90'}`} />
         <LuListTodo className="size-3.5" />
         Tasks
         <span className="text-muted/70 lowercase">
           {done}/{tasks.length} done
         </span>
-      </div>
-      <ul className="max-h-40 space-y-1 overflow-auto">
-        {tasks.map((t) => (
-          <li key={t.id} className="flex items-start gap-2 text-sm">
-            <StatusIcon status={t.status} />
-            <span
-              className={
-                t.status === 'completed'
-                  ? 'text-muted line-through'
-                  : t.status === 'in_progress'
-                    ? 'text-foreground font-medium'
-                    : 'text-foreground'
-              }
-            >
-              {t.status === 'in_progress' && t.activeForm ? t.activeForm : t.subject}
-            </span>
-          </li>
-        ))}
-      </ul>
+      </button>
+      {open && (
+        <ul className="min-h-0 flex-1 space-y-1 overflow-auto px-3 pb-2">
+          {tasks.map((t) => (
+            <li key={t.id} className="flex items-start gap-2 text-sm">
+              <StatusIcon status={t.status} />
+              <span
+                className={
+                  t.status === 'completed'
+                    ? 'text-muted line-through'
+                    : t.status === 'in_progress'
+                      ? 'text-foreground font-medium'
+                      : 'text-foreground'
+                }
+              >
+                {t.status === 'in_progress' && t.activeForm ? t.activeForm : t.subject}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

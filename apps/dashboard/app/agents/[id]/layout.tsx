@@ -5,7 +5,7 @@ import { motion } from 'framer-motion';
 import Link from 'next/link';
 import { useSelectedLayoutSegment } from 'next/navigation';
 import { use, type ComponentProps, type ReactNode } from 'react';
-import { LuMonitor, LuTerminal } from 'react-icons/lu';
+import { LuChevronLeft, LuMonitor, LuTerminal } from 'react-icons/lu';
 import { AgentStatsBar } from '@/app/AgentStats';
 import { ChatWidget } from './ChatWidget';
 import { DesktopLockButton, DesktopLockProvider } from './DesktopLock';
@@ -41,8 +41,12 @@ export default function AgentLayout({
     >
       <DesktopLockProvider>
         <header className="border-separator flex items-center gap-3 border-b py-2 pr-4 pl-4">
-          <Link href="/" className={buttonVariants({ variant: 'tertiary', size: 'sm' })}>
-            ← Fleet
+          <Link
+            href="/"
+            className={`${buttonVariants({ variant: 'tertiary', size: 'sm' })} gap-1.5`}
+          >
+            <LuChevronLeft className="size-4" />
+            Fleet
           </Link>
           <span className="text-sm font-semibold">{id}</span>
           <Tabs selectedKey={segment} className="ml-2">
