@@ -53,6 +53,7 @@ export async function handleApi(
     if (pathname === '/api/fs') return await handleFs(req, res, manager, method);
     if (pathname === '/api/settings') return await handleSettings(req, res, manager, method);
     if (pathname === '/api/host') return await handleHost(res, manager, method);
+    if (pathname === '/api/metrics') return await handleMetrics(res, manager, method);
     if (pathname === '/api/image') return await handleImageStatus(res, manager, method);
     if (pathname === '/api/image/build') return await handleImageBuild(res, manager, method);
     if (pathname.startsWith('/api/packages'))
@@ -209,6 +210,16 @@ async function handleHost(
 ): Promise<boolean> {
   if (method !== 'GET') return (sendJson(res, 405, { error: 'method not allowed' }), true);
   sendJson(res, 200, await manager.hostInfo());
+  return true;
+}
+
+async function handleMetrics(
+  res: ServerResponse,
+  manager: AgentManager,
+  method: string,
+): Promise<boolean> {
+  if (method !== 'GET') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+  sendJson(res, 200, await manager.metrics());
   return true;
 }
 

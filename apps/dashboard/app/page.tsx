@@ -4,11 +4,18 @@ import { Button, buttonVariants, Card } from '@heroui/react';
 import { AnimatePresence, motion } from 'framer-motion';
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { LuPackage, LuSettings } from 'react-icons/lu';
+import dynamic from 'next/dynamic';
+import { LuChartColumn, LuPackage, LuSettings } from 'react-icons/lu';
 import { getImageStatus, listAgents, type Agent } from '@/lib/gateway';
 import { AgentCard } from './AgentCard';
 import { CreateAgentModal } from './CreateAgentModal';
 import { DashboardChat } from './DashboardChat';
+
+// Lazy-load the metrics modal (and its recharts dependency) so the chart code
+// only loads when the user opens Metrics — keeps the fleet page lean.
+const MetricsModal = dynamic(() => import('./MetricsModal').then((m) => m.MetricsModal), {
+  ssr: false,
+});
 import { ImageBanner } from './ImageBanner';
 import { PackagesModal } from './PackagesModal';
 import { ThemeSwitch } from './ThemeSwitch';
@@ -18,6 +25,7 @@ export default function HomePage() {
   const [error, setError] = useState<string | null>(null);
   const [imagePresent, setImagePresent] = useState<boolean | null>(null);
   const [packagesOpen, setPackagesOpen] = useState(false);
+  const [metricsOpen, setMetricsOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -56,6 +64,16 @@ export default function HomePage() {
           <Button
             size="sm"
             variant="tertiary"
+            aria-label="Metrics"
+            className="gap-1.5"
+            onPress={() => setMetricsOpen(true)}
+          >
+            <LuChartColumn className="size-4" />
+            Metrics
+          </Button>
+          <Button
+            size="sm"
+            variant="tertiary"
             aria-label="Packages"
             className="gap-1.5"
             onPress={() => setPackagesOpen(true)}
@@ -83,6 +101,8 @@ export default function HomePage() {
         onOpenChange={setPackagesOpen}
         onChanged={() => void refresh()}
       />
+
+      {metricsOpen && <MetricsModal isOpen onOpenChange={setMetricsOpen} />}
 
       <AnimatePresence>
         {imagePresent === false && (
