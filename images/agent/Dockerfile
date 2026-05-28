@@ -181,8 +181,11 @@ RUN cd /opt/agent-tools/discord-mcp \
 # Pre-accept Claude's onboarding + workspace-trust so the auto-started session
 # drops straight to a usable prompt (no trust dialog). Overwrites the simpler
 # seed created above; placed here so the node-pty build layer stays cached.
-# (claude-config.json also registers the computer-use MCP server.)
+# (claude-config.json also registers the computer-use + discord MCP servers.)
 COPY --chown=agent:agent claude-config.json /home/agent/.claude.json
+# Project guide the agent reads at session start: routing prefixes (how Discord
+# messages arrive) + how to reply via the discord MCP tools.
+COPY --chown=agent:agent agent-claude.md /home/agent/CLAUDE.md
 
 # statusLine command: capture Claude's status payload (model, cost, lines) to a
 # file the dashboard reads, and print a concise in-TUI line. ~/.claude must be
