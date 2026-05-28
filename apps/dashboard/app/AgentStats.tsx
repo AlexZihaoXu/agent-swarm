@@ -170,10 +170,14 @@ function ContextCircle({
   used,
   model,
   limit,
+  compact,
 }: {
   used: number;
   model: string | null;
   limit?: number | null;
+  /** Compact: show just the used count (the ring conveys the limit) — saves
+   *  horizontal space on the tight fleet-card row. */
+  compact?: boolean;
 }) {
   const [v] = useLerp(used);
   const lim = limit ?? contextLimit(model);
@@ -209,7 +213,9 @@ function ContextCircle({
           <ProgressCircle.FillCircle />
         </ProgressCircle.Track>
       </ProgressCircle>
-      <span className="text-foreground">{fmtContext(Math.round(v), lim)}</span>
+      <span className="text-foreground">
+        {compact ? fmtTokens(Math.round(v)) : fmtContext(Math.round(v), lim)}
+      </span>
     </span>
   );
 }
@@ -378,9 +384,14 @@ export function AgentStatsInline({ stats: s }: { stats: AgentStats | null }) {
   const up = s ? s.tokens.input + s.tokens.cacheCreation : 0;
   const out = s?.tokens.output ?? 0;
   return (
-    <div className="text-muted flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+    <div className="text-muted flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 text-xs">
       {s?.model && <span className="text-foreground font-medium">{cleanModel(s.model)}</span>}
-      <ContextCircle used={s?.context ?? 0} model={s?.model ?? null} limit={s?.contextLimit} />
+      <ContextCircle
+        used={s?.context ?? 0}
+        model={s?.model ?? null}
+        limit={s?.contextLimit}
+        compact
+      />
       <Metric icon={<LuArrowUp className="size-3" />} title="tokens sent (input + cache)">
         {up > 0 ? <Tokens value={up} /> : '--'}
       </Metric>

@@ -346,8 +346,17 @@ export class AgentManager {
         /* no statusline for this agent */
       }
     }
+    // Claude only writes rate_limits after API activity, so a freshly-(re)started
+    // idle agent may lack it. They're account-global and change slowly, so cache
+    // the last seen and fall back to it rather than dropping the rings.
+    if (rateLimits) this.lastRateLimits = rateLimits;
+    else rateLimits = this.lastRateLimits;
     return { rateLimits, agents, buckets };
   }
+  private lastRateLimits: {
+    fiveHour: { usedPercent: number; resetsAt: number };
+    sevenDay: { usedPercent: number; resetsAt: number };
+  } | null = null;
 
   /** Create the shared network if it doesn't exist yet (idempotent). */
   async ensureNetwork(): Promise<void> {
