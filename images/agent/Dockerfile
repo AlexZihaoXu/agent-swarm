@@ -170,6 +170,13 @@ COPY agent-terminals.service /etc/systemd/system/agent-terminals.service
 # MCP server starts instantly; no X needed since the script connects lazily).
 COPY --chown=agent:agent tools /opt/agent-tools
 RUN su - agent -c '/usr/local/bin/uv run --quiet --script /opt/agent-tools/computer_use.py < /dev/null' || true
+# Discord MCP server (outgoing actions; the receive side is the gateway bridge).
+# Built to dist/ with tsc, then dev deps pruned so only the runtime deps remain.
+RUN cd /opt/agent-tools/discord-mcp \
+    && npm install --no-audit --no-fund \
+    && npm run build \
+    && npm prune --omit=dev \
+    && chown -R agent:agent /opt/agent-tools/discord-mcp
 
 # Pre-accept Claude's onboarding + workspace-trust so the auto-started session
 # drops straight to a usable prompt (no trust dialog). Overwrites the simpler

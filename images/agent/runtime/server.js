@@ -694,6 +694,36 @@ const server = http.createServer(async (req, res) => {
     }
     return sendJson(res, 200, { html });
   }
+  // Inject a message into a session's pty as if typed by a human — used by the
+  // gateway's integration bridges (e.g. Discord) to deliver an incoming message
+  // to claude. Types the text, then submits with Enter after a short beat (the
+  // TUI needs a moment between the pasted text and the carriage return), exactly
+  // like the dashboard chat send. Callers are trusted (gateway-side) and are
+  // responsible for sanitizing untrusted content before calling.
+  if (u.pathname === '/api/inject' && req.method === 'POST') {
+    let body = {};
+    try {
+      const raw = await readBody(req);
+      body = raw ? JSON.parse(raw) : {};
+    } catch {
+      /* ignore */
+    }
+    const name = body.session || 'claude';
+    const text = typeof body.text === 'string' ? body.text : '';
+    const sess = sessions.get(name);
+    if (!sess) return sendJson(res, 404, { error: 'session not found' });
+    if (!text.trim()) return sendJson(res, 400, { error: 'text required' });
+    const clean = text.replace(/\r\n?/g, '\n');
+    sess.pty.write(clean);
+    setTimeout(() => {
+      try {
+        sess.pty.write('\r');
+      } catch {
+        /* session may have closed */
+      }
+    }, 150);
+    return sendJson(res, 200, { ok: true });
+  }
   // Attachment upload: raw body → ~/uploads/<name>; returns the in-agent path
   // so the chat can reference it for claude to read.
   if (u.pathname === '/api/upload' && req.method === 'POST') {
