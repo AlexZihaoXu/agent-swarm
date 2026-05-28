@@ -386,11 +386,11 @@ export function ChatWidget({
             dragControls={dragControls}
             dragListener={false}
             dragMomentum={false}
-            initial={{ opacity: 0, scale: 0.96 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.96 }}
-            transition={{ duration: 0.18, ease: 'easeOut' }}
-            className="border-separator bg-surface fixed top-16 right-4 z-50 flex h-[70vh] w-[min(400px,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border shadow-[0_16px_60px_rgba(0,0,0,0.55)]"
+            initial={{ opacity: 0, y: 24, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 24, scale: 0.98 }}
+            transition={{ duration: 0.2, ease: 'easeOut' }}
+            className="border-separator bg-surface fixed right-4 bottom-4 z-50 flex h-[70vh] max-h-[calc(100vh-2rem)] w-[min(400px,calc(100vw-2rem))] origin-bottom-right flex-col overflow-hidden rounded-2xl border shadow-[0_16px_60px_rgba(0,0,0,0.55)]"
           >
             <header
               onPointerDown={(e) => dragControls.start(e)}
