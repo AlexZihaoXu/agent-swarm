@@ -190,10 +190,10 @@ function TasksPanel({ tasks }: { tasks: AgentTask[] }) {
   const [open, setOpen] = useState(true);
   const done = tasks.filter((t) => t.status === 'completed').length;
   return (
-    <div className="border-separator bg-surface-secondary/50 flex max-h-[50%] shrink-0 flex-col border-b">
+    <div className="border-separator bg-surface-secondary/50 shrink-0 border-b">
       <button
         onClick={() => setOpen((o) => !o)}
-        className="text-muted hover:text-foreground flex shrink-0 items-center gap-1.5 px-3 py-2 text-xs font-semibold tracking-wide uppercase"
+        className="text-muted hover:text-foreground flex w-full items-center gap-1.5 px-3 py-2 text-xs font-semibold tracking-wide uppercase"
       >
         <LuChevronDown className={`size-3.5 transition-transform ${open ? '' : '-rotate-90'}`} />
         <LuListTodo className="size-3.5" />
@@ -202,26 +202,39 @@ function TasksPanel({ tasks }: { tasks: AgentTask[] }) {
           {done}/{tasks.length} done
         </span>
       </button>
-      {open && (
-        <ul className="min-h-0 flex-1 space-y-1 overflow-auto px-3 pb-2">
-          {tasks.map((t) => (
-            <li key={t.id} className="flex items-start gap-2 text-sm">
-              <StatusIcon status={t.status} />
-              <span
-                className={
-                  t.status === 'completed'
-                    ? 'text-muted line-through'
-                    : t.status === 'in_progress'
-                      ? 'text-foreground font-medium'
-                      : 'text-foreground'
-                }
-              >
-                {t.status === 'in_progress' && t.activeForm ? t.activeForm : t.subject}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            key="list"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.22, ease: 'easeOut' }}
+            className="overflow-hidden"
+          >
+            {/* The list grows with the task count, up to ~half the viewport,
+                then scrolls — so long lists get plenty of room. */}
+            <ul className="max-h-[45vh] space-y-1 overflow-auto px-3 pb-2">
+              {tasks.map((t) => (
+                <li key={t.id} className="flex items-start gap-2 text-sm">
+                  <StatusIcon status={t.status} />
+                  <span
+                    className={
+                      t.status === 'completed'
+                        ? 'text-muted line-through'
+                        : t.status === 'in_progress'
+                          ? 'text-foreground font-medium'
+                          : 'text-foreground'
+                    }
+                  >
+                    {t.status === 'in_progress' && t.activeForm ? t.activeForm : t.subject}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
