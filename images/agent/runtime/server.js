@@ -174,6 +174,10 @@ function readTranscript() {
     } else if (Array.isArray(content)) {
       for (const b of content) {
         if (b.type === 'text' && b.text) items.push({ kind: 'text', text: b.text });
+        else if (b.type === 'tool_use' && /^exit_?plan_?mode$/i.test(b.name || '') && b.input?.plan)
+          // Plan mode: surface the full plan markdown so the chat can render it
+          // as a plan card (rather than a truncated tool one-liner).
+          items.push({ kind: 'plan', text: String(b.input.plan) });
         else if (b.type === 'tool_use')
           items.push({ kind: 'tool', name: b.name, detail: toolDetail(b.input) });
       }

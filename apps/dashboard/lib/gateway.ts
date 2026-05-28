@@ -121,7 +121,7 @@ export const statsStreamUrl = (id: string) => `${wsOrigin()}/a/${id}/terminal/st
 export const screenshotUrl = (id: string) => `${GATEWAY_BASE}/a/${id}/terminal/api/screenshot`;
 
 export interface ChatItem {
-  kind: 'text' | 'tool';
+  kind: 'text' | 'tool' | 'plan';
   text?: string;
   name?: string;
   detail?: string;

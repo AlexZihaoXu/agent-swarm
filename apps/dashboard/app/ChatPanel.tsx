@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   LuArrowUp,
   LuCheck,
+  LuListChecks,
   LuPaperclip,
   LuTerminal,
   LuTriangleAlert,
@@ -94,6 +95,24 @@ function ToolItem({ name, detail }: { name: string; detail?: string }) {
       )}
       <span className="shrink-0 font-mono font-semibold">{tool}</span>
       {detail && <span className="truncate font-mono opacity-80">{detail}</span>}
+    </div>
+  );
+}
+
+/** A plan from plan mode (ExitPlanMode) — rendered as a titled card with the
+ * full plan markdown, rather than a truncated tool one-liner. */
+function PlanCard({ text }: { text: string }) {
+  return (
+    <div className="border-accent/40 bg-accent/5 space-y-1.5 rounded-xl border p-3">
+      <div className="text-accent flex items-center gap-1.5 text-sm font-semibold">
+        <LuListChecks className="size-4 shrink-0" />
+        Plan
+      </div>
+      <div className="chat-md">
+        <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+          {text}
+        </ReactMarkdown>
+      </div>
     </div>
   );
 }
@@ -358,6 +377,8 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
                         animate={animateIdx.current.has(i)}
                       />
                     )
+                  ) : it.kind === 'plan' ? (
+                    <PlanCard key={j} text={it.text ?? ''} />
                   ) : (
                     <ToolItem key={j} name={it.name ?? ''} detail={it.detail} />
                   ),
