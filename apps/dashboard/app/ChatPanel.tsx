@@ -314,7 +314,7 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
       <div
         ref={scrollRef}
         onScroll={onScroll}
-        className="min-h-0 flex-1 space-y-4 overflow-auto p-3"
+        className="chat-convo min-h-0 flex-1 space-y-4 overflow-auto p-3"
       >
         {turns.length === 0 && (
           <p className="text-muted text-sm">No messages yet. Say something below.</p>

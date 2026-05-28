@@ -43,6 +43,8 @@
   --surface-secondary-foreground: oklch(21.03% 0.0056 73.68);
   --surface-tertiary: oklch(93.73% 0.0045 73.68);
   --surface-tertiary-foreground: oklch(21.03% 0.0056 73.68);
+  /* Recessed conversation area — a touch below the surrounding surface. */
+  --chat-bg: oklch(94% 0.0045 73.68);
   --warning: oklch(78.19% 0.1603 50.71);
   --warning-foreground: oklch(21.03% 0.0059 50.71);
 
@@ -90,8 +92,15 @@
   --surface-secondary-foreground: oklch(96% 0.005 73.68);
   --surface-tertiary: oklch(33% 0.005 73.68);
   --surface-tertiary-foreground: oklch(96% 0.005 73.68);
+  /* Recessed conversation area — clearly darker than background (24%). */
+  --chat-bg: oklch(19% 0.004 73.68);
   --warning: oklch(82.03% 0.1404 54.72);
   --warning-foreground: oklch(21.03% 0.0059 54.72);
+}
+
+/* Recessed conversation scroll area (chat). */
+.chat-convo {
+  background: var(--chat-bg);
 }
 
 /* Compact markdown rendering inside the chat dock. Assistant prose uses the
