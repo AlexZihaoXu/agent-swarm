@@ -146,8 +146,8 @@ export function DashboardChat({ agents }: { agents: Agent[] }) {
                 </Link>
               </aside>
 
-              {/* Right: the selected agent's chat */}
-              <section className="flex min-w-0 flex-1 flex-col">
+              {/* Right: the selected agent's chat (slightly darker than the modal) */}
+              <section className="bg-background flex min-w-0 flex-1 flex-col">
                 <header className="border-separator flex items-start justify-between border-b px-4 py-3">
                   <div className="min-w-0">
                     <div className="truncate text-sm font-semibold">
