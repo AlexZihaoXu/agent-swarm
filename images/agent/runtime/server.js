@@ -157,9 +157,35 @@ function readTranscript() {
   const newest = newestFile(path.join(CLAUDE_DIR, 'projects'), '.jsonl');
   const raw = newest && safeRead(newest.path);
   if (!raw) return [];
+  const lines = raw.split('\n').slice(-500);
+  // Pre-scan tool_results for screenshot markers: a tool that saved a shot puts
+  // `[shot:<file>]` in its result text, keyed back to the tool_use by id.
+  const shotByTool = {};
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    let o;
+    try {
+      o = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const content = o.message && o.message.content;
+    if (o.type !== 'user' || !Array.isArray(content)) continue;
+    for (const b of content) {
+      if (b.type !== 'tool_result' || !b.tool_use_id) continue;
+      const txt =
+        typeof b.content === 'string'
+          ? b.content
+          : Array.isArray(b.content)
+            ? b.content.map((c) => c.text || '').join(' ')
+            : '';
+      const mk = txt.match(/\[shot:([\w.\-]+\.jpg)\]/);
+      if (mk) shotByTool[b.tool_use_id] = mk[1];
+    }
+  }
   const out = [];
   let lastTodos = null; // signature of the last emitted todo list (dedup repeats)
-  for (const line of raw.split('\n').slice(-500)) {
+  for (const line of lines) {
     if (!line.trim()) continue;
     let o;
     try {
@@ -175,6 +201,10 @@ function readTranscript() {
     } else if (Array.isArray(content)) {
       for (const b of content) {
         if (b.type === 'text' && b.text) items.push({ kind: 'text', text: b.text });
+        else if (b.type === 'tool_use' && shotByTool[b.id])
+          // A captured screenshot (glance/look_at/show_image) — render the image
+          // inline instead of a tool badge.
+          items.push({ kind: 'image', file: shotByTool[b.id] });
         else if (b.type === 'tool_use' && /^exit_?plan_?mode$/i.test(b.name || '') && b.input?.plan)
           // Plan mode: surface the full plan markdown so the chat can render it
           // as a plan card (rather than a truncated tool one-liner).
@@ -620,6 +650,18 @@ const server = http.createServer(async (req, res) => {
   // is the noVNC stream). Cached ~1s so multiple viewers don't hammer X.
   if (u.pathname === '/api/screenshot' && req.method === 'GET') {
     return sendScreenshot(res);
+  }
+  // Saved computer-use / show_image screenshots (the chat renders these inline).
+  const shot = u.pathname.match(/^\/api\/shots\/([\w.\-]+\.jpg)$/);
+  if (shot && req.method === 'GET') {
+    const file = path.join('/tmp/swarm-shots', shot[1]);
+    try {
+      const buf = fs.readFileSync(file);
+      res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'max-age=86400' });
+      return res.end(buf);
+    } catch {
+      return sendJson(res, 404, { error: 'shot not found' });
+    }
   }
   const m = u.pathname.match(/^\/api\/sessions\/(.+)$/);
   if (m && req.method === 'DELETE') {

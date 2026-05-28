@@ -137,11 +137,14 @@ export interface ChatTodo {
   status: string;
 }
 export interface ChatItem {
-  kind: 'text' | 'tool' | 'plan' | 'todos';
+  kind: 'text' | 'tool' | 'plan' | 'todos' | 'image';
   text?: string;
   name?: string;
   detail?: string;
   todos?: ChatTodo[];
+  /** For kind 'image': the saved screenshot filename, served at
+   *  /a/<id>/terminal/api/shots/<file>. */
+  file?: string;
 }
 export interface ChatTurn {
   role: 'user' | 'assistant';

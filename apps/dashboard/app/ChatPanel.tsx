@@ -25,6 +25,7 @@ import 'katex/dist/katex.min.css';
 import {
   getPromptHtml,
   getTranscript,
+  terminalHttpBase,
   terminalWsUrl,
   uploadToAgent,
   type AgentTask,
@@ -528,6 +529,21 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
                     <PlanCard key={j} text={it.text ?? ''} />
                   ) : it.kind === 'todos' ? (
                     <TodosCard key={j} todos={it.todos ?? []} />
+                  ) : it.kind === 'image' && it.file ? (
+                    <a
+                      key={j}
+                      href={`${terminalHttpBase(agentId)}api/shots/${it.file}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block"
+                    >
+                      <img
+                        src={`${terminalHttpBase(agentId)}api/shots/${it.file}`}
+                        alt="screenshot"
+                        loading="lazy"
+                        className="border-separator max-h-80 w-auto max-w-full rounded-lg border"
+                      />
+                    </a>
                   ) : (
                     <ToolItem key={j} name={it.name ?? ''} detail={it.detail} />
                   ),

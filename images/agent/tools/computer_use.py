@@ -174,6 +174,61 @@ def _image(data: bytes, mime: str, note: str) -> dict:
     }
 
 
+# --- screenshot scratch dir (shown in the dashboard chat) ------------------
+# Captures from glance/look_at (and user `show_image`) are saved here as JPEGs;
+# the dashboard chat displays them. Self-managing: capped at 50 MB, cleanup
+# kicks in at 90% — recompress oldest hardest, then delete oldest if still over.
+SHOTS_DIR = "/tmp/swarm-shots"
+SHOT_CAP = 50 * 1024 * 1024
+SHOT_THRESH = int(SHOT_CAP * 0.9)
+
+
+def _enforce_shot_budget() -> None:
+    try:
+        files = [os.path.join(SHOTS_DIR, f) for f in os.listdir(SHOTS_DIR) if f.endswith(".jpg")]
+    except OSError:
+        return
+    files.sort(key=lambda f: os.path.getmtime(f))  # oldest first
+    total = sum(os.path.getsize(f) for f in files)
+    if total <= SHOT_THRESH:
+        return
+    n = max(1, len(files))
+    # Re-compress by age tier (oldest crushed hardest); skip user shots (kept
+    # near full quality) — they're only removed by deletion below if needed.
+    for i, f in enumerate(files):
+        if os.path.basename(f).startswith("user_"):
+            continue
+        frac = i / n
+        q = 20 if frac < 0.33 else 40 if frac < 0.66 else 60
+        subprocess.run(["convert", f, "-quality", str(q), f], check=False)
+    total = sum(os.path.getsize(f) for f in files if os.path.exists(f))
+    # Still over → delete oldest until under threshold.
+    for f in files:
+        if total <= SHOT_THRESH:
+            break
+        try:
+            total -= os.path.getsize(f)
+            os.remove(f)
+        except OSError:
+            pass
+
+
+def _save_shot(jpeg: bytes, tool: str, user: bool = False) -> str:
+    """Write a JPEG to the shots dir, enforce the budget, return its filename."""
+    os.makedirs(SHOTS_DIR, exist_ok=True)
+    name = f"{'user_' if user else ''}{int(time.time() * 1000)}_{tool}.jpg"
+    with open(os.path.join(SHOTS_DIR, name), "wb") as f:
+        f.write(jpeg)
+    _enforce_shot_budget()
+    return name
+
+
+def _shot_marker(name: str) -> str:
+    # The dashboard's transcript parser reads this out of the tool result to
+    # render the saved screenshot inline. Harmless text to the model.
+    return f" [shot:{name}]"
+
+
 def glance(args: dict) -> dict:
     # JPEG keeps polling cheap; precision happens in look_at (lossless PNG).
     detail = args.get("detail", "normal")
@@ -187,6 +242,10 @@ def glance(args: dict) -> dict:
         nx, ny, _ = _pointer()
         img = _overlay_cursor(img, "jpeg", round(nx * w / NATIVE_W), round(ny * h / NATIVE_H))
         note += " Cursor marked (red crosshair)."
+    # Save a full-resolution low-quality JPEG for the dashboard chat.
+    shot = _capture(["-quality", "35"], "jpeg")
+    if shot:
+        note += _shot_marker(_save_shot(shot, "glance"))
     return _image(img, "image/jpeg", note)
 
 
@@ -226,7 +285,30 @@ def look_at(args: dict) -> dict:
             note += " Cursor marked (red crosshair)."
         else:
             note += " (cursor is outside this region)"
+    # Save the crop as a low-quality JPEG for the dashboard chat.
+    jpg = subprocess.run(
+        ["convert", "png:-", "-quality", "35", "jpeg:-"], input=png, capture_output=True
+    )
+    if jpg.returncode == 0 and jpg.stdout:
+        note += _shot_marker(_save_shot(jpg.stdout, "look_at"))
     return _image(png, "image/png", note)
+
+
+def show_image(args: dict) -> dict:
+    # Display an image file in the dashboard chat (near full quality, original
+    # dimensions). Doesn't render in the Claude TUI, but the GUI shows it.
+    path = str(args.get("path") or "").strip()
+    if not path:
+        return _err("show_image needs a 'path' to an image file on this machine")
+    p = os.path.expanduser(path)
+    if not os.path.isfile(p):
+        return _err(f"no such file: {p}")
+    r = subprocess.run(["convert", p, "-quality", "90", "jpeg:-"], capture_output=True)
+    if r.returncode != 0 or not r.stdout:
+        return _err("could not read image: " + r.stderr.decode("utf-8", "replace")[:200])
+    name = _save_shot(r.stdout, "image", user=True)
+    note = f"Shown in chat: {os.path.basename(p)}." + _shot_marker(name)
+    return _image(r.stdout, "image/jpeg", note)
 
 
 _xfixes_ready = False
@@ -624,6 +706,8 @@ TOOLS = [
      {"detail": {"type": "string", "enum": ["low", "normal"]}, "cursor": {"type": "boolean"}}, [], glance),
     ("look_at", "Native-resolution crop centered on a point, for precision (dragging/resizing). Returns the crop + its full_res origin. Uses the 'full' coordinate system. w/h default 256, clamped to 128..1024. cursor:true marks the pointer.",
      {"center": COORD, "w": {"type": "integer"}, "h": {"type": "integer"}, "cursor": {"type": "boolean"}}, ["center"], look_at),
+    ("show_image", "Display an image file (by path) in the dashboard chat — for sharing a screenshot, render, or any image with the user. Near full quality.",
+     {"path": {"type": "string"}}, ["path"], show_image),
     ("move_to", "Move the cursor to a point in a straight line, smoothly (eased).",
      {"pos": COORD, "duration": {"type": "number"}}, ["pos"], move_to),
     ("move_rel", "Move the cursor by (dx, dy) in a coordinate system, straight and smooth (eased).",
