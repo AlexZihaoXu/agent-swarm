@@ -62,6 +62,7 @@ local paths are appended as `[attachment saved — read to view: /home/agent/.sw
 ## Discord tools (the `discord` MCP)
 
 - `discord_send_message(address, content, reply?)` — send a message or reply.
+- `discord_send_embed(address, title?, description?, fields?, color?, image?, …)` — send a rich embed.
 - `discord_send_screenshot(address, caption?)` — capture the current desktop and send it.
 - `discord_upload_file(address, path, caption?)` — send a local file/image.
 - `discord_read_messages(address, limit?, before?)` — read recent messages.

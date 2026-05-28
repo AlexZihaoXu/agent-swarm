@@ -81,12 +81,27 @@ export class DiscordBridge {
       partials: [Partials.Channel], // required to receive DMs
     });
 
+    // Per-channel "active conversation" timestamps: once the bot is talking in a
+    // channel, follow-ups don't need to re-@mention it (people don't). A channel
+    // goes cold after WINDOW_MS of silence, after which a mention is needed again.
+    const lastActive = new Map<string, number>();
+    const WINDOW_MS = 5 * 60_000;
     client.on(Events.MessageCreate, (msg) => {
       try {
         const selfId = client.user?.id;
+        // The bot's own messages keep the conversation window open (but aren't
+        // forwarded back to it).
+        if (selfId && msg.author.id === selfId) {
+          lastActive.set(msg.channelId, Date.now());
+          return;
+        }
         const mentioned = !!selfId && msg.mentions.users.has(selfId);
-        const text = formatInbound(msg, rules, selfId, mentioned);
+        const repliedToBot = !!selfId && msg.mentions.repliedUser?.id === selfId;
+        const inConversation = Date.now() - (lastActive.get(msg.channelId) ?? 0) < WINDOW_MS;
+        const addressed = mentioned || repliedToBot || inConversation;
+        const text = formatInbound(msg, rules, selfId, addressed);
         if (!text) return;
+        lastActive.set(msg.channelId, Date.now()); // keep the window alive
         const attachments = [...msg.attachments.values()].map((a) => ({
           url: a.url,
           name: a.name ?? 'file',
@@ -132,7 +147,7 @@ function formatInbound(
   },
   rules: DiscordRules,
   selfId: string | undefined,
-  mentioned: boolean,
+  addressed: boolean,
 ): string | null {
   if (msg.author.id === selfId) return null; // never echo our own messages
   if (rules.ignoreBots && msg.author.bot) return null;
@@ -143,10 +158,11 @@ function formatInbound(
   } else {
     if (rules.forwardChannelIds.length && !rules.forwardChannelIds.includes(msg.channelId))
       return null;
-    // In channels, only forward when the bot is actually addressed (default on,
-    // incl. legacy configs missing the field) so the agent isn't pulled into
-    // every message. DMs are inherently directed.
-    if (rules.requireMention !== false && !mentioned) return null;
+    // In channels, only forward when the bot is actually addressed — @mentioned,
+    // replied to, or mid-conversation (default on, incl. legacy configs missing
+    // the field) — so the agent isn't pulled into every message. DMs are
+    // inherently directed.
+    if (rules.requireMention !== false && !addressed) return null;
   }
   if (rules.allowedUserIds.length && !rules.allowedUserIds.includes(msg.author.id)) return null;
 

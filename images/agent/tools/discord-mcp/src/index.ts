@@ -69,6 +69,12 @@ function addrOf(args: Record<string, unknown>): string {
   return String(args.address ?? args.channel ?? args.channelId ?? args.channel_id ?? '');
 }
 
+/** Parse a "#5865F2" / "5865F2" / "0x5865F2" colour to a Discord int. */
+function parseColor(c: string): number {
+  const n = parseInt(c.replace(/^#/, '').replace(/^0x/i, ''), 16);
+  return Number.isFinite(n) ? n : 0x5865f2;
+}
+
 /** Resolve an address to a concrete channel id (opening a DM channel if needed). */
 async function resolveChannel(
   rest: REST,
@@ -215,6 +221,40 @@ const TOOLS = [
     },
   },
   {
+    name: 'discord_send_embed',
+    description:
+      'Send a rich embed (title, description, fields, color, image) to a channel or DM. Optionally include plain text and/or reply.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        address: { type: 'string', description: 'discord:// address or raw channel id' },
+        title: { type: 'string' },
+        description: { type: 'string', description: 'Embed body (supports markdown)' },
+        url: { type: 'string', description: 'Makes the title a link' },
+        color: { type: 'string', description: 'Hex colour, e.g. #5865F2' },
+        fields: {
+          type: 'array',
+          description: 'Up to 25 fields',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              value: { type: 'string' },
+              inline: { type: 'boolean' },
+            },
+            required: ['name', 'value'],
+          },
+        },
+        image: { type: 'string', description: 'Large image URL' },
+        thumbnail: { type: 'string', description: 'Small thumbnail URL' },
+        footer: { type: 'string' },
+        content: { type: 'string', description: 'Optional plain text alongside the embed' },
+        reply: { type: 'boolean', description: 'Reply to the message id in the address' },
+      },
+      required: ['address'],
+    },
+  },
+  {
     name: 'discord_download_attachment',
     description:
       'Download a Discord attachment (or any URL) to a local file, then read that path to view it. Get attachment URLs from discord_read_messages.',
@@ -302,6 +342,27 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           files: [{ name: 'screenshot.jpg', data }],
         }),
       );
+    }
+    case 'discord_send_embed': {
+      const { channelId, messageId } = await resolveChannel(rest, addrOf(args));
+      const embed: Record<string, unknown> = {};
+      if (args.title) embed.title = String(args.title);
+      if (args.description) embed.description = String(args.description);
+      if (args.url) embed.url = String(args.url);
+      if (args.color) embed.color = parseColor(String(args.color));
+      if (args.image) embed.image = { url: String(args.image) };
+      if (args.thumbnail) embed.thumbnail = { url: String(args.thumbnail) };
+      if (args.footer) embed.footer = { text: String(args.footer) };
+      if (Array.isArray(args.fields)) {
+        const fields = args.fields as Array<{ name?: unknown; value?: unknown; inline?: unknown }>;
+        embed.fields = fields
+          .slice(0, 25)
+          .map((f) => ({ name: String(f.name), value: String(f.value), inline: !!f.inline }));
+      }
+      const body: Record<string, unknown> = { embeds: [embed] };
+      if (args.content) body.content = String(args.content);
+      if (args.reply && messageId) body.message_reference = { message_id: messageId };
+      return ok(await rest.post(Routes.channelMessages(channelId), { body }));
     }
     case 'discord_download_attachment': {
       const url = String(args.url);
