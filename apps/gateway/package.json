@@ -12,6 +12,7 @@
     "test": "node --import tsx --test 'src/**/*.test.ts'"
   },
   "dependencies": {
+    "discord.js": "^14.26.4",
     "dockerode": "^4.0.2",
     "http-proxy": "^1.18.1",
     "tar-fs": "^3.0.6"

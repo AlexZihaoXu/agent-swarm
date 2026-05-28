@@ -4,6 +4,7 @@ import { basename, dirname } from 'node:path';
 import type { AgentManager } from './docker.js';
 import { config } from './config.js';
 import { getSettings, updateSettings } from './settings.js';
+import type { DiscordRules, IntegrationType } from './types.js';
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, {
@@ -33,6 +34,9 @@ export function applyCors(req: IncomingMessage, res: ServerResponse): boolean {
 
 // /api/agents, /api/agents/:id, /api/agents/:id/(start|stop|upgrade|paths|package)
 const AGENT_API = /^\/api\/agents(?:\/([^/]+)(?:\/(start|stop|upgrade|paths|package))?)?$/;
+// /api/agents/:id/integrations[/:type[/(test|apply|disable)]]
+const INTEGRATION_API =
+  /^\/api\/agents\/([^/]+)\/integrations(?:\/([^/]+)(?:\/(test|apply|disable))?)?$/;
 // /api/packages, /api/packages/upload, /api/packages/:file[/(download|import)]
 const PACKAGE_API = /^\/api\/packages(?:\/([^/]+)(?:\/(download|import))?)?$/;
 
@@ -58,11 +62,61 @@ export async function handleApi(
     if (pathname === '/api/image/build') return await handleImageBuild(res, manager, method);
     if (pathname.startsWith('/api/packages'))
       return await handlePackages(req, res, manager, method);
+    if (INTEGRATION_API.test(pathname)) return await handleIntegrations(req, res, manager, method);
     if (pathname.startsWith('/api/agents')) return await handleAgents(req, res, manager, method);
     sendJson(res, 404, { error: 'unknown endpoint' });
   } catch (err) {
     sendJson(res, errStatus(err), { error: err instanceof Error ? err.message : String(err) });
   }
+  return true;
+}
+
+// /api/agents/:id/integrations[/:type[/(test|apply|disable)]]
+async function handleIntegrations(
+  req: IncomingMessage,
+  res: ServerResponse,
+  manager: AgentManager,
+  method: string,
+): Promise<boolean> {
+  const { pathname } = new URL(req.url ?? '/', 'http://localhost');
+  const m = INTEGRATION_API.exec(pathname);
+  if (!m || !m[1]) return (sendJson(res, 404, { error: 'unknown endpoint' }), true);
+  const id: string = m[1];
+  const type = m[2];
+  const op = m[3];
+
+  if (!type) {
+    if (method === 'GET') return (sendJson(res, 200, manager.listIntegrations(id)), true);
+    if (method === 'POST') {
+      const body = await readJson(req);
+      return (
+        sendJson(res, 201, manager.addIntegration(id, (body.type ?? 'discord') as IntegrationType)),
+        true
+      );
+    }
+  } else if (!op) {
+    if (method === 'PATCH') {
+      const body = await readJson(req);
+      const patched = manager.updateIntegration(id, type as IntegrationType, {
+        credentials: body.credentials,
+        rules: body.rules,
+      });
+      return (sendJson(res, 200, patched), true);
+    }
+    if (method === 'DELETE')
+      return (
+        await manager.removeIntegration(id, type as IntegrationType),
+        sendJson(res, 200, { ok: true }),
+        true
+      );
+  } else if (method === 'POST') {
+    const t = type as IntegrationType;
+    if (op === 'test') return (sendJson(res, 200, await manager.testIntegration(id, t)), true);
+    if (op === 'apply') return (sendJson(res, 200, await manager.applyIntegration(id, t)), true);
+    if (op === 'disable')
+      return (sendJson(res, 200, await manager.disableIntegration(id, t)), true);
+  }
+  sendJson(res, 405, { error: 'method not allowed' });
   return true;
 }
 
@@ -91,11 +145,15 @@ async function handleAgents(
       return (sendJson(res, 201, created), true);
     }
   } else if (!action) {
+    if (method === 'GET') return (sendJson(res, 200, await manager.getAgent(id)), true);
     if (method === 'DELETE')
       return (await manager.remove(id), sendJson(res, 200, { ok: true }), true);
     if (method === 'PATCH') {
       const body = await readJson(req);
-      return (sendJson(res, 200, await manager.setName(id, body.username ?? '')), true);
+      const patch: { username?: string; autoCompactPct?: number | null } = {};
+      if (body.username !== undefined) patch.username = body.username;
+      if (body.autoCompactPct !== undefined) patch.autoCompactPct = body.autoCompactPct;
+      return (sendJson(res, 200, await manager.patchAgent(id, patch)), true);
     }
   } else if (action === 'upgrade') {
     if (method === 'GET') return (sendJson(res, 200, await manager.upgradeInfo(id)), true);
@@ -268,6 +326,10 @@ async function readJson(req: IncomingMessage): Promise<{
   cpus?: number;
   memoryMb?: number;
   timezone?: string;
+  autoCompactPct?: number | null;
+  type?: IntegrationType;
+  credentials?: { botToken?: string };
+  rules?: Partial<DiscordRules>;
 }> {
   const chunks: Buffer[] = [];
   for await (const c of req) chunks.push(c as Buffer);
