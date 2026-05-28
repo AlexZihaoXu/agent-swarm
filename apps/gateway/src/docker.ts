@@ -175,6 +175,34 @@ export class AgentManager {
     }
   }
 
+  /**
+   * Copy the CURRENT host credentials file into an agent's disk (best-effort),
+   * via a one-shot helper that binds the host file. Run before every (re)start
+   * so the agent boots with fresh credentials: OAuth tokens rotate, and the
+   * copy seeded at create time would otherwise go stale → 401 "run /login".
+   */
+  private async pushCredentials(id: string): Promise<void> {
+    const credentialsFile = getSettings().credentialsFile;
+    const helper = await this.docker.createContainer({
+      Image: this.cfg.agentImage,
+      Entrypoint: ['sh', '-c'],
+      Cmd: [
+        'mkdir -p /seed/.claude; ' +
+          'cp /seed-cred /seed/.claude/.credentials.json 2>/dev/null && ' +
+          'chown 1000:1000 /seed/.claude/.credentials.json 2>/dev/null || true',
+      ],
+      HostConfig: {
+        Binds: [`${this.agentHostDir(id)}:/seed`, `${credentialsFile}:/seed-cred:ro`],
+      },
+    });
+    try {
+      await helper.start();
+      await helper.wait();
+    } finally {
+      await helper.remove({ force: true }).catch(() => {});
+    }
+  }
+
   private idFromName(name: string): string {
     return name.replace(/^\//, '').slice(this.cfg.agentNamePrefix.length);
   }
@@ -313,6 +341,8 @@ export class AgentManager {
   }
 
   async start(id: string): Promise<void> {
+    // Refresh credentials into the disk first so a restart reloads them.
+    await this.pushCredentials(id).catch(() => {});
     await this.docker.getContainer(this.containerName(id)).start();
   }
 
