@@ -137,7 +137,7 @@ export interface ChatTodo {
   status: string;
 }
 export interface ChatItem {
-  kind: 'text' | 'tool' | 'plan' | 'todos' | 'image';
+  kind: 'text' | 'tool' | 'plan' | 'todos' | 'image' | 'thinking';
   text?: string;
   name?: string;
   detail?: string;

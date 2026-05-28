@@ -201,6 +201,9 @@ function readTranscript() {
     } else if (Array.isArray(content)) {
       for (const b of content) {
         if (b.type === 'text' && b.text) items.push({ kind: 'text', text: b.text });
+        else if (b.type === 'thinking' && b.thinking)
+          // Extended thinking — the chat shows it as a collapsible block.
+          items.push({ kind: 'thinking', text: String(b.thinking) });
         else if (b.type === 'tool_use' && shotByTool[b.id])
           // A captured screenshot (glance/look_at/show_image) — render the image
           // inline instead of a tool badge.

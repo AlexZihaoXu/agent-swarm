@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   LuArrowUp,
+  LuBrain,
   LuCheck,
   LuChevronDown,
   LuCircle,
@@ -102,6 +103,34 @@ function ToolItem({ name, detail }: { name: string; detail?: string }) {
       )}
       <span className="shrink-0 font-mono font-semibold">{tool}</span>
       {detail && <span className="truncate font-mono opacity-80">{detail}</span>}
+    </div>
+  );
+}
+
+/** Extended-thinking block — collapsible (default closed); header shows an
+ * estimated token count, body is the reasoning. */
+function ThinkingCard({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const tk = Math.max(1, Math.round(text.length / 4));
+  const tkLabel = tk >= 1000 ? `${(tk / 1000).toFixed(1)}k` : String(tk);
+  return (
+    <div className="border-separator/60 bg-surface-secondary/30 rounded-xl border">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="text-muted hover:text-foreground flex w-full items-center gap-1.5 px-3 py-1.5 text-xs"
+      >
+        <LuBrain className="size-3.5 shrink-0" />
+        <span className="font-medium">Thinking</span>
+        <span className="text-muted/70">~{tkLabel} tokens</span>
+        <LuChevronDown
+          className={`ml-auto size-3.5 transition-transform ${open ? '' : '-rotate-90'}`}
+        />
+      </button>
+      {open && (
+        <div className="text-muted max-h-60 overflow-auto px-3 pb-2.5 text-xs whitespace-pre-wrap italic">
+          {text}
+        </div>
+      )}
     </div>
   );
 }
@@ -527,6 +556,8 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
                           animate={animateIdx.current.has(i)}
                         />
                       )
+                    ) : it.kind === 'thinking' ? (
+                      <ThinkingCard key={j} text={it.text ?? ''} />
                     ) : it.kind === 'plan' ? (
                       <PlanCard key={j} text={it.text ?? ''} />
                     ) : it.kind === 'todos' ? (
