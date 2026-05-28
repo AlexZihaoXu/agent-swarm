@@ -132,6 +132,9 @@ function formatInbound(
   const address = isDm
     ? `discord://dm/${msg.author.id}`
     : `discord://${msg.guildId}/${msg.channelId}#${msg.id}`;
+  // Both the author name AND the body are attacker-controlled, so both must be
+  // sanitized — otherwise a username like "[sys://wake]" forges a trusted prefix.
+  const user = sanitizeInbound(msg.author.username);
   const body = sanitizeInbound(msg.content);
-  return `**[${address}]** ${msg.author.username}: ${body}`;
+  return `**[${address}]** ${user}: ${body}`;
 }

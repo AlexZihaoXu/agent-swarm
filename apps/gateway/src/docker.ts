@@ -581,14 +581,27 @@ export class AgentManager {
   // messages into the agent's claude terminal; the send side is the in-agent
   // Discord MCP server, which reads these same credentials off the disk.
 
-  /** Inject a single line into the agent's claude terminal (the receive path). */
+  /** Inject a single line into the agent's claude terminal (the receive path).
+   *  Retries with backoff: right after a (re)start the terminal/claude session
+   *  may not be listening yet, and we don't want to silently drop the message. */
   private async injectToTerminal(id: string, text: string): Promise<void> {
-    const t = await this.resolveTarget(id, 'terminal');
-    await fetch(`http://${t.host}:${t.port}/api/inject`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ session: 'claude', text }),
-    });
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        const t = await this.resolveTarget(id, 'terminal');
+        const res = await fetch(`http://${t.host}:${t.port}/api/inject`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ session: 'claude', text }),
+        });
+        if (res.ok) return;
+        lastErr = new Error(`inject failed: HTTP ${res.status}`);
+      } catch (e) {
+        lastErr = e;
+      }
+      await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
+    }
+    throw lastErr ?? new Error('inject failed');
   }
 
   /** On (re)start, bring back any integration that was left `active`. */
@@ -636,9 +649,13 @@ export class AgentManager {
       throw Object.assign(new Error('add a bot token first'), { statusCode: 400 });
     const result = await testDiscordToken(cur.credentials.botToken);
     cur.lastTest = result;
-    if (result.ok && (cur.status === 'configured' || cur.status === 'error'))
-      cur.status = 'tested-ok';
-    else if (!result.ok) cur.status = 'error';
+    // A test never changes a live `active` integration — record the result only,
+    // so a transient failure can't leave status `error` while the bridge stays up.
+    if (cur.status !== 'active') {
+      if (result.ok && (cur.status === 'configured' || cur.status === 'error'))
+        cur.status = 'tested-ok';
+      else if (!result.ok) cur.status = 'error';
+    }
     cur.updatedAt = Date.now();
     integrations.setIntegration(dir, type, cur);
     return integrations.toPublic(cur);

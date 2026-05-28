@@ -252,7 +252,11 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
     case 'discord_create_thread': {
       const { channelId, messageId } = await resolveChannel(rest, String(args.address));
       const route = messageId ? Routes.threads(channelId, messageId) : Routes.threads(channelId);
-      return ok(await rest.post(route, { body: { name: String(args.name) } }));
+      const body: Record<string, unknown> = { name: String(args.name) };
+      // A channel-level thread (no anchor message) requires a thread `type`;
+      // 11 = GUILD_PUBLIC_THREAD. (Message-anchored threads infer it.)
+      if (!messageId) body.type = 11;
+      return ok(await rest.post(route, { body }));
     }
     case 'discord_upload_file': {
       const { channelId } = await resolveChannel(rest, String(args.address));
