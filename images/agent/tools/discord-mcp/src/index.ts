@@ -9,7 +9,7 @@
 // Raw channel IDs are also accepted.
 import { execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -214,6 +214,19 @@ const TOOLS = [
       required: ['address'],
     },
   },
+  {
+    name: 'discord_download_attachment',
+    description:
+      'Download a Discord attachment (or any URL) to a local file, then read that path to view it. Get attachment URLs from discord_read_messages.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'Attachment URL' },
+        filename: { type: 'string', description: 'Optional filename to save as' },
+      },
+      required: ['url'],
+    },
+  },
 ];
 
 async function dispatch(name: string, args: Record<string, unknown>): Promise<ToolResult> {
@@ -289,6 +302,20 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           files: [{ name: 'screenshot.jpg', data }],
         }),
       );
+    }
+    case 'discord_download_attachment': {
+      const url = String(args.url);
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`download failed: HTTP ${res.status}`);
+      const buf = Buffer.from(await res.arrayBuffer());
+      const base = (
+        args.filename ? String(args.filename) : (url.split('/').pop()?.split('?')[0] ?? 'file')
+      ).replace(/[^\w.\-]/g, '_');
+      const dir = join(tmpdir(), 'discord-dl');
+      await mkdir(dir, { recursive: true });
+      const p = join(dir, `${Date.now()}-${base}`);
+      await writeFile(p, buf);
+      return ok({ path: p, bytes: buf.byteLength });
     }
     default:
       throw new Error(`unknown tool: ${name}`);

@@ -314,6 +314,7 @@ export interface DiscordRules {
   forwardDms: boolean;
   allowedUserIds: string[];
   ignoreBots: boolean;
+  requireMention: boolean;
 }
 
 export interface IntegrationTestResult {

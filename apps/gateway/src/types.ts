@@ -66,6 +66,9 @@ export interface DiscordRules {
   allowedUserIds: string[];
   /** Ignore messages authored by bots (including itself). */
   ignoreBots: boolean;
+  /** In server channels, only forward messages that @-mention the bot (DMs are
+   *  always forwarded). Keeps the agent from reacting to unrelated chatter. */
+  requireMention: boolean;
 }
 
 /** Secret credentials for Discord. Never returned in full over the API. */

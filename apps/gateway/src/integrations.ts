@@ -22,6 +22,7 @@ export const DEFAULT_DISCORD_RULES: DiscordRules = {
   forwardDms: true,
   allowedUserIds: [],
   ignoreBots: true,
+  requireMention: true,
 };
 
 export function readStore(dataDir: string): Store {

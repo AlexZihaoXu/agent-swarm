@@ -612,12 +612,56 @@ export class AgentManager {
     }
   }
 
+  /** Deliver one accepted inbound message: download its attachments onto the
+   *  agent's disk (so the agent can read/view them) and inject the line, with
+   *  any saved paths appended inline. Attachments land in the agent's home at
+   *  /home/agent/.swarm/discord-inbox/ (world-readable). */
+  private async deliverInbound(
+    id: string,
+    msg: { text: string; attachments: { url: string; name: string }[] },
+  ): Promise<void> {
+    let text = msg.text;
+    if (msg.attachments.length) {
+      const dir = join(this.agentDataDir(id), '.swarm', 'discord-inbox');
+      const paths: string[] = [];
+      for (const a of msg.attachments.slice(0, 5)) {
+        try {
+          const res = await fetch(a.url);
+          if (!res.ok) continue;
+          const buf = Buffer.from(await res.arrayBuffer());
+          if (buf.byteLength > 25 * 1024 * 1024) continue; // 25MB cap
+          mkdirSync(dir, { recursive: true });
+          const safe = a.name.replace(/[^\w.-]/g, '_');
+          const fname = `${Date.now()}-${safe}`;
+          writeFileSync(join(dir, fname), buf);
+          paths.push(`/home/agent/.swarm/discord-inbox/${fname}`);
+        } catch {
+          /* skip an attachment that fails to download */
+        }
+      }
+      if (paths.length) text += `  [attachment saved — read to view: ${paths.join(', ')}]`;
+    }
+    await this.injectToTerminal(id, text);
+  }
+
+  /** On gateway startup, reconnect bridges for every running agent that has an
+   *  active integration (bridge connections don't survive a gateway restart). */
+  async reconnectAllIntegrations(): Promise<void> {
+    try {
+      for (const a of await this.list()) {
+        if (a.status === 'running') await this.reconnectIntegrations(a.id).catch(() => {});
+      }
+    } catch {
+      /* docker not ready / no agents — nothing to reconnect */
+    }
+  }
+
   /** On (re)start, bring back any integration that was left `active`. */
   private async reconnectIntegrations(id: string): Promise<void> {
     for (const i of integrations.listIntegrations(this.agentDataDir(id))) {
       if (i.type === 'discord' && i.status === 'active' && i.credentials.botToken) {
         await this.discord
-          .connect(id, i.credentials.botToken, i.rules, (text) => this.injectToTerminal(id, text))
+          .connect(id, i.credentials.botToken, i.rules, (m) => this.deliverInbound(id, m))
           .catch(() => {});
       }
     }
@@ -677,8 +721,8 @@ export class AgentManager {
     if (!cur.credentials.botToken)
       throw Object.assign(new Error('add a bot token first'), { statusCode: 400 });
     if (type === 'discord') {
-      await this.discord.connect(id, cur.credentials.botToken, cur.rules, (text) =>
-        this.injectToTerminal(id, text),
+      await this.discord.connect(id, cur.credentials.botToken, cur.rules, (m) =>
+        this.deliverInbound(id, m),
       );
     }
     cur.status = 'active';

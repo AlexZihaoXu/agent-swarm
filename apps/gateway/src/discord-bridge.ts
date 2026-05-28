@@ -7,8 +7,16 @@
 import { Client, Events, GatewayIntentBits, Partials, REST, Routes } from 'discord.js';
 import type { DiscordRules, IntegrationTestResult } from './types.js';
 
-/** Writes one already-formatted line into the agent's claude terminal. */
-export type InjectFn = (text: string) => Promise<void>;
+/** One accepted inbound Discord message, ready to deliver to the agent. */
+export interface InboundMessage {
+  /** Formatted, sanitized line (routing prefix + author + body). */
+  text: string;
+  /** Attachment URLs to download so the agent can view/read them. */
+  attachments: { url: string; name: string }[];
+}
+
+/** Delivers an accepted message to the agent (download attachments + inject). */
+export type Deliver = (msg: InboundMessage) => void | Promise<void>;
 
 /**
  * Neutralise any forged routing prefix in untrusted message text so a Discord
@@ -55,12 +63,12 @@ export class DiscordBridge {
     return this.clients.has(agentId);
   }
 
-  /** (Re)connect the bot for one agent and forward accepted messages via `inject`. */
+  /** (Re)connect the bot for one agent and deliver accepted messages. */
   async connect(
     agentId: string,
     token: string,
     rules: DiscordRules,
-    inject: InjectFn,
+    deliver: Deliver,
   ): Promise<void> {
     await this.disconnect(agentId);
     const client = new Client({
@@ -75,8 +83,15 @@ export class DiscordBridge {
 
     client.on(Events.MessageCreate, (msg) => {
       try {
-        const line = formatInbound(msg, rules, client.user?.id);
-        if (line) void inject(line).catch(() => {});
+        const selfId = client.user?.id;
+        const mentioned = !!selfId && msg.mentions.users.has(selfId);
+        const text = formatInbound(msg, rules, selfId, mentioned);
+        if (!text) return;
+        const attachments = [...msg.attachments.values()].map((a) => ({
+          url: a.url,
+          name: a.name ?? 'file',
+        }));
+        void Promise.resolve(deliver({ text, attachments })).catch(() => {});
       } catch {
         /* never let a malformed event take the bridge down */
       }
@@ -117,6 +132,7 @@ function formatInbound(
   },
   rules: DiscordRules,
   selfId: string | undefined,
+  mentioned: boolean,
 ): string | null {
   if (msg.author.id === selfId) return null; // never echo our own messages
   if (rules.ignoreBots && msg.author.bot) return null;
@@ -124,8 +140,13 @@ function formatInbound(
   const isDm = !msg.guildId;
   if (isDm) {
     if (!rules.forwardDms) return null;
-  } else if (rules.forwardChannelIds.length && !rules.forwardChannelIds.includes(msg.channelId)) {
-    return null;
+  } else {
+    if (rules.forwardChannelIds.length && !rules.forwardChannelIds.includes(msg.channelId))
+      return null;
+    // In channels, only forward when the bot is actually addressed (default on,
+    // incl. legacy configs missing the field) so the agent isn't pulled into
+    // every message. DMs are inherently directed.
+    if (rules.requireMention !== false && !mentioned) return null;
   }
   if (rules.allowedUserIds.length && !rules.allowedUserIds.includes(msg.author.id)) return null;
 

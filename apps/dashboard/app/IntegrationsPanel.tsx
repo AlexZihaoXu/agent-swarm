@@ -46,6 +46,7 @@ const DEFAULT_RULES: DiscordRules = {
   forwardDms: true,
   allowedUserIds: [],
   ignoreBots: true,
+  requireMention: true,
 };
 
 /** A field label with an info tooltip. */
@@ -151,6 +152,7 @@ export function IntegrationsPanel({ agentId, active }: { agentId: string; active
   const [token, setToken] = useState('');
   const [forwardDms, setForwardDms] = useState(DEFAULT_RULES.forwardDms);
   const [ignoreBots, setIgnoreBots] = useState(DEFAULT_RULES.ignoreBots);
+  const [requireMention, setRequireMention] = useState(DEFAULT_RULES.requireMention);
   const [channels, setChannels] = useState<string[]>([]);
   const [users, setUsers] = useState<string[]>([]);
   const [seeded, setSeeded] = useState(false);
@@ -174,6 +176,7 @@ export function IntegrationsPanel({ agentId, active }: { agentId: string; active
     if (discord && !seeded) {
       setForwardDms(discord.rules.forwardDms);
       setIgnoreBots(discord.rules.ignoreBots);
+      setRequireMention(discord.rules.requireMention ?? true);
       setChannels(discord.rules.forwardChannelIds);
       setUsers(discord.rules.allowedUserIds);
       setSeeded(true);
@@ -199,7 +202,13 @@ export function IntegrationsPanel({ agentId, active }: { agentId: string; active
     run(async () => {
       await updateIntegration(agentId, 'discord', {
         credentials: token.trim() ? { botToken: token.trim() } : undefined,
-        rules: { forwardDms, ignoreBots, forwardChannelIds: channels, allowedUserIds: users },
+        rules: {
+          forwardDms,
+          ignoreBots,
+          requireMention,
+          forwardChannelIds: channels,
+          allowedUserIds: users,
+        },
       });
       setToken('');
     }, 'Saved.');
@@ -277,6 +286,18 @@ export function IntegrationsPanel({ agentId, active }: { agentId: string; active
           </div>
 
           <div className="border-separator space-y-3 rounded-lg border p-3">
+            <Switch isSelected={requireMention} onChange={setRequireMention}>
+              <Switch.Control>
+                <Switch.Thumb />
+              </Switch.Control>
+              <Switch.Content>
+                <Label className="text-sm">Only when mentioned</Label>
+                <p className="text-muted text-xs">
+                  In channels, only forward messages that @-mention the bot (DMs always come
+                  through). Keeps the agent out of unrelated chatter.
+                </p>
+              </Switch.Content>
+            </Switch>
             <Switch isSelected={forwardDms} onChange={setForwardDms}>
               <Switch.Control>
                 <Switch.Thumb />
