@@ -5,8 +5,9 @@ import { motion } from 'framer-motion';
 import Link from 'next/link';
 import { useSelectedLayoutSegment } from 'next/navigation';
 import { use, useState, type ComponentProps, type ReactNode } from 'react';
-import { LuChevronLeft, LuMonitor, LuSettings, LuTerminal } from 'react-icons/lu';
+import { LuChevronLeft, LuMonitor, LuPlug, LuSettings, LuTerminal } from 'react-icons/lu';
 import { AgentSettingsModal } from '@/app/AgentSettingsModal';
+import { IntegrationsModal } from '@/app/IntegrationsModal';
 import { AgentStatsBar } from '@/app/AgentStats';
 import { ChatWidget } from './ChatWidget';
 import { DesktopLockButton, DesktopLockProvider } from './DesktopLock';
@@ -33,6 +34,7 @@ export default function AgentLayout({
   const { id } = use(params);
   const segment = useSelectedLayoutSegment() ?? 'desktop';
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [integrationsOpen, setIntegrationsOpen] = useState(false);
 
   return (
     <motion.div
@@ -74,6 +76,14 @@ export default function AgentLayout({
           <Button
             size="sm"
             variant="tertiary"
+            aria-label="Integrations"
+            onPress={() => setIntegrationsOpen(true)}
+          >
+            <LuPlug className="size-4" />
+          </Button>
+          <Button
+            size="sm"
+            variant="tertiary"
             aria-label="Agent settings"
             onPress={() => setSettingsOpen(true)}
           >
@@ -92,6 +102,11 @@ export default function AgentLayout({
         <div className="min-h-0 flex-1">{children}</div>
       </DesktopLockProvider>
       <AgentSettingsModal agentId={id} isOpen={settingsOpen} onOpenChange={setSettingsOpen} />
+      <IntegrationsModal
+        agentId={id}
+        isOpen={integrationsOpen}
+        onOpenChange={setIntegrationsOpen}
+      />
       <ChatWidget agentId={id} />
     </motion.div>
   );

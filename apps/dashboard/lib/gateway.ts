@@ -296,6 +296,80 @@ export const updateAgent = (
 /** Rename an agent's display name (live — updates the on-disk identity). */
 export const renameAgent = (id: string, username: string) => updateAgent(id, { username });
 
+// --- Integrations ----------------------------------------------------------
+// Per-agent platform connectors (Discord first). Mirrors the gateway's
+// IntegrationPublic — credentials are never returned, only a presence flag + hint.
+
+export type IntegrationType = 'discord';
+export type IntegrationStatus =
+  | 'added'
+  | 'configured'
+  | 'tested-ok'
+  | 'active'
+  | 'error'
+  | 'disabled';
+
+export interface DiscordRules {
+  forwardChannelIds: string[];
+  forwardDms: boolean;
+  allowedUserIds: string[];
+  ignoreBots: boolean;
+}
+
+export interface IntegrationTestResult {
+  ok: boolean;
+  at: number;
+  detail?: string;
+  botTag?: string;
+  guilds?: { id: string; name: string }[];
+}
+
+export interface Integration {
+  type: IntegrationType;
+  status: IntegrationStatus;
+  rules: DiscordRules;
+  hasCredentials: boolean;
+  tokenHint?: string | null;
+  lastTest?: IntegrationTestResult | null;
+  updatedAt: number;
+}
+
+export interface IntegrationPatch {
+  credentials?: { botToken?: string };
+  rules?: Partial<DiscordRules>;
+}
+
+const intBase = (id: string, type?: IntegrationType) =>
+  `/api/agents/${id}/integrations${type ? `/${type}` : ''}`;
+
+export const listIntegrations = (id: string) => api<Integration[]>(intBase(id));
+
+export const addIntegration = (id: string, type: IntegrationType) =>
+  api<Integration>(intBase(id), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ type }),
+  });
+
+export const updateIntegration = (id: string, type: IntegrationType, patch: IntegrationPatch) =>
+  api<Integration>(intBase(id, type), {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+
+export const testIntegration = (id: string, type: IntegrationType) =>
+  api<Integration>(`${intBase(id, type)}/test`, { method: 'POST' });
+
+export const applyIntegration = (id: string, type: IntegrationType) =>
+  api<Integration>(`${intBase(id, type)}/apply`, { method: 'POST' });
+
+export const disableIntegration = (id: string, type: IntegrationType) =>
+  api<Integration>(`${intBase(id, type)}/disable`, { method: 'POST' });
+
+export const removeIntegration = (id: string, type: IntegrationType) =>
+  api<{ ok: true }>(intBase(id, type), { method: 'DELETE' });
+
 /** Embeddable desktop (noVNC) URL for an agent. */
 export const desktopUrl = (id: string) => `${GATEWAY_BASE}/a/${id}/desktop/`;
 /** Base URL of an agent's terminal service (HTTP). */
