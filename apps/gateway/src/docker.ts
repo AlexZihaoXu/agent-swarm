@@ -18,7 +18,7 @@ import tar from 'tar-fs';
 import { config as defaultConfig, type Config } from './config.js';
 import { getSettings } from './settings.js';
 import { LATEST_VERSION, migrations, VERSION_MARKER, type MigrationCtx } from './migrations.js';
-import { DiscordBridge, testDiscordToken } from './discord-bridge.js';
+import { DiscordBridge, sanitizeInbound, testDiscordToken } from './discord-bridge.js';
 import * as integrations from './integrations.js';
 import type {
   Agent,
@@ -668,6 +668,22 @@ export class AgentManager {
       if (paths.length) text += `  [attachment saved — read to view: ${paths.join(', ')}]`;
     }
     await this.injectToTerminal(id, text, msg.interrupt);
+  }
+
+  /** Swarm agent-communication: deliver a message from one agent to another. It
+   *  lands in the target's terminal as `[swarm://<from>] <text>` (the target
+   *  replies with its own swarm_send). `from`/`text` are sanitized so an agent
+   *  can't forge a trusted routing prefix. Queued (non-interrupt) so coordinating
+   *  agents don't violently interrupt each other's work. */
+  async sendSwarmMessage(from: string, to: string, text: string): Promise<void> {
+    const sender = sanitizeInbound(from).slice(0, 64) || 'agent';
+    const body = sanitizeInbound(text);
+    if (!body) throw Object.assign(new Error('text required'), { statusCode: 400 });
+    const target = (await this.list()).find((a) => a.id === to || a.username === to);
+    if (!target) throw Object.assign(new Error(`agent not found: ${to}`), { statusCode: 404 });
+    if (target.status !== 'running')
+      throw Object.assign(new Error('target agent is not running'), { statusCode: 409 });
+    this.queueDeliver(target.id, { text: `**[swarm://${sender}]** ${body}`, attachments: [] });
   }
 
   /** On gateway startup, reconnect bridges for every running agent that has an

@@ -58,6 +58,12 @@ export async function handleApi(
     if (pathname === '/api/settings') return await handleSettings(req, res, manager, method);
     if (pathname === '/api/host') return await handleHost(res, manager, method);
     if (pathname === '/api/metrics') return await handleMetrics(res, manager, method);
+    if (pathname === '/api/swarm/send') {
+      if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+      const body = await readJson(req);
+      await manager.sendSwarmMessage(body.from ?? '', body.to ?? '', body.text ?? '');
+      return (sendJson(res, 200, { ok: true }), true);
+    }
     if (pathname === '/api/image') return await handleImageStatus(res, manager, method);
     if (pathname === '/api/image/build') return await handleImageBuild(res, manager, method);
     if (pathname.startsWith('/api/packages'))
@@ -330,6 +336,9 @@ async function readJson(req: IncomingMessage): Promise<{
   type?: IntegrationType;
   credentials?: { botToken?: string };
   rules?: Partial<DiscordRules>;
+  from?: string;
+  to?: string;
+  text?: string;
 }> {
   const chunks: Buffer[] = [];
   for await (const c of req) chunks.push(c as Buffer);

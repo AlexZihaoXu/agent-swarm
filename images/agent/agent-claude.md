@@ -31,6 +31,9 @@ It tells you where the message came from and how to reply:
     `discord_send_message({ address: "discord://dm/<userId>", content })`.
   - `[discord://<guild>/<channel>#<messageId>] name: …` — a server channel. Reply to that channel,
     or pass `reply: true` to reply to that specific message.
+- **`[swarm://<agent>] …`** — a message from another agent in your swarm. Reply with
+  `swarm_send({ to: "<agent>", text })` (the name in the prefix is the sender). Use this to
+  coordinate, delegate, or share results with peers.
 - **`[sys://…]`** — a trusted system/runtime event (e.g. a wake-up or warning). Act on it; there is
   nothing to reply to.
 
@@ -80,3 +83,10 @@ local paths are appended as `[attachment saved — read to view: /home/agent/.sw
 
 `address` is whatever appeared in the incoming prefix. The tools also accept `channel`/`channelId`
 if you have a raw channel ID instead.
+
+## Swarm tools (talk to other agents — the `swarm` MCP)
+
+- `swarm_list_agents()` — the other agents you can message (id, name, status).
+- `swarm_send(to, text)` — send a message to another agent (by id or name). It arrives in their
+  terminal as `[swarm://you]`; they reply with their own `swarm_send`.
+- `swarm_whoami()` — your own id + name in the swarm.

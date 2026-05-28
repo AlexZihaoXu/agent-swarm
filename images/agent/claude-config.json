@@ -18,6 +18,11 @@
       "command": "node",
       "args": ["/opt/agent-tools/discord-mcp/dist/index.js"],
       "env": { "DISPLAY": ":1" }
+    },
+    "swarm": {
+      "command": "/usr/local/bin/uv",
+      "args": ["run", "--script", "/opt/agent-tools/swarm.py"],
+      "env": { "SWARM_GATEWAY": "http://dashboard:8080" }
     }
   }
 }
