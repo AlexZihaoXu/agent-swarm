@@ -46,7 +46,7 @@ export default function AgentLayout({
             className={`${buttonVariants({ variant: 'tertiary', size: 'sm' })} gap-1.5`}
           >
             <LuChevronLeft className="size-4" />
-            Fleet
+            Dashboard
           </Link>
           <span className="text-sm font-semibold">{id}</span>
           <Tabs selectedKey={segment} className="ml-2">
