@@ -587,8 +587,21 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.2, ease: 'easeOut' }}
+              className="text-muted flex items-center gap-2 text-xs"
             >
               <TypingDots />
+              {stats?.activity && (
+                <span>
+                  {stats.activity.thinking ? 'thinking' : 'working'}
+                  {stats.activity.genTokens
+                    ? ` · ${
+                        stats.activity.genTokens >= 1000
+                          ? `${(stats.activity.genTokens / 1000).toFixed(1)}k`
+                          : stats.activity.genTokens
+                      } tokens`
+                    : ''}
+                </span>
+              )}
             </motion.div>
           )}
         </div>

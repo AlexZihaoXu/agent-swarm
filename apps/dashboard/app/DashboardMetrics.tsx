@@ -43,10 +43,19 @@ const TOOLTIP = {
   fontSize: 12,
 } as const;
 
-/** A rate-limit window (5h / 7d) as a labelled progress circle. */
-function UsageRing({ label, w }: { label: string; w: RateWindow }) {
+/**
+ * A rate-limit window (5h / 7d) as a labelled progress circle. Colour comes
+ * from PROJECTED end-of-window usage at the current burn rate (linear
+ * extrapolation): green = surely safe, orange = dangerously close, red = will
+ * exceed. The arc still shows current usage.
+ */
+function UsageRing({ label, w, windowMs }: { label: string; w: RateWindow; windowMs: number }) {
   const pct = Math.min(100, Math.max(0, w.usedPercent));
-  const color = pct >= 90 ? 'danger' : pct >= 70 ? 'warning' : 'accent';
+  const elapsedFrac = Math.min(1, Math.max(0, 1 - (w.resetsAt - Date.now()) / windowMs));
+  // Project to the reset at the current average rate (ignore the first slice of
+  // the window where the rate is too noisy to trust).
+  const projected = elapsedFrac > 0.05 ? w.usedPercent / elapsedFrac : w.usedPercent;
+  const color = projected >= 100 ? 'danger' : projected >= 80 ? 'warning' : 'success';
   return (
     <div className="flex items-center gap-3">
       <div className="relative grid place-items-center">
@@ -61,6 +70,9 @@ function UsageRing({ label, w }: { label: string; w: RateWindow }) {
       <div className="min-w-0">
         <div className="text-sm font-semibold">{label}</div>
         <div className="text-muted text-xs">{resetsIn(w.resetsAt)}</div>
+        <div className="text-muted/70 text-[11px] tabular-nums">
+          ~{Math.round(projected)}% projected
+        </div>
       </div>
     </div>
   );
@@ -103,8 +115,8 @@ export function DashboardMetrics() {
         <div className="flex flex-wrap items-center gap-x-8 gap-y-4">
           {m.rateLimits ? (
             <>
-              <UsageRing label="5h window" w={m.rateLimits.fiveHour} />
-              <UsageRing label="7d window" w={m.rateLimits.sevenDay} />
+              <UsageRing label="5h window" w={m.rateLimits.fiveHour} windowMs={5 * 3_600_000} />
+              <UsageRing label="7d window" w={m.rateLimits.sevenDay} windowMs={7 * 86_400_000} />
             </>
           ) : (
             <span className="text-muted text-sm">No usage data yet.</span>

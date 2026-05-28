@@ -422,6 +422,24 @@ function renderPromptHtml() {
   return `<pre><div style='${wrapStyle}'>${rows}</div></pre>`;
 }
 
+// Scrape the busy spinner line for live state, e.g.
+// "Honking… (10m 5s · ↓ 28.3k tokens · almost done thinking with high effort)".
+function readActivity(screen) {
+  if (!screen) return null;
+  for (const line of screen.split('\n')) {
+    if (!line.includes('…') || !/tokens/i.test(line)) continue;
+    const tm = line.match(/([\d.]+)\s*([km]?)\s*tokens/i);
+    let genTokens = null;
+    if (tm) {
+      const n = parseFloat(tm[1]);
+      const u = (tm[2] || '').toLowerCase();
+      genTokens = Math.round(u === 'k' ? n * 1e3 : u === 'm' ? n * 1e6 : n);
+    }
+    return { thinking: /thinking/i.test(line), genTokens };
+  }
+  return null;
+}
+
 function readStats() {
   let sl = {};
   try {
@@ -435,12 +453,16 @@ function readStats() {
   // the session file flips status to "waiting" with a "waitingFor" label
   // (e.g. "permission prompt"). That's the authoritative signal. We also scan
   // the screen as a fallback and, when it works, for the nicer question text.
-  const screen = detectAwaiting(claudeScreenText());
+  const screenText = claudeScreenText();
+  const screen = detectAwaiting(screenText);
   const waiting = sess.status === 'waiting';
   const awaitingInput = waiting || !!screen;
   const promptText = (screen && screen.prompt) || (waiting ? sess.waitingFor : null) || null;
   const promptOptions = (screen && screen.options) || [];
   const promptMultiSelect = !!(screen && screen.multiSelect);
+  // While busy, scrape the spinner line for the live thinking/token state, e.g.
+  // "Honking… (10m 5s · ↓ 28.3k tokens · almost done thinking with high effort)".
+  const activity = sess.status === 'busy' ? readActivity(screenText) : null;
   const total = t.totals.input + t.totals.output + t.totals.cacheRead + t.totals.cacheCreation;
   const cost = sl.cost || {};
   return {
@@ -471,6 +493,8 @@ function readStats() {
     // The agent's current task list (TaskCreate/TaskUpdate), so the chat can
     // render a live checklist that marks steps off as it works.
     tasks: readTasks(),
+    // Live spinner state while busy: { thinking, genTokens } (null when idle).
+    activity,
   };
 }
 

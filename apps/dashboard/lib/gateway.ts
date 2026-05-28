@@ -105,6 +105,8 @@ export interface AgentStats {
   context: number;
   /** The model's context-window size (from statusline), for the usage ring. */
   contextLimit?: number | null;
+  /** Live spinner state while busy (scraped): is it thinking + tokens so far. */
+  activity?: { thinking: boolean; genTokens: number | null } | null;
   turns: number;
   cost: number | null;
   linesAdded: number;
