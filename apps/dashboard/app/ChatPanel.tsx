@@ -168,19 +168,37 @@ function TodosCard({ todos }: { todos: ChatTodo[] }) {
   );
 }
 
-/** Status icon for a task/todo: completed check, in-progress pulse, or pending. */
+/** Status icon for a task/todo: completed check, in-progress pulse, or pending.
+ * The glyph cross-fades/pops when the status changes. */
 function StatusIcon({ status }: { status: string }) {
-  if (status === 'completed')
-    return <LuCircleCheck className="text-success mt-0.5 size-4 shrink-0" />;
-  if (status === 'in_progress')
-    return (
+  const glyph =
+    status === 'completed' ? (
+      <LuCircleCheck className="text-success size-4" />
+    ) : status === 'in_progress' ? (
       <motion.span
-        className="bg-accent mt-1.5 size-2 shrink-0 rounded-full"
+        className="bg-accent size-2 rounded-full"
         animate={{ opacity: [1, 0.3, 1], scale: [1, 1.25, 1] }}
         transition={{ duration: 1, repeat: Infinity, ease: 'easeInOut' }}
       />
+    ) : (
+      <LuCircle className="text-muted size-4" />
     );
-  return <LuCircle className="text-muted mt-0.5 size-4 shrink-0" />;
+  return (
+    <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center">
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.span
+          key={status}
+          initial={{ opacity: 0, scale: 0.4 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0, scale: 0.4 }}
+          transition={{ duration: 0.15, ease: 'easeOut' }}
+          className="flex items-center justify-center"
+        >
+          {glyph}
+        </motion.span>
+      </AnimatePresence>
+    </span>
+  );
 }
 
 /** Live task checklist (TaskCreate/TaskUpdate), pinned above the conversation —
@@ -210,23 +228,33 @@ function TasksPanel({ tasks }: { tasks: AgentTask[] }) {
         }`}
       >
         <div className="overflow-hidden">
-          <ul className="max-h-[45vh] space-y-1 overflow-auto px-3 pb-2">
-            {tasks.map((t) => (
-              <li key={t.id} className="flex items-start gap-2 text-sm">
-                <StatusIcon status={t.status} />
-                <span
-                  className={
-                    t.status === 'completed'
-                      ? 'text-muted line-through'
-                      : t.status === 'in_progress'
-                        ? 'text-foreground font-medium'
-                        : 'text-foreground'
-                  }
+          <ul className="max-h-[45vh] overflow-auto px-3 pb-2">
+            <AnimatePresence initial={false}>
+              {tasks.map((t) => (
+                <motion.li
+                  key={t.id}
+                  layout
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.2, ease: 'easeOut' }}
+                  className="flex items-start gap-2 overflow-hidden py-0.5 text-sm"
                 >
-                  {t.status === 'in_progress' && t.activeForm ? t.activeForm : t.subject}
-                </span>
-              </li>
-            ))}
+                  <StatusIcon status={t.status} />
+                  <span
+                    className={`transition-colors duration-300 ${
+                      t.status === 'completed'
+                        ? 'text-muted line-through'
+                        : t.status === 'in_progress'
+                          ? 'text-foreground font-medium'
+                          : 'text-foreground'
+                    }`}
+                  >
+                    {t.status === 'in_progress' && t.activeForm ? t.activeForm : t.subject}
+                  </span>
+                </motion.li>
+              ))}
+            </AnimatePresence>
           </ul>
         </div>
       </div>
