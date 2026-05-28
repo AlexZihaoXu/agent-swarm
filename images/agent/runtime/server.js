@@ -196,6 +196,11 @@ function readTranscript() {
             items.push({ kind: 'todos', todos });
             lastTodos = sig;
           }
+        } else if (
+          b.type === 'tool_use' &&
+          /^task(create|update|get|list|stop|output)$/i.test(b.name || '')
+        ) {
+          /* skip — the task list is rendered as a live checklist from /api/stats */
         } else if (b.type === 'tool_use')
           items.push({ kind: 'tool', name: b.name, detail: toolDetail(b.input) });
       }
@@ -424,7 +429,40 @@ function readStats() {
     promptText,
     promptOptions,
     promptMultiSelect,
+    // The agent's current task list (TaskCreate/TaskUpdate), so the chat can
+    // render a live checklist that marks steps off as it works.
+    tasks: readTasks(),
   };
+}
+
+// The session's current task list, persisted by Claude Code under
+// ~/.claude/tasks/<sessionId>/<n>.json. Returns it sorted by id.
+function readTasks() {
+  const newest = newestFile(path.join(CLAUDE_DIR, 'projects'), '.jsonl');
+  if (!newest) return [];
+  const dir = path.join(CLAUDE_DIR, 'tasks', path.basename(newest.path, '.jsonl'));
+  let files;
+  try {
+    files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
+  } catch {
+    return [];
+  }
+  const tasks = [];
+  for (const f of files) {
+    try {
+      const t = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+      tasks.push({
+        id: String(t.id),
+        subject: String(t.subject || ''),
+        activeForm: String(t.activeForm || ''),
+        status: String(t.status || 'pending'),
+      });
+    } catch {
+      /* skip a malformed/locked file */
+    }
+  }
+  tasks.sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
+  return tasks;
 }
 
 // Resume across container restarts. The agent's home is a persistent disk, so

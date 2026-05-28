@@ -83,6 +83,13 @@ export async function buildImage(onChunk: (text: string) => void): Promise<void>
   }
 }
 
+export interface AgentTask {
+  id: string;
+  subject: string;
+  activeForm?: string;
+  status: string;
+}
+
 export interface AgentStats {
   model: string | null;
   status: string | null;
@@ -111,6 +118,8 @@ export interface AgentStats {
   promptOptions?: { n: number; label: string; checkable?: boolean; checked?: boolean }[];
   /** The open selector is a multi-select (checkboxes + Submit). */
   promptMultiSelect?: boolean;
+  /** The agent's current task list (TaskCreate/TaskUpdate), for a live checklist. */
+  tasks?: AgentTask[];
 }
 
 /** Live session stats for one agent, served by the agent's terminal supervisor. */

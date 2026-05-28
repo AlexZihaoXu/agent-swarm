@@ -26,6 +26,7 @@ import {
   getTranscript,
   terminalWsUrl,
   uploadToAgent,
+  type AgentTask,
   type ChatTodo,
   type ChatTurn,
 } from '@/lib/gateway';
@@ -166,6 +167,56 @@ function TodosCard({ todos }: { todos: ChatTodo[] }) {
   );
 }
 
+/** Status icon for a task/todo: completed check, in-progress pulse, or pending. */
+function StatusIcon({ status }: { status: string }) {
+  if (status === 'completed')
+    return <LuCircleCheck className="text-success mt-0.5 size-4 shrink-0" />;
+  if (status === 'in_progress')
+    return (
+      <motion.span
+        className="bg-accent mt-1.5 size-2 shrink-0 rounded-full"
+        animate={{ opacity: [1, 0.3, 1], scale: [1, 1.25, 1] }}
+        transition={{ duration: 1, repeat: Infinity, ease: 'easeInOut' }}
+      />
+    );
+  return <LuCircle className="text-muted mt-0.5 size-4 shrink-0" />;
+}
+
+/** Live task checklist (TaskCreate/TaskUpdate), pinned above the conversation —
+ * shows steps getting marked off as the agent works through them. */
+function TasksPanel({ tasks }: { tasks: AgentTask[] }) {
+  const done = tasks.filter((t) => t.status === 'completed').length;
+  return (
+    <div className="border-separator bg-surface-secondary/50 shrink-0 border-b px-3 py-2">
+      <div className="text-muted mb-1.5 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase">
+        <LuListTodo className="size-3.5" />
+        Tasks
+        <span className="text-muted/70 lowercase">
+          {done}/{tasks.length} done
+        </span>
+      </div>
+      <ul className="max-h-40 space-y-1 overflow-auto">
+        {tasks.map((t) => (
+          <li key={t.id} className="flex items-start gap-2 text-sm">
+            <StatusIcon status={t.status} />
+            <span
+              className={
+                t.status === 'completed'
+                  ? 'text-muted line-through'
+                  : t.status === 'in_progress'
+                    ? 'text-foreground font-medium'
+                    : 'text-foreground'
+              }
+            >
+              {t.status === 'in_progress' && t.activeForm ? t.activeForm : t.subject}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 /** Three bouncing dots, shown where the agent's next reply will appear. */
 function TypingDots() {
   return (
@@ -199,6 +250,7 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
   const [attaching, setAttaching] = useState(false);
   const stats = useAgentStats(agentId);
   const working = stats?.status === 'busy';
+  const tasks = stats?.tasks ?? [];
 
   // Reset when the agent changes (so stale turns don't linger before reload).
   useEffect(() => {
@@ -379,6 +431,7 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {tasks.length > 0 && <TasksPanel tasks={tasks} />}
       <div
         ref={scrollRef}
         onScroll={onScroll}
