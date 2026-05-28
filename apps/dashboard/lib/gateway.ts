@@ -103,6 +103,8 @@ export interface AgentStats {
   };
   /** Current context-window usage (most recent turn's input side). */
   context: number;
+  /** The model's context-window size (from statusline), for the usage ring. */
+  contextLimit?: number | null;
   turns: number;
   cost: number | null;
   linesAdded: number;

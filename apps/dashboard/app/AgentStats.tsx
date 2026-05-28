@@ -33,8 +33,7 @@ function contextLimit(model: string | null): number | null {
 }
 
 /** "41.0k / 1M" when the model's limit is known, else "41.0k". */
-function fmtContext(used: number, model: string | null): string {
-  const limit = contextLimit(model);
+function fmtContext(used: number, limit: number | null): string {
   const lim = limit ? ` / ${limit >= 1e6 ? `${limit / 1e6}M` : `${limit / 1e3}k`}` : '';
   return `${fmtTokens(used)}${lim}`;
 }
@@ -158,8 +157,8 @@ function Tokens({ value }: { value: number }) {
 function Cost({ value }: { value: number }) {
   return <Animated value={value} render={fmtCost} />;
 }
-function ContextUsage({ value, model }: { value: number; model: string | null }) {
-  return <Animated value={value} render={(v) => fmtContext(Math.round(v), model)} />;
+function ContextUsage({ value, limit }: { value: number; limit: number | null }) {
+  return <Animated value={value} render={(v) => fmtContext(Math.round(v), limit)} />;
 }
 
 /**
@@ -167,10 +166,18 @@ function ContextUsage({ value, model }: { value: number; model: string | null })
  * toward the model's limit (when known) and shifts colour as it nears full;
  * with no known limit it falls back to a plain gauge readout.
  */
-function ContextCircle({ used, model }: { used: number; model: string | null }) {
+function ContextCircle({
+  used,
+  model,
+  limit,
+}: {
+  used: number;
+  model: string | null;
+  limit?: number | null;
+}) {
   const [v] = useLerp(used);
-  const limit = contextLimit(model);
-  const title = `context window usage — ${fmtContext(used, model)}`;
+  const lim = limit ?? contextLimit(model);
+  const title = `context window usage — ${fmtContext(used, lim)}`;
   if (used <= 0) {
     return (
       <Metric icon={<LuGauge className="size-3" />} title="context window usage" strong>
@@ -178,14 +185,14 @@ function ContextCircle({ used, model }: { used: number; model: string | null }) 
       </Metric>
     );
   }
-  if (!limit) {
+  if (!lim) {
     return (
       <Metric icon={<LuGauge className="size-3" />} title="context window usage" strong>
-        <ContextUsage value={used} model={model} />
+        <ContextUsage value={used} limit={null} />
       </Metric>
     );
   }
-  const pct = Math.min(100, (v / limit) * 100);
+  const pct = Math.min(100, (v / lim) * 100);
   const color = pct >= 90 ? 'danger' : pct >= 75 ? 'warning' : 'accent';
   return (
     <span className="flex items-center gap-1.5 tabular-nums" title={title}>
@@ -194,7 +201,7 @@ function ContextCircle({ used, model }: { used: number; model: string | null }) 
         size="sm"
         color={color}
         value={v}
-        maxValue={limit}
+        maxValue={lim}
         className="scale-75"
       >
         <ProgressCircle.Track>
@@ -202,7 +209,7 @@ function ContextCircle({ used, model }: { used: number; model: string | null }) 
           <ProgressCircle.FillCircle />
         </ProgressCircle.Track>
       </ProgressCircle>
-      <span className="text-foreground">{fmtContext(Math.round(v), model)}</span>
+      <span className="text-foreground">{fmtContext(Math.round(v), lim)}</span>
     </span>
   );
 }
@@ -366,12 +373,14 @@ function ActivityBadge({ status }: { status: string }) {
  * data yet, so the line is consistent across every card.
  */
 export function AgentStatsInline({ stats: s }: { stats: AgentStats | null }) {
-  const up = s ? s.tokens.input + s.tokens.cacheCreation + s.tokens.cacheRead : 0;
+  // "sent" = fresh input + cache writes (NOT cache reads — those are the same
+  // context re-read each turn and would massively over-count when summed).
+  const up = s ? s.tokens.input + s.tokens.cacheCreation : 0;
   const out = s?.tokens.output ?? 0;
   return (
     <div className="text-muted flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
       {s?.model && <span className="text-foreground font-medium">{cleanModel(s.model)}</span>}
-      <ContextCircle used={s?.context ?? 0} model={s?.model ?? null} />
+      <ContextCircle used={s?.context ?? 0} model={s?.model ?? null} limit={s?.contextLimit} />
       <Metric icon={<LuArrowUp className="size-3" />} title="tokens sent (input + cache)">
         {up > 0 ? <Tokens value={up} /> : '--'}
       </Metric>
@@ -387,11 +396,13 @@ export function AgentStatsBar({ agentId }: { agentId: string }) {
   const s = useAgentStats(agentId);
   if (!s) return null;
   const t = s.tokens;
+  // New tokens (exclude cache reads — repeated re-reads of the same context).
+  const total = t.input + t.output + t.cacheCreation;
   return (
     <div className="text-muted ml-auto flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
       {s.model && <span className="text-foreground font-semibold">{s.model}</span>}
       {s.status && <ActivityBadge status={s.status} />}
-      {t.total > 0 && (
+      {total > 0 && (
         <>
           <Metric icon={<LuArrowUp className="size-3" />} title="input tokens">
             <Tokens value={t.input} />
@@ -399,15 +410,22 @@ export function AgentStatsBar({ agentId }: { agentId: string }) {
           <Metric icon={<LuArrowDown className="size-3" />} title="output tokens">
             <Tokens value={t.output} />
           </Metric>
-          <Metric icon={<LuRefreshCcw className="size-3" />} title="cache-read tokens">
+          <Metric
+            icon={<LuRefreshCcw className="size-3" />}
+            title="cache-read tokens (re-read each turn)"
+          >
             <Tokens value={t.cacheRead} />
           </Metric>
-          <Metric icon={<LuCoins className="size-3" />} title="total tokens" strong>
-            <Tokens value={t.total} />
+          <Metric
+            icon={<LuCoins className="size-3" />}
+            title="new tokens (input + output + cache writes)"
+            strong
+          >
+            <Tokens value={total} />
           </Metric>
         </>
       )}
-      {s.context > 0 && <ContextCircle used={s.context} model={s.model} />}
+      {s.context > 0 && <ContextCircle used={s.context} model={s.model} limit={s.contextLimit} />}
       {s.cost != null && s.cost > 0 && (
         <Metric icon={<LuDollarSign className="size-3" />} title="session cost (USD)">
           <Cost value={s.cost} />

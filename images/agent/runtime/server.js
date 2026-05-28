@@ -413,6 +413,9 @@ function readStats() {
     sessionId: sess.sessionId || null,
     tokens: { ...t.totals, total },
     context: t.context,
+    // Authoritative context-window size from Claude Code's statusline (the model
+    // display name doesn't always carry it, e.g. "Opus 4.7").
+    contextLimit: (sl.context_window && sl.context_window.context_window_size) || null,
     turns: t.turns,
     // Computed from token usage × per-model rates; fall back to Claude Code's
     // own statusLine figure if we have no turns yet.

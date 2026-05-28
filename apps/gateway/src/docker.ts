@@ -300,9 +300,12 @@ export class AgentManager {
           const out = u.output_tokens || 0;
           const cr = u.cache_read_input_tokens || 0;
           const cc = u.cache_creation_input_tokens || 0;
-          const tk = inp + out + cr + cc;
+          // Tokens "burnt" = new tokens (fresh input + output + cache writes).
+          // cache_read is the SAME context re-read every turn — summing it over
+          // turns wildly over-counts — but it IS billed, so cost below keeps it.
+          const tk = inp + out + cc;
           const idx = Math.floor((ts - base) / HOUR);
-          if (!tk || idx < 0 || idx >= 24) continue;
+          if (idx < 0 || idx >= 24) continue;
           const r = modelRates(o.message?.model, inp + cr + cc);
           const c = (inp * r.in + out * r.out + cc * r.cw + cr * r.cr) / 1_000_000;
           tokens += tk;
