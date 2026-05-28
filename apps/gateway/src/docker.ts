@@ -582,11 +582,14 @@ export class AgentManager {
   // Discord MCP server, which reads these same credentials off the disk.
 
   /** Inject a single line into the agent's claude terminal (the receive path).
-   *  Retries with backoff: right after a (re)start the terminal/claude session
-   *  may not be listening yet, and we don't want to silently drop the message. */
+   *  Right after a (re)start the terminal/claude session may not be listening
+   *  yet, so we retry — but ONLY on "not ready" signals (a connection error, or
+   *  404 = session not registered yet), where the message definitely was not
+   *  typed. A real HTTP response (success or a permanent error like 400) is never
+   *  retried, so a message the server already processed can't be typed twice. */
   private async injectToTerminal(id: string, text: string): Promise<void> {
-    let lastErr: unknown;
-    for (let attempt = 0; attempt < 5; attempt++) {
+    const MAX = 5;
+    for (let attempt = 0; ; attempt++) {
       try {
         const t = await this.resolveTarget(id, 'terminal');
         const res = await fetch(`http://${t.host}:${t.port}/api/inject`, {
@@ -595,13 +598,18 @@ export class AgentManager {
           body: JSON.stringify({ session: 'claude', text }),
         });
         if (res.ok) return;
-        lastErr = new Error(`inject failed: HTTP ${res.status}`);
+        // 404 = the claude session isn't up yet (transient on (re)start); retry.
+        // Anything else is permanent (e.g. 400) — fail without retrying.
+        if (res.status !== 404 || attempt >= MAX - 1)
+          throw new Error(`inject failed: HTTP ${res.status}`);
       } catch (e) {
-        lastErr = e;
+        // Permanent HTTP errors (thrown above) propagate; connection-level errors
+        // (terminal not listening yet) are retriable until we run out of tries.
+        if (e instanceof Error && /inject failed: HTTP/.test(e.message)) throw e;
+        if (attempt >= MAX - 1) throw e;
       }
       await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
     }
-    throw lastErr ?? new Error('inject failed');
   }
 
   /** On (re)start, bring back any integration that was left `active`. */
