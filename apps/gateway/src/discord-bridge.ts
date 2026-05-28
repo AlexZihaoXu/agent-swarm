@@ -56,14 +56,31 @@ export async function testDiscordToken(token: string): Promise<IntegrationTestRe
   }
 }
 
+/** How long after the last interaction the agent stays "online" (attentive). */
+const ONLINE_MS = 10 * 60_000;
+/** How often we check for the idle→wake transition. */
+const WAKE_CHECK_MS = 60_000;
+
+interface Conn {
+  client: Client;
+  timer: ReturnType<typeof setInterval>;
+}
+
 export class DiscordBridge {
-  private clients = new Map<string, Client>();
+  private conns = new Map<string, Conn>();
 
   isConnected(agentId: string): boolean {
-    return this.clients.has(agentId);
+    return this.conns.has(agentId);
   }
 
-  /** (Re)connect the bot for one agent and deliver accepted messages. */
+  /**
+   * (Re)connect the bot for one agent. Implements an online/idle attention model:
+   *  - ONLINE (interaction within ONLINE_MS): every watched-channel message is
+   *    forwarded in real time; the bot's Discord presence shows online.
+   *  - IDLE: plain channel messages are buffered as "unread" (not forwarded);
+   *    presence shows idle. A @mention/reply/DM wakes it immediately; otherwise a
+   *    `[sys://wake]` nudge fires (only while unread > 0) telling it to catch up.
+   */
   async connect(
     agentId: string,
     token: string,
@@ -81,32 +98,69 @@ export class DiscordBridge {
       partials: [Partials.Channel], // required to receive DMs
     });
 
-    // Per-channel "active conversation" timestamps: once the bot is talking in a
-    // channel, follow-ups don't need to re-@mention it (people don't). A channel
-    // goes cold after WINDOW_MS of silence, after which a mention is needed again.
-    const lastActive = new Map<string, number>();
-    const WINDOW_MS = 5 * 60_000;
+    let onlineUntil = 0; // attentive until this timestamp; 0 = idle
+    let presence: 'online' | 'idle' | null = null;
+    const unread = new Map<string, number>(); // channelId -> messages buffered while idle
+
+    const setPresence = (s: 'online' | 'idle') => {
+      if (presence === s) return;
+      presence = s;
+      try {
+        client.user?.setPresence({ status: s });
+      } catch {
+        /* presence is best-effort */
+      }
+    };
+    const bumpOnline = () => {
+      onlineUntil = Date.now() + ONLINE_MS;
+      setPresence('online');
+    };
+    const send = (text: string, attachments: { url: string; name: string }[] = []) =>
+      void Promise.resolve(deliver({ text, attachments })).catch(() => {});
+
+    client.once(Events.ClientReady, () => setPresence('idle'));
+
     client.on(Events.MessageCreate, (msg) => {
       try {
         const selfId = client.user?.id;
-        // The bot's own messages keep the conversation window open (but aren't
-        // forwarded back to it).
-        if (selfId && msg.author.id === selfId) {
-          lastActive.set(msg.channelId, Date.now());
-          return;
-        }
-        const mentioned = !!selfId && msg.mentions.users.has(selfId);
-        const repliedToBot = !!selfId && msg.mentions.repliedUser?.id === selfId;
-        const inConversation = Date.now() - (lastActive.get(msg.channelId) ?? 0) < WINDOW_MS;
-        const addressed = mentioned || repliedToBot || inConversation;
-        const text = formatInbound(msg, rules, selfId, addressed);
-        if (!text) return;
-        lastActive.set(msg.channelId, Date.now()); // keep the window alive
+        // The bot's own messages keep it online (but aren't forwarded back).
+        if (selfId && msg.author.id === selfId) return bumpOnline();
+        if (rules.ignoreBots && msg.author.bot) return;
+        if (rules.allowedUserIds.length && !rules.allowedUserIds.includes(msg.author.id)) return;
+
+        const isDm = !msg.guildId;
+        const mentioned =
+          !!selfId && (msg.mentions.users.has(selfId) || msg.mentions.repliedUser?.id === selfId);
         const attachments = [...msg.attachments.values()].map((a) => ({
           url: a.url,
           name: a.name ?? 'file',
         }));
-        void Promise.resolve(deliver({ text, attachments })).catch(() => {});
+
+        if (isDm) {
+          if (!rules.forwardDms) return;
+          bumpOnline();
+          unread.clear();
+          return send(formatLine(msg, true), attachments);
+        }
+
+        if (rules.forwardChannelIds.length) {
+          // Watched channels: online → forward all; idle → buffer unless @-addressed.
+          if (!rules.forwardChannelIds.includes(msg.channelId)) return;
+          if (mentioned || Date.now() < onlineUntil) {
+            bumpOnline();
+            unread.clear();
+            return send(formatLine(msg, false), attachments);
+          }
+          unread.set(msg.channelId, (unread.get(msg.channelId) ?? 0) + 1);
+          setPresence('idle');
+          return;
+        }
+
+        // No watch list → whole server: only @mentions/replies (or gate-off) pass.
+        if (mentioned || rules.requireMention === false) {
+          bumpOnline();
+          send(formatLine(msg, false), attachments);
+        }
       } catch {
         /* never let a malformed event take the bridge down */
       }
@@ -115,63 +169,62 @@ export class DiscordBridge {
       /* discord.js auto-reconnects; swallow to avoid crashing the gateway */
     });
 
+    // Idle sweep: once idle, if messages piled up unread, fire ONE wake nudge that
+    // brings the agent back online to catch up. Only fires while unread > 0.
+    const timer = setInterval(() => {
+      try {
+        if (Date.now() < onlineUntil) return; // still online
+        setPresence('idle');
+        const total = [...unread.values()].reduce((a, b) => a + b, 0);
+        if (total === 0) return;
+        const channels = [...unread.keys()];
+        bumpOnline(); // waking up to handle the backlog
+        unread.clear();
+        send(
+          `**[sys://wake]** ${total} new message(s) arrived while you were idle in channel(s): ` +
+            `${channels.join(', ')}. Read them with discord_read_messages and reply to anything relevant.`,
+        );
+      } catch {
+        /* ignore */
+      }
+    }, WAKE_CHECK_MS);
+
     await client.login(token);
-    this.clients.set(agentId, client);
+    this.conns.set(agentId, { client, timer });
   }
 
   async disconnect(agentId: string): Promise<void> {
-    const client = this.clients.get(agentId);
-    if (!client) return;
-    this.clients.delete(agentId);
+    const conn = this.conns.get(agentId);
+    if (!conn) return;
+    this.conns.delete(agentId);
+    clearInterval(conn.timer);
     try {
-      await client.destroy();
+      await conn.client.destroy();
     } catch {
       /* ignore */
     }
   }
 
   async disconnectAll(): Promise<void> {
-    await Promise.all([...this.clients.keys()].map((id) => this.disconnect(id)));
+    await Promise.all([...this.conns.keys()].map((id) => this.disconnect(id)));
   }
 }
 
-/** Apply the agent's rules to an incoming message; return the line to inject, or null. */
-function formatInbound(
-  // discord.js Message; typed loosely to avoid leaking the heavy generic here.
+/** Format one message as a routing-prefixed line. Author + body are sanitized so
+ *  untrusted text can't forge a `[scheme://…]` prefix. */
+function formatLine(
   msg: {
-    author: { id: string; bot: boolean; username: string };
+    author: { id: string; username: string };
     guildId: string | null;
     channelId: string;
     id: string;
     content: string;
   },
-  rules: DiscordRules,
-  selfId: string | undefined,
-  addressed: boolean,
-): string | null {
-  if (msg.author.id === selfId) return null; // never echo our own messages
-  if (rules.ignoreBots && msg.author.bot) return null;
-
-  const isDm = !msg.guildId;
-  if (isDm) {
-    if (!rules.forwardDms) return null;
-  } else if (rules.forwardChannelIds.length) {
-    // Explicit watch list: the agent receives EVERY message in these channels and
-    // decides for itself what (if anything) to answer. Other channels are ignored.
-    if (!rules.forwardChannelIds.includes(msg.channelId)) return null;
-  } else {
-    // No watch list → the whole server. To avoid noise, only forward when the bot
-    // is addressed — @mentioned, replied to, or mid-conversation (default on,
-    // incl. legacy configs missing the field).
-    if (rules.requireMention !== false && !addressed) return null;
-  }
-  if (rules.allowedUserIds.length && !rules.allowedUserIds.includes(msg.author.id)) return null;
-
+  isDm: boolean,
+): string {
   const address = isDm
     ? `discord://dm/${msg.author.id}`
     : `discord://${msg.guildId}/${msg.channelId}#${msg.id}`;
-  // Both the author name AND the body are attacker-controlled, so both must be
-  // sanitized — otherwise a username like "[sys://wake]" forges a trusted prefix.
   const user = sanitizeInbound(msg.author.username);
   const body = sanitizeInbound(msg.content);
   return `**[${address}]** ${user}: ${body}`;
