@@ -9,10 +9,12 @@ import {
   Spinner,
   Switch,
   TextField,
+  Tooltip,
   toast,
 } from '@heroui/react';
-import { useCallback, useEffect, useState } from 'react';
-import { LuMessageSquare, LuTrash2 } from 'react-icons/lu';
+import { AnimatePresence, motion } from 'framer-motion';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { LuInfo, LuMessageSquare, LuTrash2, LuX } from 'react-icons/lu';
 import {
   addIntegration,
   applyIntegration,
@@ -46,12 +48,95 @@ const DEFAULT_RULES: DiscordRules = {
   ignoreBots: true,
 };
 
-const toList = (s: string): string[] =>
-  s
-    .split(/[\s,]+/)
-    .map((x) => x.trim())
-    .filter(Boolean);
-const fromList = (a: string[]): string => a.join(', ');
+/** A field label with an info tooltip. */
+function FieldLabel({ children, hint }: { children: ReactNode; hint: string }) {
+  return (
+    <div className="mb-1.5 flex items-center gap-1.5">
+      <span className="text-sm font-medium">{children}</span>
+      <Tooltip delay={150}>
+        <Tooltip.Trigger
+          aria-label="More info"
+          className="text-muted hover:text-foreground inline-flex cursor-help"
+        >
+          <LuInfo className="size-3.5" />
+        </Tooltip.Trigger>
+        <Tooltip.Content showArrow className="max-w-xs">
+          <Tooltip.Arrow />
+          <p className="text-xs">{hint}</p>
+        </Tooltip.Content>
+      </Tooltip>
+    </div>
+  );
+}
+
+/** A list of IDs as removable chips; type + Enter (or comma) to add, Backspace to
+ *  remove the last. Add/remove animate. */
+function TagInput({
+  values,
+  onChange,
+  placeholder,
+}: {
+  values: string[];
+  onChange: (v: string[]) => void;
+  placeholder?: string;
+}) {
+  const [draft, setDraft] = useState('');
+  const commit = (raw: string) => {
+    const items = raw
+      .split(/[\s,]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (items.length) {
+      const next = [...values];
+      for (const it of items) if (!next.includes(it)) next.push(it);
+      onChange(next);
+    }
+    setDraft('');
+  };
+  return (
+    <div className="border-separator focus-within:border-accent focus-within:ring-accent/25 flex flex-wrap items-center gap-1.5 rounded-lg border bg-transparent px-2 py-2 transition-[border-color,box-shadow] focus-within:ring-2">
+      <AnimatePresence initial={false}>
+        {values.map((v) => (
+          <motion.span
+            key={v}
+            layout
+            initial={{ opacity: 0, scale: 0.7 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.7 }}
+            transition={{ duration: 0.14 }}
+          >
+            <Chip variant="soft" size="sm" className="gap-1">
+              <Chip.Label className="font-mono text-xs">{v}</Chip.Label>
+              <button
+                type="button"
+                aria-label={`Remove ${v}`}
+                className="text-muted hover:text-foreground -mr-0.5 inline-flex"
+                onClick={() => onChange(values.filter((x) => x !== v))}
+              >
+                <LuX className="size-3" />
+              </button>
+            </Chip>
+          </motion.span>
+        ))}
+      </AnimatePresence>
+      <input
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ',') {
+            e.preventDefault();
+            commit(draft);
+          } else if (e.key === 'Backspace' && !draft && values.length) {
+            onChange(values.slice(0, -1));
+          }
+        }}
+        onBlur={() => commit(draft)}
+        placeholder={values.length ? '' : placeholder}
+        className="min-w-[12ch] flex-1 bg-transparent py-0.5 text-sm outline-none"
+      />
+    </div>
+  );
+}
 
 /**
  * Integrations tab content (rendered inside the agent Settings modal). Connect
@@ -66,8 +151,8 @@ export function IntegrationsPanel({ agentId, active }: { agentId: string; active
   const [token, setToken] = useState('');
   const [forwardDms, setForwardDms] = useState(DEFAULT_RULES.forwardDms);
   const [ignoreBots, setIgnoreBots] = useState(DEFAULT_RULES.ignoreBots);
-  const [channels, setChannels] = useState('');
-  const [users, setUsers] = useState('');
+  const [channels, setChannels] = useState<string[]>([]);
+  const [users, setUsers] = useState<string[]>([]);
   const [seeded, setSeeded] = useState(false);
 
   const discord = list?.find((i) => i.type === 'discord') ?? null;
@@ -89,8 +174,8 @@ export function IntegrationsPanel({ agentId, active }: { agentId: string; active
     if (discord && !seeded) {
       setForwardDms(discord.rules.forwardDms);
       setIgnoreBots(discord.rules.ignoreBots);
-      setChannels(fromList(discord.rules.forwardChannelIds));
-      setUsers(fromList(discord.rules.allowedUserIds));
+      setChannels(discord.rules.forwardChannelIds);
+      setUsers(discord.rules.allowedUserIds);
       setSeeded(true);
     }
   }, [discord, seeded]);
@@ -114,12 +199,7 @@ export function IntegrationsPanel({ agentId, active }: { agentId: string; active
     run(async () => {
       await updateIntegration(agentId, 'discord', {
         credentials: token.trim() ? { botToken: token.trim() } : undefined,
-        rules: {
-          forwardDms,
-          ignoreBots,
-          forwardChannelIds: toList(channels),
-          allowedUserIds: toList(users),
-        },
+        rules: { forwardDms, ignoreBots, forwardChannelIds: channels, allowedUserIds: users },
       });
       setToken('');
     }, 'Saved.');
@@ -217,14 +297,27 @@ export function IntegrationsPanel({ agentId, active }: { agentId: string; active
             </Switch>
           </div>
 
-          <TextField value={channels} onChange={setChannels}>
-            <Label>Forwarded channels</Label>
-            <Input placeholder="channel IDs, comma-separated — empty = none" />
-          </TextField>
-          <TextField value={users} onChange={setUsers}>
-            <Label>Allowed senders</Label>
-            <Input placeholder="user IDs, comma-separated — empty = anyone" />
-          </TextField>
+          <div>
+            <FieldLabel hint="Only messages posted in these channels reach the agent. In Discord turn on Settings → Advanced → Developer Mode, then right-click a channel → Copy Channel ID. Empty = no channels forwarded (DMs still work if enabled above).">
+              Forwarded channels
+            </FieldLabel>
+            <TagInput
+              values={channels}
+              onChange={setChannels}
+              placeholder="paste a channel ID, press Enter"
+            />
+          </div>
+
+          <div>
+            <FieldLabel hint="If set, only these people's messages reach the agent — everyone else is ignored. Right-click a user → Copy User ID (Developer Mode). Empty = anyone may message the agent.">
+              Allowed senders
+            </FieldLabel>
+            <TagInput
+              values={users}
+              onChange={setUsers}
+              placeholder="paste a user ID, press Enter"
+            />
+          </div>
 
           {/* Test feedback */}
           {testing ? (

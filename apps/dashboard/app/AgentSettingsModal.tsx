@@ -133,7 +133,10 @@ export function AgentSettingsModal({
                       </Tabs.List>
                     </Tabs.ListContainer>
 
-                    <Tabs.Panel id="general" className="space-y-5 pt-5">
+                    <Tabs.Panel
+                      id="general"
+                      className="max-h-[60vh] space-y-5 overflow-y-auto pt-5 pr-1"
+                    >
                       <div className="flex items-end gap-2">
                         <TextField className="flex-1" value={name} onChange={setName} isRequired>
                           <Label>Display name</Label>
@@ -198,7 +201,10 @@ export function AgentSettingsModal({
                       </div>
                     </Tabs.Panel>
 
-                    <Tabs.Panel id="integrations" className="pt-5">
+                    <Tabs.Panel
+                      id="integrations"
+                      className="max-h-[60vh] overflow-y-auto pt-5 pr-1"
+                    >
                       <IntegrationsPanel
                         agentId={agentId}
                         active={isOpen && tab === 'integrations'}
