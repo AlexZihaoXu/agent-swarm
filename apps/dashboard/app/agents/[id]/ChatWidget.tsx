@@ -38,7 +38,11 @@ export function ChatWidget({ agentId }: { agentId: string }) {
             dragControls={dragControls}
             dragListener={false}
             dragMomentum={false}
-            whileDrag={{ opacity: 0.5 }}
+            whileDrag={{
+              opacity: 0.5,
+              scale: 1.01,
+              boxShadow: '0 28px 90px rgba(0,0,0,0.7)',
+            }}
             initial={{ opacity: 0, y: 24, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 24, scale: 0.98 }}

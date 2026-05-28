@@ -3,6 +3,7 @@
 import { Button, buttonVariants, Card, Input, Label, TextField } from '@heroui/react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import { LuChevronLeft } from 'react-icons/lu';
 import { getSettings, updateSettings } from '@/lib/gateway';
 import { FilePickerModal } from './FilePickerModal';
 
@@ -51,8 +52,9 @@ export default function SettingsPage() {
   return (
     <main className="mx-auto max-w-2xl px-6 py-10">
       <header className="mb-8 flex items-center gap-3">
-        <Link href="/" className={buttonVariants({ variant: 'tertiary', size: 'sm' })}>
-          ← Fleet
+        <Link href="/" className={`${buttonVariants({ variant: 'tertiary', size: 'sm' })} gap-1.5`}>
+          <LuChevronLeft className="size-4" />
+          Dashboard
         </Link>
         <h1 className="text-2xl font-semibold">Settings</h1>
       </header>

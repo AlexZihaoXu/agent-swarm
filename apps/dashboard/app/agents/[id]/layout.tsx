@@ -16,7 +16,7 @@ type LinkProps = ComponentProps<typeof Link>;
 const asLink = (props: object) => <Link {...(props as unknown as LinkProps)} />;
 
 /**
- * Persistent shell for an agent: a "← Fleet" link plus a Terminal/Desktop tab
+ * Persistent shell for an agent: a "Dashboard" back-link plus a Terminal/Desktop tab
  * switcher. The active tab is derived from the route segment (not client state)
  * so each view has its own URL — refreshing /agents/:id/desktop stays on the
  * desktop. The layout itself doesn't remount on tab change, so the HeroUI tab

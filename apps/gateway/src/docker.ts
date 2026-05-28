@@ -217,6 +217,80 @@ export class AgentManager {
     };
   }
 
+  /** Recursively yield every *.jsonl transcript under a directory. */
+  private *walkJsonl(dir: string): Generator<string> {
+    let entries: import('node:fs').Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) yield* this.walkJsonl(p);
+      else if (e.name.endsWith('.jsonl')) yield p;
+    }
+  }
+
+  /**
+   * Global token metrics from every agent's transcripts: total tokens burnt in
+   * the last 24h, plus per-agent tokens bucketed into 24 hourly slots. Reads the
+   * agent disks directly (no need for them to be running).
+   */
+  async metrics(): Promise<{
+    totalTokens: number;
+    agents: { id: string; name: string }[];
+    buckets: { t: number; tokens: Record<string, number> }[];
+  }> {
+    const HOUR = 3_600_000;
+    const base = Math.floor(Date.now() / HOUR) * HOUR - 23 * HOUR; // start of the oldest hour
+    const slots: { t: number; tokens: Record<string, number> }[] = Array.from(
+      { length: 24 },
+      (_, i) => ({ t: base + i * HOUR, tokens: {} }),
+    );
+    const agents = (await this.list()).map((a) => ({ id: a.id, name: a.username || a.id }));
+    for (const a of agents) {
+      const dir = join(this.agentDataDir(a.id), '.claude', 'projects');
+      for (const file of this.walkJsonl(dir)) {
+        let raw: string;
+        try {
+          raw = readFileSync(file, 'utf8');
+        } catch {
+          continue;
+        }
+        for (const line of raw.split('\n')) {
+          if (!line) continue;
+          let o: {
+            type?: string;
+            timestamp?: string;
+            message?: { usage?: Record<string, number> };
+          };
+          try {
+            o = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          const u = o.message?.usage;
+          const ts = o.timestamp ? Date.parse(o.timestamp) : NaN;
+          if (o.type !== 'assistant' || !u || !Number.isFinite(ts)) continue;
+          const tokens =
+            (u.input_tokens || 0) +
+            (u.output_tokens || 0) +
+            (u.cache_read_input_tokens || 0) +
+            (u.cache_creation_input_tokens || 0);
+          const idx = Math.floor((ts - base) / HOUR);
+          if (!tokens || idx < 0 || idx >= 24) continue;
+          slots[idx]!.tokens[a.id] = (slots[idx]!.tokens[a.id] || 0) + tokens;
+        }
+      }
+    }
+    const totalTokens = slots.reduce(
+      (s, b) => s + Object.values(b.tokens).reduce((x, y) => x + y, 0),
+      0,
+    );
+    return { totalTokens, agents, buckets: slots };
+  }
+
   /** Create the shared network if it doesn't exist yet (idempotent). */
   async ensureNetwork(): Promise<void> {
     const nets = await this.docker.listNetworks({
