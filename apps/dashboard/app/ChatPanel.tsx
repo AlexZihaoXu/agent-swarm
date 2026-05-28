@@ -39,6 +39,13 @@ import {
 } from '@/lib/gateway';
 import { useAgentStats } from './AgentStats';
 
+/** The plain-text of a transcript turn, trimmed — for matching queued sends. */
+const userTurnText = (t: ChatTurn): string =>
+  t.items
+    .map((it) => it.text ?? '')
+    .join('')
+    .trim();
+
 /**
  * Reveal `text` character-by-character over `duration` ms (0 = show instantly).
  * Animates once on mount; if the text later changes it snaps to full so polled
@@ -396,7 +403,7 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
   // Messages sent locally that haven't appeared in the polled transcript yet
   // (e.g. queued while the agent is busy). Rendered as "queued" so they don't
   // vanish when the 2s poll replaces `turns` with the server transcript.
-  const [pending, setPending] = useState<{ text: string; ts: number }[]>([]);
+  const [pending, setPending] = useState<{ text: string; ts: number; threshold: number }[]>([]);
   const stats = useAgentStats(agentId);
   const working = stats?.status === 'busy';
   const tasks = stats?.tasks ?? [];
@@ -466,20 +473,20 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
         seenLen.current = next.length;
       }
       setTurns(next);
-      // Drop any pending message that now shows up as a user turn in the transcript.
+      // Reconcile pending: a message is delivered once the transcript holds at
+      // least `threshold` user turns with its text. Also age out anything stuck
+      // for >90s (lost send, or a text-normalization mismatch) so a bubble can't
+      // hang as "queued" forever.
       setPending((p) => {
         if (!p.length) return p;
-        const sent = new Set(
-          next
-            .filter((t) => t.role === 'user')
-            .map((t) =>
-              t.items
-                .map((it) => it.text ?? '')
-                .join('')
-                .trim(),
-            ),
-        );
-        return p.filter((pi) => !sent.has(pi.text.trim()));
+        const count = new Map<string, number>();
+        for (const t of next) {
+          if (t.role !== 'user') continue;
+          const tx = userTurnText(t);
+          count.set(tx, (count.get(tx) ?? 0) + 1);
+        }
+        const now = Date.now();
+        return p.filter((pi) => now - pi.ts <= 90_000 && (count.get(pi.text) ?? 0) < pi.threshold);
       });
     } catch {
       /* unreachable */
@@ -563,8 +570,18 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
       if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'data', data: '\r' }));
     }, 250);
     atBottomRef.current = true;
-    // Track it as pending; the poll reconciles it once it lands in the transcript.
-    setPending((p) => [...p, { text, ts: Date.now() }]);
+    // Track it as pending until it lands in the transcript. `threshold` = how many
+    // user turns with this exact text must exist before we consider THIS one
+    // delivered: existing matching turns + already-pending duplicates + 1. This
+    // makes duplicate/identical messages reconcile one-to-one (not all at once),
+    // and avoids a new message matching an older identical turn.
+    setPending((p) => {
+      const inTranscript = turns.filter(
+        (t) => t.role === 'user' && userTurnText(t) === text,
+      ).length;
+      const inPending = p.filter((pi) => pi.text === text).length;
+      return [...p, { text, ts: Date.now(), threshold: inTranscript + inPending + 1 }];
+    });
     setInput('');
   };
 

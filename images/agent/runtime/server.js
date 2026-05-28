@@ -36,6 +36,8 @@ const IDENTITY_FILE = path.join(HOME, '.swarm', 'identity.json');
 const sessions = new Map(); // name -> { name, pty, title, clients:Set }
 let counter = 0;
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 // Per-agent settings the gateway writes into the identity file. Read fresh on
 // each (re)spawn so a stop→start picks up changes without a container recreate.
 // `autoCompactPct` maps to CLAUDE_AUTOCOMPACT_PCT_OVERRIDE (the % of the context
@@ -720,27 +722,27 @@ const server = http.createServer(async (req, res) => {
     if (!text.trim() && !interrupt)
       return sendJson(res, 400, { error: 'text or interrupt required' });
 
-    const typeMessage = () => {
-      if (!text.trim()) return;
-      const clean = text.replace(/\r\n?/g, '\n');
-      sess.pty.write(clean);
-      setTimeout(() => {
+    // Serialize the full write sequence (Esc / text / Enter) per session so two
+    // concurrent injects — e.g. an interrupt arriving while a queued message is
+    // mid-write — can't interleave their bytes in the pty. We await completion
+    // before responding so the caller knows the message was actually typed.
+    const perform = async () => {
+      if (interrupt) {
+        sess.pty.write('\x1b'); // claude TUI interrupt key
+        await sleep(350); // let it settle back to the prompt
+      }
+      if (text.trim()) {
+        sess.pty.write(text.replace(/\r\n?/g, '\n'));
+        await sleep(150); // the TUI needs a beat before the carriage return
         try {
           sess.pty.write('\r');
         } catch {
           /* session may have closed */
         }
-      }, 150);
+      }
     };
-
-    if (interrupt) {
-      // Esc interrupts the current generation; give claude a beat to settle back
-      // to the prompt before typing the new message.
-      sess.pty.write('\x1b');
-      setTimeout(typeMessage, 350);
-    } else {
-      typeMessage();
-    }
+    sess.writeChain = (sess.writeChain || Promise.resolve()).then(perform).catch(() => {});
+    await sess.writeChain;
     return sendJson(res, 200, { ok: true });
   }
   // Attachment upload: raw body → ~/uploads/<name>; returns the in-agent path
