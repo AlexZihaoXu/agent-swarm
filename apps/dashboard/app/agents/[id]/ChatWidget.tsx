@@ -1,7 +1,7 @@
 'use client';
 
-import { Button } from '@heroui/react';
-import { AnimatePresence, motion, useDragControls } from 'framer-motion';
+import { Button, Drawer, ListBox, Select } from '@heroui/react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
@@ -12,7 +12,6 @@ import {
   LuTerminal,
   LuTriangleAlert,
   LuWrench,
-  LuX,
 } from 'react-icons/lu';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -137,8 +136,6 @@ export function ChatWidget({
   const [input, setInput] = useState('');
   const wsRef = useRef<WebSocket | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const dragControls = useDragControls();
-  const draggedRef = useRef(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   // Stick to the bottom only while the user is already there — so scrolling up
@@ -364,59 +361,50 @@ export function ChatWidget({
       {!open && (
         <motion.button
           aria-label="Open chat"
-          drag
-          dragMomentum={false}
-          onDragStart={() => (draggedRef.current = true)}
-          onDragEnd={() => setTimeout(() => (draggedRef.current = false), 0)}
-          onClick={() => {
-            if (!draggedRef.current) setOpen(true);
-          }}
+          onClick={() => setOpen(true)}
           whileHover={{ scale: 1.08 }}
           whileTap={{ scale: 0.95 }}
-          className="bg-accent text-accent-foreground fixed right-4 bottom-4 z-50 flex size-12 cursor-grab items-center justify-center rounded-full shadow-[0_8px_30px_rgba(0,0,0,0.45)] active:cursor-grabbing"
+          className="bg-accent text-accent-foreground fixed right-4 bottom-4 z-50 flex size-12 cursor-pointer items-center justify-center rounded-full shadow-[0_8px_30px_rgba(0,0,0,0.45)]"
         >
           <LuMessageSquare className="size-5" />
         </motion.button>
       )}
 
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            drag
-            dragControls={dragControls}
-            dragListener={false}
-            dragMomentum={false}
-            initial={{ opacity: 0, y: 24, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 24, scale: 0.98 }}
-            transition={{ duration: 0.2, ease: 'easeOut' }}
-            className="border-separator bg-surface fixed right-4 bottom-4 z-50 flex h-[70vh] max-h-[calc(100vh-2rem)] w-[min(400px,calc(100vw-2rem))] origin-bottom-right flex-col overflow-hidden rounded-2xl border shadow-[0_16px_60px_rgba(0,0,0,0.55)]"
-          >
-            <header
-              onPointerDown={(e) => dragControls.start(e)}
-              className="border-separator bg-surface-secondary flex cursor-grab items-center justify-between border-b px-3.5 py-3 select-none active:cursor-grabbing"
-            >
-              <span className="flex min-w-0 items-center gap-2 text-sm font-semibold">
+      <Drawer>
+        <Drawer.Backdrop isOpen={open} onOpenChange={setOpen}>
+          <Drawer.Content placement="right">
+            <Drawer.Dialog className="flex h-full w-[min(420px,100vw)] flex-col">
+              <Drawer.CloseTrigger />
+              <Drawer.Header className="flex items-center gap-2">
                 <LuMessageSquare className="text-muted size-4 shrink-0" />
+                <Drawer.Heading className="sr-only">Chat with {agentId}</Drawer.Heading>
                 {agents ? (
-                  <select
-                    value={agentId}
-                    onChange={(e) => onSelectAgent?.(e.target.value)}
-                    onPointerDown={(e) => e.stopPropagation()}
-                    className="max-w-[180px] cursor-pointer truncate bg-transparent font-semibold outline-none"
+                  <Select
                     aria-label="Choose agent"
+                    selectedKey={agentId}
+                    onSelectionChange={(k) => onSelectAgent?.(String(k))}
+                    className="min-w-0 flex-1"
                   >
-                    {agents.map((a) => (
-                      <option key={a.id} value={a.id}>
-                        {a.name}
-                      </option>
-                    ))}
-                  </select>
+                    <Select.Trigger className="w-full justify-between gap-2">
+                      <Select.Value />
+                      <Select.Indicator />
+                    </Select.Trigger>
+                    <Select.Popover>
+                      <ListBox>
+                        {agents.map((a) => (
+                          <ListBox.Item key={a.id} id={a.id} textValue={a.name}>
+                            {a.name}
+                            <ListBox.ItemIndicator />
+                          </ListBox.Item>
+                        ))}
+                      </ListBox>
+                    </Select.Popover>
+                  </Select>
                 ) : (
-                  agentId
+                  <span className="truncate text-sm font-semibold">{agentId}</span>
                 )}
                 {working && (
-                  <span className="text-success flex items-center gap-1 text-xs font-normal">
+                  <span className="text-success flex shrink-0 items-center gap-1 text-xs font-normal">
                     <motion.span
                       className="bg-success size-1.5 rounded-full"
                       animate={{ opacity: [1, 0.3, 1], scale: [1, 1.3, 1] }}
@@ -425,260 +413,254 @@ export function ChatWidget({
                     working
                   </span>
                 )}
-              </span>
-              <button
-                aria-label="Close chat"
-                className="text-muted hover:text-foreground"
-                onClick={() => setOpen(false)}
-              >
-                <LuX className="size-4" />
-              </button>
-            </header>
-
-            <div
-              ref={scrollRef}
-              onScroll={onScroll}
-              className="min-h-0 flex-1 space-y-4 overflow-auto p-3"
-            >
-              {turns.length === 0 && (
-                <p className="text-muted text-sm">No messages yet. Say something below.</p>
-              )}
-              {turns.map((t, i) => (
-                <motion.div
-                  key={i}
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.25, ease: 'easeOut' }}
-                  className={t.role === 'user' ? 'flex justify-end' : ''}
+              </Drawer.Header>
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div
+                  ref={scrollRef}
+                  onScroll={onScroll}
+                  className="min-h-0 flex-1 space-y-4 overflow-auto p-3"
                 >
-                  {/* API/transport errors are not real replies — set them apart
-                      with a red alert card so they can't be mistaken for one. */}
-                  {t.error ? (
-                    <div className="border-danger/50 bg-danger/10 space-y-1 rounded-xl border px-3 py-2 text-sm">
-                      <div className="text-danger flex items-center gap-1.5 font-semibold">
-                        <LuTriangleAlert className="size-3.5 shrink-0" />
-                        Error
-                      </div>
-                      <p className="text-foreground whitespace-pre-wrap">
-                        {t.items.map((it) => it.text ?? '').join('\n')}
-                      </p>
-                    </div>
-                  ) : (
-                    /* User → bubble on the right; assistant → markdown on the left. */
-                    <div
-                      className={
-                        t.role === 'user'
-                          ? 'bg-surface-secondary text-surface-secondary-foreground max-w-[85%] rounded-2xl rounded-br-md px-3.5 py-2 text-sm font-medium'
-                          : 'max-w-full space-y-2 font-medium'
-                      }
-                    >
-                      {t.items.map((it, j) =>
-                        it.kind === 'text' ? (
-                          t.role === 'user' ? (
-                            <p key={j} className="whitespace-pre-wrap">
-                              {it.text}
-                            </p>
-                          ) : (
-                            <AssistantText
-                              key={j}
-                              text={it.text ?? ''}
-                              animate={animateIdx.current.has(i)}
-                            />
-                          )
-                        ) : (
-                          <ToolItem key={j} name={it.name ?? ''} detail={it.detail} />
-                        ),
-                      )}
-                    </div>
+                  {turns.length === 0 && (
+                    <p className="text-muted text-sm">No messages yet. Say something below.</p>
                   )}
-                </motion.div>
-              ))}
+                  {turns.map((t, i) => (
+                    <motion.div
+                      key={i}
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.25, ease: 'easeOut' }}
+                      className={t.role === 'user' ? 'flex justify-end' : ''}
+                    >
+                      {/* API/transport errors are not real replies — set them apart
+                      with a red alert card so they can't be mistaken for one. */}
+                      {t.error ? (
+                        <div className="border-danger/50 bg-danger/10 space-y-1 rounded-xl border px-3 py-2 text-sm">
+                          <div className="text-danger flex items-center gap-1.5 font-semibold">
+                            <LuTriangleAlert className="size-3.5 shrink-0" />
+                            Error
+                          </div>
+                          <p className="text-foreground whitespace-pre-wrap">
+                            {t.items.map((it) => it.text ?? '').join('\n')}
+                          </p>
+                        </div>
+                      ) : (
+                        /* User → bubble on the right; assistant → markdown on the left. */
+                        <div
+                          className={
+                            t.role === 'user'
+                              ? 'bg-surface-secondary text-surface-secondary-foreground max-w-[85%] rounded-2xl rounded-br-md px-3.5 py-2 text-sm font-medium'
+                              : 'max-w-full space-y-2 font-medium'
+                          }
+                        >
+                          {t.items.map((it, j) =>
+                            it.kind === 'text' ? (
+                              t.role === 'user' ? (
+                                <p key={j} className="whitespace-pre-wrap">
+                                  {it.text}
+                                </p>
+                              ) : (
+                                <AssistantText
+                                  key={j}
+                                  text={it.text ?? ''}
+                                  animate={animateIdx.current.has(i)}
+                                />
+                              )
+                            ) : (
+                              <ToolItem key={j} name={it.name ?? ''} detail={it.detail} />
+                            ),
+                          )}
+                        </div>
+                      )}
+                    </motion.div>
+                  ))}
 
-              {/* The agent is composing — show a typing indicator right where
+                  {/* The agent is composing — show a typing indicator right where
                   its reply will land. */}
-              {working && (
-                <motion.div
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.2, ease: 'easeOut' }}
-                >
-                  <TypingDots />
-                </motion.div>
-              )}
-            </div>
+                  {working && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.2, ease: 'easeOut' }}
+                    >
+                      <TypingDots />
+                    </motion.div>
+                  )}
+                </div>
 
-            {/* Interactive selectors (AskUserQuestion / plan / permission) are
+                {/* Interactive selectors (AskUserQuestion / plan / permission) are
                 TUI-only and never reach the transcript. We parse their options
                 off the screen and answer by driving the selector; if we can't
                 parse options, we fall back to routing the user to the Terminal. */}
-            <AnimatePresence>
-              {awaiting && (
-                <motion.div
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: 8 }}
-                  transition={{ duration: 0.2, ease: 'easeOut' }}
-                  className="border-warning/40 bg-warning/10 mx-2 mb-1 rounded-xl border p-2.5"
-                >
-                  {promptHtml ? (
-                    // Faithful render of the actual selector (colors, ASCII previews).
-                    <div
-                      className="chat-prompt border-separator mb-1 overflow-auto rounded-lg border"
-                      dangerouslySetInnerHTML={{ __html: promptHtml }}
-                    />
-                  ) : (
-                    <p className="text-foreground text-sm font-medium">
-                      {stats?.promptText
-                        ? `“${stats.promptText}”`
-                        : 'The agent is asking a question'}
-                    </p>
-                  )}
-
-                  {multiSelect && promptOptions.some((o) => o.checkable) ? (
-                    /* Multi-select: toggle checkboxes, then Submit. */
-                    <div className="mt-2 space-y-1.5">
-                      <div className="max-h-44 space-y-1 overflow-auto">
-                        {promptOptions
-                          .filter((o) => o.checkable && !/^type something/i.test(o.label))
-                          .map((o) => {
-                            const on = picked.has(o.n);
-                            return (
-                              <button
-                                key={o.n}
-                                onClick={() =>
-                                  setPicked((prev) => {
-                                    const s = new Set(prev);
-                                    if (s.has(o.n)) s.delete(o.n);
-                                    else s.add(o.n);
-                                    return s;
-                                  })
-                                }
-                                className={`flex w-full items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left text-sm transition-colors ${
-                                  on
-                                    ? 'border-accent bg-accent/10'
-                                    : 'border-separator bg-surface hover:bg-surface-secondary'
-                                }`}
-                              >
-                                <span
-                                  className={`flex size-4 shrink-0 items-center justify-center rounded border ${
-                                    on
-                                      ? 'border-accent bg-accent text-accent-foreground'
-                                      : 'border-separator'
-                                  }`}
-                                >
-                                  {on && <LuCheck className="size-3" />}
-                                </span>
-                                <span className="min-w-0">{o.label}</span>
-                              </button>
-                            );
-                          })}
-                      </div>
-                      <Button size="sm" onPress={submitMulti} isDisabled={picked.size === 0}>
-                        Submit{picked.size > 0 ? ` (${picked.size})` : ''}
-                      </Button>
-                    </div>
-                  ) : promptOptions.length > 0 ? (
-                    /* Single-select: compact answer chips (the render above is
-                       the question; these are just the clickable answers). */
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {promptOptions.map((o) => (
-                        <button
-                          key={o.n}
-                          onClick={() => {
-                            answerOption(o.n);
-                            // "Type something" opens a free-text field — unlock the
-                            // composer and focus it so the typed answer lands there.
-                            if (/^type something/i.test(o.label)) {
-                              setFreeText(true);
-                              setTimeout(() => inputRef.current?.focus(), 350);
-                            }
-                          }}
-                          className="border-separator bg-surface hover:border-accent hover:bg-surface-secondary flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-sm transition-colors"
-                        >
-                          <span className="text-muted font-mono text-xs">{o.n}</span>
-                          <span>{o.label}</span>
-                        </button>
-                      ))}
-                    </div>
-                  ) : (
-                    <>
-                      <p className="text-muted mt-0.5 text-xs">
-                        Couldn’t read the choices — answer it in the Terminal.
-                      </p>
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        className="mt-2 gap-1.5"
-                        render={(props) => (
-                          <Link
-                            {...(props as React.ComponentProps<typeof Link>)}
-                            href={`/agents/${agentId}/terminal`}
-                          />
-                        )}
-                      >
-                        <LuTerminal className="size-3.5" />
-                        Open Terminal
-                      </Button>
-                    </>
-                  )}
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            <div className="p-2">
-              <div
-                className={`border-separator bg-surface flex flex-col gap-2 rounded-2xl border p-2.5 transition-colors ${
-                  composerLocked ? 'opacity-60' : 'focus-within:border-accent'
-                }`}
-              >
-                <textarea
-                  ref={inputRef}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key !== 'Enter') return;
-                    if (e.ctrlKey || e.metaKey) {
-                      // Ctrl/Cmd+Enter (and Shift+Enter) → newline, not send.
-                      e.preventDefault();
-                      insertNewline();
-                    } else if (!e.shiftKey) {
-                      e.preventDefault();
-                      send();
-                    }
-                  }}
-                  rows={2}
-                  disabled={composerLocked}
-                  placeholder={composerLocked ? 'Pick an option above…' : 'Message the agent…'}
-                  className="placeholder:text-muted max-h-32 min-h-0 resize-none bg-transparent text-sm outline-none disabled:cursor-not-allowed"
-                />
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      aria-label="Attach file"
-                      disabled={composerLocked}
-                      onClick={() => fileRef.current?.click()}
-                      className="text-muted hover:text-foreground hover:bg-surface-secondary flex size-8 items-center justify-center transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                <AnimatePresence>
+                  {awaiting && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 8 }}
+                      transition={{ duration: 0.2, ease: 'easeOut' }}
+                      className="border-warning/40 bg-warning/10 mx-2 mb-1 rounded-xl border p-2.5"
                     >
-                      <LuPaperclip className="size-4" />
-                    </button>
-                    <input ref={fileRef} type="file" hidden onChange={onPickFile} />
-                    {attaching && <span className="text-muted text-xs">uploading…</span>}
-                  </div>
-                  <Button
-                    isIconOnly
-                    aria-label="Send"
-                    onPress={send}
-                    isDisabled={!input.trim() || composerLocked}
+                      {promptHtml ? (
+                        // Faithful render of the actual selector (colors, ASCII previews).
+                        <div
+                          className="chat-prompt border-separator mb-1 overflow-auto rounded-lg border"
+                          dangerouslySetInnerHTML={{ __html: promptHtml }}
+                        />
+                      ) : (
+                        <p className="text-foreground text-sm font-medium">
+                          {stats?.promptText
+                            ? `“${stats.promptText}”`
+                            : 'The agent is asking a question'}
+                        </p>
+                      )}
+
+                      {multiSelect && promptOptions.some((o) => o.checkable) ? (
+                        /* Multi-select: toggle checkboxes, then Submit. */
+                        <div className="mt-2 space-y-1.5">
+                          <div className="max-h-44 space-y-1 overflow-auto">
+                            {promptOptions
+                              .filter((o) => o.checkable && !/^type something/i.test(o.label))
+                              .map((o) => {
+                                const on = picked.has(o.n);
+                                return (
+                                  <button
+                                    key={o.n}
+                                    onClick={() =>
+                                      setPicked((prev) => {
+                                        const s = new Set(prev);
+                                        if (s.has(o.n)) s.delete(o.n);
+                                        else s.add(o.n);
+                                        return s;
+                                      })
+                                    }
+                                    className={`flex w-full items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left text-sm transition-colors ${
+                                      on
+                                        ? 'border-accent bg-accent/10'
+                                        : 'border-separator bg-surface hover:bg-surface-secondary'
+                                    }`}
+                                  >
+                                    <span
+                                      className={`flex size-4 shrink-0 items-center justify-center rounded border ${
+                                        on
+                                          ? 'border-accent bg-accent text-accent-foreground'
+                                          : 'border-separator'
+                                      }`}
+                                    >
+                                      {on && <LuCheck className="size-3" />}
+                                    </span>
+                                    <span className="min-w-0">{o.label}</span>
+                                  </button>
+                                );
+                              })}
+                          </div>
+                          <Button size="sm" onPress={submitMulti} isDisabled={picked.size === 0}>
+                            Submit{picked.size > 0 ? ` (${picked.size})` : ''}
+                          </Button>
+                        </div>
+                      ) : promptOptions.length > 0 ? (
+                        /* Single-select: compact answer chips (the render above is
+                       the question; these are just the clickable answers). */
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {promptOptions.map((o) => (
+                            <button
+                              key={o.n}
+                              onClick={() => {
+                                answerOption(o.n);
+                                // "Type something" opens a free-text field — unlock the
+                                // composer and focus it so the typed answer lands there.
+                                if (/^type something/i.test(o.label)) {
+                                  setFreeText(true);
+                                  setTimeout(() => inputRef.current?.focus(), 350);
+                                }
+                              }}
+                              className="border-separator bg-surface hover:border-accent hover:bg-surface-secondary flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-sm transition-colors"
+                            >
+                              <span className="text-muted font-mono text-xs">{o.n}</span>
+                              <span>{o.label}</span>
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <>
+                          <p className="text-muted mt-0.5 text-xs">
+                            Couldn’t read the choices — answer it in the Terminal.
+                          </p>
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            className="mt-2 gap-1.5"
+                            render={(props) => (
+                              <Link
+                                {...(props as React.ComponentProps<typeof Link>)}
+                                href={`/agents/${agentId}/terminal`}
+                              />
+                            )}
+                          >
+                            <LuTerminal className="size-3.5" />
+                            Open Terminal
+                          </Button>
+                        </>
+                      )}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                <div className="p-2">
+                  <div
+                    className={`border-separator bg-surface flex flex-col gap-2 rounded-2xl border p-2.5 transition-colors ${
+                      composerLocked ? 'opacity-60' : 'focus-within:border-accent'
+                    }`}
                   >
-                    <LuArrowUp className="size-4" />
-                  </Button>
+                    <textarea
+                      ref={inputRef}
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Enter') return;
+                        if (e.ctrlKey || e.metaKey) {
+                          // Ctrl/Cmd+Enter (and Shift+Enter) → newline, not send.
+                          e.preventDefault();
+                          insertNewline();
+                        } else if (!e.shiftKey) {
+                          e.preventDefault();
+                          send();
+                        }
+                      }}
+                      rows={2}
+                      disabled={composerLocked}
+                      placeholder={composerLocked ? 'Pick an option above…' : 'Message the agent…'}
+                      className="placeholder:text-muted max-h-32 min-h-0 resize-none bg-transparent text-sm outline-none disabled:cursor-not-allowed"
+                    />
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          aria-label="Attach file"
+                          disabled={composerLocked}
+                          onClick={() => fileRef.current?.click()}
+                          className="text-muted hover:text-foreground hover:bg-surface-secondary flex size-8 items-center justify-center transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <LuPaperclip className="size-4" />
+                        </button>
+                        <input ref={fileRef} type="file" hidden onChange={onPickFile} />
+                        {attaching && <span className="text-muted text-xs">uploading…</span>}
+                      </div>
+                      <Button
+                        isIconOnly
+                        aria-label="Send"
+                        onPress={send}
+                        isDisabled={!input.trim() || composerLocked}
+                      >
+                        <LuArrowUp className="size-4" />
+                      </Button>
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+            </Drawer.Dialog>
+          </Drawer.Content>
+        </Drawer.Backdrop>
+      </Drawer>
     </>
   );
 }
