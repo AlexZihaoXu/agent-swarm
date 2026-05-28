@@ -1,0 +1,21 @@
+{
+  "name": "discord-mcp",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Discord MCP server (outgoing actions) for swarm agents",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@discordjs/rest": "^2.4.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "discord-api-types": "^0.37.100"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}

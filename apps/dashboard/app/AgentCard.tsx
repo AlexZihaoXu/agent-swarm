@@ -1,14 +1,12 @@
 'use client';
 
-import { Button, Card, Dropdown, Input, Label, Modal, TextField, toast } from '@heroui/react';
+import { Button, Card, Dropdown, Label, Modal } from '@heroui/react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState, type MouseEvent } from 'react';
-import { LuDices } from 'react-icons/lu';
 import {
   getUpgradeInfo,
   removeAgent,
-  renameAgent,
   screenshotUrl,
   startAgent,
   stopAgent,
@@ -16,12 +14,12 @@ import {
   type Agent,
   type UpgradeInfo,
 } from '@/lib/gateway';
-import { randomName } from '@/lib/names';
 import { AgentActivity, AgentStatsInline, useAgentStats } from './AgentStats';
+import { AgentSettingsModal } from './AgentSettingsModal';
 import { ConfirmActionDialog } from './ConfirmActionDialog';
 import { PackageModal } from './PackageModal';
 
-type Dialog = 'stop' | 'remove' | 'upgrade' | 'package' | 'rename' | null;
+type Dialog = 'stop' | 'remove' | 'upgrade' | 'package' | 'settings' | null;
 
 /** Low-res desktop thumbnail that refreshes every few seconds (cheap, unlike a
  *  live VNC stream per card). Keeps retrying if a frame fails to load. */
@@ -64,7 +62,6 @@ export function AgentCard({
   const running = agent.status === 'running';
   const stats = useAgentStats(agent.id, { enabled: running });
   const [dialog, setDialog] = useState<Dialog>(null);
-  const [renameValue, setRenameValue] = useState('');
   const [busy, setBusy] = useState(false);
   const [upgrade, setUpgrade] = useState<UpgradeInfo | null>(null);
   // Cursor position for the right-click context menu (null = closed).
@@ -96,10 +93,7 @@ export function AgentCard({
     setMenuPos(null);
     if (key === 'open') router.push(`/agents/${agent.id}/desktop`);
     else if (key === 'start') void act(() => startAgent(agent.id));
-    else {
-      if (key === 'rename') setRenameValue(agent.username || agent.id);
-      setDialog(key as Dialog);
-    }
+    else setDialog(key as Dialog);
   };
 
   const openMenu = (e: MouseEvent) => {
@@ -182,8 +176,8 @@ export function AgentCard({
                 </Label>
               </Dropdown.Item>
             ) : null}
-            <Dropdown.Item id="rename" textValue="Rename">
-              <Label>Rename…</Label>
+            <Dropdown.Item id="settings" textValue="Settings">
+              <Label>Settings…</Label>
             </Dropdown.Item>
             <Dropdown.Item id="package" textValue="Package">
               <Label>Package…</Label>
@@ -198,7 +192,6 @@ export function AgentCard({
       <ConfirmActionDialog
         isOpen={dialog === 'stop'}
         onOpenChange={(o) => !o && setDialog(null)}
-        confirmWord={agent.id}
         action="Stop"
         title="Stop agent"
         description={
@@ -231,70 +224,13 @@ export function AgentCard({
         onChanged={onChanged}
       />
 
-      <Modal>
-        <Modal.Backdrop
-          isOpen={dialog === 'rename'}
-          onOpenChange={(o) => !o && setDialog(null)}
-          isDismissable={!busy}
-        >
-          <Modal.Container>
-            <Modal.Dialog className="sm:max-w-[400px]">
-              <Modal.CloseTrigger />
-              <Modal.Header>
-                <Modal.Heading>Rename agent</Modal.Heading>
-              </Modal.Header>
-              <Modal.Body>
-                <form
-                  id={`rename-${agent.id}`}
-                  className="flex items-end gap-2"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    if (renameValue.trim())
-                      void act(() => renameAgent(agent.id, renameValue.trim())).then(() =>
-                        setDialog(null),
-                      );
-                  }}
-                >
-                  <TextField
-                    className="flex-1"
-                    value={renameValue}
-                    onChange={setRenameValue}
-                    isRequired
-                    autoFocus
-                  >
-                    <Label>Name</Label>
-                    <Input placeholder="brave-otter" />
-                  </TextField>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    aria-label="Shuffle name"
-                    onPress={() => {
-                      const next = randomName(taken);
-                      if (next) setRenameValue(next);
-                      else toast.warning('All names are in use — type one manually.');
-                    }}
-                  >
-                    <LuDices className="size-4" />
-                  </Button>
-                </form>
-              </Modal.Body>
-              <Modal.Footer>
-                <Button slot="close" variant="tertiary" isDisabled={busy}>
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  form={`rename-${agent.id}`}
-                  isDisabled={busy || !renameValue.trim()}
-                >
-                  {busy ? 'Saving…' : 'Save'}
-                </Button>
-              </Modal.Footer>
-            </Modal.Dialog>
-          </Modal.Container>
-        </Modal.Backdrop>
-      </Modal>
+      <AgentSettingsModal
+        agentId={agent.id}
+        isOpen={dialog === 'settings'}
+        onOpenChange={(o) => !o && setDialog(null)}
+        onChanged={onChanged}
+        taken={taken}
+      />
 
       <Modal>
         <Modal.Backdrop

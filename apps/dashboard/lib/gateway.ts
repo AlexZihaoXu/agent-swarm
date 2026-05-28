@@ -13,6 +13,8 @@ export interface Agent {
   cpus?: number;
   memoryMb?: number;
   timezone?: string;
+  /** Per-agent CLAUDE_AUTOCOMPACT_PCT_OVERRIDE (1–100); null = claude default. */
+  autoCompactPct?: number | null;
 }
 
 export interface CreateAgentOptions {
@@ -105,8 +107,15 @@ export interface AgentStats {
   context: number;
   /** The model's context-window size (from statusline), for the usage ring. */
   contextLimit?: number | null;
-  /** Live spinner state while busy (scraped): is it thinking + tokens so far. */
-  activity?: { thinking: boolean; genTokens: number | null } | null;
+  /** Live spinner state while busy (scraped from the TUI): the playful gerund
+   *  ("Honking"), elapsed time ("10m 5s"), generated tokens, and whether it's
+   *  thinking — mirrors the TUI's flashing indicator. */
+  activity?: {
+    thinking: boolean;
+    genTokens: number | null;
+    verb?: string | null;
+    elapsed?: string | null;
+  } | null;
   turns: number;
   cost: number | null;
   linesAdded: number;
@@ -246,8 +255,10 @@ export interface RateWindow {
   resetsAt: number;
 }
 export interface Metrics {
-  /** Account-level 5h / 7d usage windows (shared across agents). */
-  rateLimits: { fiveHour: RateWindow; sevenDay: RateWindow } | null;
+  /** Account-level 5h / 7d usage windows (shared across agents). `updatedAt` is
+   *  when the values last changed (= last API activity); used to mark the rings
+   *  outdated when the account has been idle for >5m. */
+  rateLimits: { fiveHour: RateWindow; sevenDay: RateWindow; updatedAt: number } | null;
   /** Per-agent 24h totals (tokens + computed cost). */
   agents: { id: string; name: string; tokens: number; cost: number }[];
   /** 24 hourly buckets (oldest→newest) summed across agents. */
@@ -267,13 +278,98 @@ export const startAgent = (id: string) => api(`/api/agents/${id}/start`, { metho
 export const stopAgent = (id: string) => api(`/api/agents/${id}/stop`, { method: 'POST' });
 export const removeAgent = (id: string) => api(`/api/agents/${id}`, { method: 'DELETE' });
 
-/** Rename an agent's display name (live — updates the on-disk identity). */
-export const renameAgent = (id: string, username: string) =>
+/** Fetch a single agent (incl. its editable per-agent settings). */
+export const getAgent = (id: string) => api<Agent>(`/api/agents/${id}`);
+
+/** Patch an agent's editable settings (display name and/or auto-compact %).
+ *  Live for the name; the auto-compact % applies on the next stop→start. */
+export const updateAgent = (
+  id: string,
+  patch: { username?: string; autoCompactPct?: number | null },
+) =>
   api<Agent>(`/api/agents/${id}`, {
     method: 'PATCH',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ username }),
+    body: JSON.stringify(patch),
   });
+
+/** Rename an agent's display name (live — updates the on-disk identity). */
+export const renameAgent = (id: string, username: string) => updateAgent(id, { username });
+
+// --- Integrations ----------------------------------------------------------
+// Per-agent platform connectors (Discord first). Mirrors the gateway's
+// IntegrationPublic — credentials are never returned, only a presence flag + hint.
+
+export type IntegrationType = 'discord';
+export type IntegrationStatus =
+  | 'added'
+  | 'configured'
+  | 'tested-ok'
+  | 'active'
+  | 'error'
+  | 'disabled';
+
+export interface DiscordRules {
+  forwardChannelIds: string[];
+  forwardDms: boolean;
+  allowedUserIds: string[];
+  ignoreBots: boolean;
+  requireMention: boolean;
+}
+
+export interface IntegrationTestResult {
+  ok: boolean;
+  at: number;
+  detail?: string;
+  botTag?: string;
+  guilds?: { id: string; name: string }[];
+}
+
+export interface Integration {
+  type: IntegrationType;
+  status: IntegrationStatus;
+  rules: DiscordRules;
+  hasCredentials: boolean;
+  tokenHint?: string | null;
+  lastTest?: IntegrationTestResult | null;
+  updatedAt: number;
+}
+
+export interface IntegrationPatch {
+  credentials?: { botToken?: string };
+  rules?: Partial<DiscordRules>;
+}
+
+const intBase = (id: string, type?: IntegrationType) =>
+  `/api/agents/${id}/integrations${type ? `/${type}` : ''}`;
+
+export const listIntegrations = (id: string) => api<Integration[]>(intBase(id));
+
+export const addIntegration = (id: string, type: IntegrationType) =>
+  api<Integration>(intBase(id), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ type }),
+  });
+
+export const updateIntegration = (id: string, type: IntegrationType, patch: IntegrationPatch) =>
+  api<Integration>(intBase(id, type), {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+
+export const testIntegration = (id: string, type: IntegrationType) =>
+  api<Integration>(`${intBase(id, type)}/test`, { method: 'POST' });
+
+export const applyIntegration = (id: string, type: IntegrationType) =>
+  api<Integration>(`${intBase(id, type)}/apply`, { method: 'POST' });
+
+export const disableIntegration = (id: string, type: IntegrationType) =>
+  api<Integration>(`${intBase(id, type)}/disable`, { method: 'POST' });
+
+export const removeIntegration = (id: string, type: IntegrationType) =>
+  api<{ ok: true }>(intBase(id, type), { method: 'DELETE' });
 
 /** Embeddable desktop (noVNC) URL for an agent. */
 export const desktopUrl = (id: string) => `${GATEWAY_BASE}/a/${id}/desktop/`;

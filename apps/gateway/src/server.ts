@@ -69,4 +69,7 @@ server.listen(config.port, () => {
     `gateway on :${config.port} — mode=${config.mode}, network=${config.networkName}, ` +
       `dashboard=${config.dashboardUpstream}`,
   );
+  // Bridge connections live in memory, so reconnect active integrations for
+  // already-running agents after a gateway (re)start.
+  void manager.reconnectAllIntegrations();
 });

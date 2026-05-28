@@ -46,13 +46,13 @@ export default function HomePage() {
   }, [refresh, refreshImage]);
 
   return (
-    <main className="mx-auto max-w-5xl px-6 py-10">
-      <header className="mb-8 flex items-center justify-between">
+    <main className="mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-10">
+      <header className="mb-8 flex flex-wrap items-center justify-between gap-x-3 gap-y-3">
         <div>
           <h1 className="text-2xl font-semibold">Agent Swarm</h1>
           <p className="text-muted text-sm">Fleet of autonomous coding agents</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
           <ThemeSwitch />
           <Button
             size="sm"
@@ -62,7 +62,7 @@ export default function HomePage() {
             onPress={() => setPackagesOpen(true)}
           >
             <LuPackage className="size-4" />
-            Packages
+            <span className="hidden sm:inline">Packages</span>
           </Button>
           <Link
             href="/settings"

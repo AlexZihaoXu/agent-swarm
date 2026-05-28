@@ -3,7 +3,7 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { LuMessageSquare, LuSettings, LuX } from 'react-icons/lu';
+import { LuChevronLeft, LuMessageSquare, LuSettings, LuX } from 'react-icons/lu';
 import type { Agent } from '@/lib/gateway';
 import { AgentActivity, AgentStatsInline, agentChip, useAgentStats } from './AgentStats';
 import { ChatPanel } from './ChatPanel';
@@ -81,6 +81,9 @@ export function DashboardChat({ agents }: { agents: Agent[] }) {
   const ids = running.map((a) => a.id).join(',');
   const [open, setOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Mobile is single-pane: show either the agent list or the chat. Desktop
+  // shows both side-by-side regardless of this flag.
+  const [showList, setShowList] = useState(false);
 
   useEffect(() => {
     const list = ids ? ids.split(',') : [];
@@ -94,7 +97,10 @@ export function DashboardChat({ agents }: { agents: Agent[] }) {
     <>
       {!open && (
         <motion.button
-          onClick={() => setOpen(true)}
+          onClick={() => {
+            setShowList(false);
+            setOpen(true);
+          }}
           whileHover={{ scale: 1.04 }}
           whileTap={{ scale: 0.97 }}
           className="border-separator bg-surface hover:bg-surface-secondary fixed bottom-6 left-1/2 z-40 flex -translate-x-1/2 items-center gap-2 rounded-full border px-5 py-2.5 text-sm font-medium shadow-[0_8px_30px_rgba(0,0,0,0.25)]"
@@ -112,7 +118,7 @@ export function DashboardChat({ agents }: { agents: Agent[] }) {
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
             onClick={() => setOpen(false)}
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-0 sm:p-4"
           >
             <motion.div
               onClick={(e) => e.stopPropagation()}
@@ -120,52 +126,79 @@ export function DashboardChat({ agents }: { agents: Agent[] }) {
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 48, scale: 0.98 }}
               transition={{ duration: 0.22, ease: 'easeOut' }}
-              className="border-separator bg-surface flex h-[67vh] w-[80vw] overflow-hidden rounded-2xl border shadow-[0_24px_80px_rgba(0,0,0,0.55)]"
+              className="border-separator bg-surface flex h-[100dvh] w-full overflow-hidden rounded-none border shadow-[0_24px_80px_rgba(0,0,0,0.55)] sm:h-[83vh] sm:w-[80vw] sm:rounded-2xl"
             >
-              {/* Left: agent list + settings */}
-              <aside className="border-separator bg-surface-secondary flex w-56 shrink-0 flex-col border-r">
-                <div className="text-muted px-3 py-3 text-xs font-semibold tracking-wide uppercase">
-                  Agents
-                </div>
-                <div className="min-h-0 flex-1 space-y-1 overflow-auto px-2 pb-2">
-                  {running.map((a) => (
-                    <AgentRow
-                      key={a.id}
-                      agent={a}
-                      selected={a.id === selected.id}
-                      onSelect={() => setSelectedId(a.id)}
-                    />
-                  ))}
-                </div>
-                <Link
-                  href="/settings"
-                  className="border-separator text-muted hover:text-foreground hover:bg-surface flex items-center gap-2 border-t px-3.5 py-2.5 text-sm transition-colors"
-                >
-                  <LuSettings className="size-4" />
-                  Settings
-                </Link>
-              </aside>
-
-              {/* Right: the selected agent's chat (conversation area is recessed). */}
-              <section className="flex min-w-0 flex-1 flex-col">
-                <header className="border-separator flex items-start justify-between border-b px-4 py-3">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold">
-                      {selected.username || selected.id}
-                    </div>
-                    <div className="text-muted truncate font-mono text-xs">{selected.id}</div>
-                    <HeaderStats agent={selected} />
+              {/* Mobile is single-pane: a horizontal track slides between the agent
+                  list (pane 1) and the chat (pane 2). On sm+ the track is pinned
+                  (sm:translate-x-0) so both panes sit side-by-side. */}
+              <div
+                className={`flex h-full w-full transition-transform duration-300 ease-out sm:translate-x-0 ${
+                  showList ? 'translate-x-0' : '-translate-x-full'
+                }`}
+              >
+                <aside className="border-separator bg-surface-secondary flex w-full shrink-0 flex-col border-r sm:w-56">
+                  <div className="flex items-center justify-between px-3 py-3">
+                    <span className="text-muted text-xs font-semibold tracking-wide uppercase">
+                      Agents
+                    </span>
+                    <button
+                      aria-label="Close chat"
+                      className="text-muted hover:text-foreground sm:hidden"
+                      onClick={() => setOpen(false)}
+                    >
+                      <LuX className="size-5" />
+                    </button>
                   </div>
-                  <button
-                    aria-label="Close chat"
-                    className="text-muted hover:text-foreground shrink-0"
-                    onClick={() => setOpen(false)}
+                  <div className="min-h-0 flex-1 space-y-1 overflow-auto px-2 pb-2">
+                    {running.map((a) => (
+                      <AgentRow
+                        key={a.id}
+                        agent={a}
+                        selected={a.id === selected.id}
+                        onSelect={() => {
+                          setSelectedId(a.id);
+                          setShowList(false);
+                        }}
+                      />
+                    ))}
+                  </div>
+                  <Link
+                    href="/settings"
+                    className="border-separator text-muted hover:text-foreground hover:bg-surface flex items-center gap-2 border-t px-3.5 py-2.5 text-sm transition-colors"
                   >
-                    <LuX className="size-5" />
-                  </button>
-                </header>
-                <ChatPanel key={selected.id} agentId={selected.id} active={open} />
-              </section>
+                    <LuSettings className="size-4" />
+                    Settings
+                  </Link>
+                </aside>
+
+                {/* Pane 2: the selected agent's chat (conversation area is recessed). */}
+                <section className="flex w-full shrink-0 flex-col min-w-0 sm:w-auto sm:flex-1">
+                  <header className="border-separator flex items-start gap-2 border-b px-4 py-3">
+                    <button
+                      aria-label="Back to agents"
+                      className="text-muted hover:text-foreground mt-0.5 shrink-0 sm:hidden"
+                      onClick={() => setShowList(true)}
+                    >
+                      <LuChevronLeft className="size-5" />
+                    </button>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-semibold">
+                        {selected.username || selected.id}
+                      </div>
+                      <div className="text-muted truncate font-mono text-xs">{selected.id}</div>
+                      <HeaderStats agent={selected} />
+                    </div>
+                    <button
+                      aria-label="Close chat"
+                      className="text-muted hover:text-foreground shrink-0"
+                      onClick={() => setOpen(false)}
+                    >
+                      <LuX className="size-5" />
+                    </button>
+                  </header>
+                  <ChatPanel key={selected.id} agentId={selected.id} active={open} />
+                </section>
+              </div>
             </motion.div>
           </motion.div>
         )}

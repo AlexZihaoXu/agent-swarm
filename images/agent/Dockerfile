@@ -170,12 +170,22 @@ COPY agent-terminals.service /etc/systemd/system/agent-terminals.service
 # MCP server starts instantly; no X needed since the script connects lazily).
 COPY --chown=agent:agent tools /opt/agent-tools
 RUN su - agent -c '/usr/local/bin/uv run --quiet --script /opt/agent-tools/computer_use.py < /dev/null' || true
+# Discord MCP server (outgoing actions; the receive side is the gateway bridge).
+# Built to dist/ with tsc, then dev deps pruned so only the runtime deps remain.
+RUN cd /opt/agent-tools/discord-mcp \
+    && npm install --no-audit --no-fund \
+    && npm run build \
+    && npm prune --omit=dev \
+    && chown -R agent:agent /opt/agent-tools/discord-mcp
 
 # Pre-accept Claude's onboarding + workspace-trust so the auto-started session
 # drops straight to a usable prompt (no trust dialog). Overwrites the simpler
 # seed created above; placed here so the node-pty build layer stays cached.
-# (claude-config.json also registers the computer-use MCP server.)
+# (claude-config.json also registers the computer-use + discord MCP servers.)
 COPY --chown=agent:agent claude-config.json /home/agent/.claude.json
+# Project guide the agent reads at session start: routing prefixes (how Discord
+# messages arrive) + how to reply via the discord MCP tools.
+COPY --chown=agent:agent agent-claude.md /home/agent/CLAUDE.md
 
 # statusLine command: capture Claude's status payload (model, cost, lines) to a
 # file the dashboard reads, and print a concise in-TUI line. ~/.claude must be

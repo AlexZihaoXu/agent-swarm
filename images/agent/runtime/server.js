@@ -31,9 +31,26 @@ const SHELL = process.env.AGENT_SHELL || '/usr/bin/fish';
 const FIRST_CMD = process.env.FIRST_CMD || 'claude --dangerously-skip-permissions';
 const PUBLIC = path.join(__dirname, 'public');
 const CLAUDE_DIR = path.join(HOME, '.claude');
+const IDENTITY_FILE = path.join(HOME, '.swarm', 'identity.json');
 
 const sessions = new Map(); // name -> { name, pty, title, clients:Set }
 let counter = 0;
+
+// Per-agent settings the gateway writes into the identity file. Read fresh on
+// each (re)spawn so a stop→start picks up changes without a container recreate.
+// `autoCompactPct` maps to CLAUDE_AUTOCOMPACT_PCT_OVERRIDE (the % of the context
+// window at which claude auto-compacts); unset = the claude default.
+function settingsEnv() {
+  try {
+    const id = JSON.parse(fs.readFileSync(IDENTITY_FILE, 'utf8'));
+    const pct = id && id.autoCompactPct;
+    if (typeof pct === 'number' && pct >= 1 && pct <= 100)
+      return { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: String(Math.round(pct)) };
+  } catch {
+    /* no identity / setting unset — use defaults */
+  }
+  return {};
+}
 
 // --- Claude session stats -------------------------------------------------
 // Merges three on-disk sources the Claude Code session leaves behind:
@@ -102,6 +119,10 @@ function transcriptStats() {
   // Current context-window usage = the most recent turn's input side
   // (fresh input + cache read + cache creation all occupy the window).
   let context = 0;
+  // `claude --continue` re-writes prior assistant messages into the resumed
+  // transcript, so the same message.id can appear twice in one file. Summing
+  // every line double-counts the cumulative totals — dedupe by message.id.
+  const seen = new Set();
   const newest = newestFile(path.join(CLAUDE_DIR, 'projects'), '.jsonl');
   const raw = newest && safeRead(newest.path);
   if (!raw) return { totals, model, turns, lastTs, context, cost };
@@ -115,6 +136,11 @@ function transcriptStats() {
     }
     if (o.timestamp) lastTs = o.timestamp;
     if (o.type === 'assistant' && o.message) {
+      const mid = o.message.id;
+      if (mid) {
+        if (seen.has(mid)) continue;
+        seen.add(mid);
+      }
       const usage = o.message.usage || {};
       const input = usage.input_tokens || 0;
       const output = usage.output_tokens || 0;
@@ -423,7 +449,9 @@ function renderPromptHtml() {
 }
 
 // Scrape the busy spinner line for live state, e.g.
-// "Honking… (10m 5s · ↓ 28.3k tokens · almost done thinking with high effort)".
+// "✶ Honking… (10m 5s · ↓ 28.3k tokens · almost done thinking with high effort)".
+// We surface the playful gerund ("Honking"), the elapsed time ("10m 5s") and the
+// generated-token count so the chat can mirror the TUI's flashing indicator.
 function readActivity(screen) {
   if (!screen) return null;
   for (const line of screen.split('\n')) {
@@ -435,7 +463,16 @@ function readActivity(screen) {
       const u = (tm[2] || '').toLowerCase();
       genTokens = Math.round(u === 'k' ? n * 1e3 : u === 'm' ? n * 1e6 : n);
     }
-    return { thinking: /thinking/i.test(line), genTokens };
+    // The gerund word right before the ellipsis (skip the leading spinner glyph).
+    const vm = line.match(/([A-Za-z][A-Za-z'-]*)…/);
+    // The elapsed time is the first "(…·…)" segment, e.g. "10m 5s" or "34s".
+    const em = line.match(/\(\s*(\d[\dhms\s]*?)\s*[·)]/);
+    return {
+      thinking: /thinking/i.test(line),
+      genTokens,
+      verb: vm ? vm[1] : null,
+      elapsed: em ? em[1].trim() : null,
+    };
   }
   return null;
 }
@@ -552,7 +589,7 @@ function spawnPty(command) {
     cols: 120,
     rows: 30,
     cwd: HOME,
-    env: { ...process.env, TERM: 'xterm-256color', HOME, SHELL },
+    env: { ...process.env, TERM: 'xterm-256color', HOME, SHELL, ...settingsEnv() },
   });
 }
 
@@ -656,6 +693,36 @@ const server = http.createServer(async (req, res) => {
       /* ignore */
     }
     return sendJson(res, 200, { html });
+  }
+  // Inject a message into a session's pty as if typed by a human — used by the
+  // gateway's integration bridges (e.g. Discord) to deliver an incoming message
+  // to claude. Types the text, then submits with Enter after a short beat (the
+  // TUI needs a moment between the pasted text and the carriage return), exactly
+  // like the dashboard chat send. Callers are trusted (gateway-side) and are
+  // responsible for sanitizing untrusted content before calling.
+  if (u.pathname === '/api/inject' && req.method === 'POST') {
+    let body = {};
+    try {
+      const raw = await readBody(req);
+      body = raw ? JSON.parse(raw) : {};
+    } catch {
+      /* ignore */
+    }
+    const name = body.session || 'claude';
+    const text = typeof body.text === 'string' ? body.text : '';
+    const sess = sessions.get(name);
+    if (!sess) return sendJson(res, 404, { error: 'session not found' });
+    if (!text.trim()) return sendJson(res, 400, { error: 'text required' });
+    const clean = text.replace(/\r\n?/g, '\n');
+    sess.pty.write(clean);
+    setTimeout(() => {
+      try {
+        sess.pty.write('\r');
+      } catch {
+        /* session may have closed */
+      }
+    }, 150);
+    return sendJson(res, 200, { ok: true });
   }
   // Attachment upload: raw body → ~/uploads/<name>; returns the in-agent path
   // so the chat can reference it for claude to read.

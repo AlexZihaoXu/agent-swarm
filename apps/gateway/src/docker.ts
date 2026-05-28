@@ -18,7 +18,16 @@ import tar from 'tar-fs';
 import { config as defaultConfig, type Config } from './config.js';
 import { getSettings } from './settings.js';
 import { LATEST_VERSION, migrations, VERSION_MARKER, type MigrationCtx } from './migrations.js';
-import type { Agent, CreateAgentOptions, ProxyTarget, ServiceName } from './types.js';
+import { DiscordBridge, testDiscordToken } from './discord-bridge.js';
+import * as integrations from './integrations.js';
+import type {
+  Agent,
+  CreateAgentOptions,
+  IntegrationPatch,
+  IntegrationPublic,
+  IntegrationType,
+} from './types.js';
+import type { ProxyTarget, ServiceName } from './types.js';
 
 export interface UpgradeInfo {
   installed: number;
@@ -46,6 +55,8 @@ interface AgentIdentity {
   project: string;
   timezone: string | null;
   createdAt: number;
+  /** CLAUDE_AUTOCOMPACT_PCT_OVERRIDE (1–100); null = use the claude default. */
+  autoCompactPct?: number | null;
 }
 
 /** Per-million-token USD pricing (mirrors the agent runtime's modelRates).
@@ -85,6 +96,8 @@ export function resolveHostPort(ports: PortBindings, internalPort: number): Prox
 /** Drives the Docker engine for agent lifecycle + proxy target resolution. */
 export class AgentManager {
   private building = false;
+  /** Receive-side Discord connections, keyed by agent id (apply → connect). */
+  private readonly discord = new DiscordBridge();
 
   constructor(
     private readonly docker: Docker,
@@ -132,21 +145,47 @@ export class AgentManager {
       project: this.cfg.project,
       timezone: patch.timezone !== undefined ? patch.timezone : (cur?.timezone ?? null),
       createdAt: cur?.createdAt ?? Date.now(),
+      autoCompactPct:
+        patch.autoCompactPct !== undefined ? patch.autoCompactPct : (cur?.autoCompactPct ?? null),
     };
     mkdirSync(dirname(this.identityFile(id)), { recursive: true });
     writeFileSync(this.identityFile(id), JSON.stringify(next, null, 2));
     return next;
   }
 
-  /** Rename an agent's display name (live — updates the on-disk identity the
-   *  agent reads). Docker labels can't change on a running container, so the
-   *  identity file is the source of truth. */
-  async setName(id: string, name: string): Promise<Agent> {
-    const display = name.trim();
-    if (!display) throw Object.assign(new Error('name cannot be empty'), { statusCode: 400 });
+  /** Inspect a single agent (404 if its disk doesn't exist). */
+  async getAgent(id: string): Promise<Agent> {
     if (!existsSync(this.agentDataDir(id)))
       throw Object.assign(new Error('agent not found'), { statusCode: 404 });
-    this.writeIdentity(id, { name: display });
+    return this.toAgent(await this.docker.getContainer(this.containerName(id)).inspect());
+  }
+
+  /** Patch an agent's editable per-agent settings (live — updates the on-disk
+   *  identity the agent reads). Docker labels can't change on a running
+   *  container, so the identity file is the source of truth. The auto-compact
+   *  threshold takes effect when the supervisor next (re)launches claude
+   *  (i.e. on the next stop→start). */
+  async patchAgent(
+    id: string,
+    patch: { username?: string; autoCompactPct?: number | null },
+  ): Promise<Agent> {
+    if (!existsSync(this.agentDataDir(id)))
+      throw Object.assign(new Error('agent not found'), { statusCode: 404 });
+    const idPatch: Partial<AgentIdentity> = {};
+    if (patch.username !== undefined) {
+      const display = patch.username.trim();
+      if (!display) throw Object.assign(new Error('name cannot be empty'), { statusCode: 400 });
+      idPatch.name = display;
+    }
+    if (patch.autoCompactPct !== undefined) {
+      const v = patch.autoCompactPct;
+      if (v !== null && (!Number.isFinite(v) || v < 1 || v > 100))
+        throw Object.assign(new Error('autoCompactPct must be between 1 and 100'), {
+          statusCode: 400,
+        });
+      idPatch.autoCompactPct = v === null ? null : Math.round(v);
+    }
+    this.writeIdentity(id, idPatch);
     return this.toAgent(await this.docker.getContainer(this.containerName(id)).inspect());
   }
 
@@ -253,6 +292,9 @@ export class AgentManager {
     rateLimits: {
       fiveHour: { usedPercent: number; resetsAt: number };
       sevenDay: { usedPercent: number; resetsAt: number };
+      /** When the rate-limit values last changed (= last API activity). The
+       *  dashboard greys the rings as "outdated" when this is >5m old. */
+      updatedAt: number;
     } | null;
     agents: { id: string; name: string; tokens: number; cost: number }[];
     buckets: { t: number; tokens: number; cost: number }[];
@@ -274,6 +316,10 @@ export class AgentManager {
     for (const a of await this.list()) {
       let tokens = 0;
       let cost = 0;
+      // `claude --continue` re-writes prior assistant messages into the new
+      // transcript, so the same message.id appears in multiple files/lines.
+      // Counting every line double-counts (~2x here) — dedupe by message.id.
+      const seen = new Set<string>();
       for (const file of this.walkJsonl(join(this.agentDataDir(a.id), '.claude', 'projects'))) {
         let raw: string;
         try {
@@ -286,7 +332,7 @@ export class AgentManager {
           let o: {
             type?: string;
             timestamp?: string;
-            message?: { usage?: Record<string, number>; model?: string };
+            message?: { id?: string; usage?: Record<string, number>; model?: string };
           };
           try {
             o = JSON.parse(line);
@@ -296,6 +342,11 @@ export class AgentManager {
           const u = o.message?.usage;
           const ts = o.timestamp ? Date.parse(o.timestamp) : NaN;
           if (o.type !== 'assistant' || !u || !Number.isFinite(ts)) continue;
+          const mid = o.message?.id;
+          if (mid) {
+            if (seen.has(mid)) continue;
+            seen.add(mid);
+          }
           const inp = u.input_tokens || 0;
           const out = u.output_tokens || 0;
           const cr = u.cache_read_input_tokens || 0;
@@ -348,15 +399,36 @@ export class AgentManager {
     }
     // Claude only writes rate_limits after API activity, so a freshly-(re)started
     // idle agent may lack it. They're account-global and change slowly, so cache
-    // the last seen and fall back to it rather than dropping the rings.
-    if (rateLimits) this.lastRateLimits = rateLimits;
-    else rateLimits = this.lastRateLimits;
-    return { rateLimits, agents, buckets };
+    // the last seen and fall back to it rather than dropping the rings. We stamp
+    // `updatedAt` with the moment the values last *changed* (not every poll), so
+    // an idle account whose numbers stop moving reads as outdated after 5m.
+    let result: {
+      fiveHour: { usedPercent: number; resetsAt: number };
+      sevenDay: { usedPercent: number; resetsAt: number };
+      updatedAt: number;
+    } | null = null;
+    if (rateLimits) {
+      const prev = this.lastRateLimits;
+      const changed =
+        !prev ||
+        prev.fiveHour.usedPercent !== rateLimits.fiveHour.usedPercent ||
+        prev.fiveHour.resetsAt !== rateLimits.fiveHour.resetsAt ||
+        prev.sevenDay.usedPercent !== rateLimits.sevenDay.usedPercent ||
+        prev.sevenDay.resetsAt !== rateLimits.sevenDay.resetsAt;
+      if (changed) this.lastRateLimitsChangedAt = Date.now();
+      result = { ...rateLimits, updatedAt: this.lastRateLimitsChangedAt };
+      this.lastRateLimits = result;
+    } else {
+      result = this.lastRateLimits;
+    }
+    return { rateLimits: result, agents, buckets };
   }
   private lastRateLimits: {
     fiveHour: { usedPercent: number; resetsAt: number };
     sevenDay: { usedPercent: number; resetsAt: number };
+    updatedAt: number;
   } | null = null;
+  private lastRateLimitsChangedAt = 0;
 
   /** Create the shared network if it doesn't exist yet (idempotent). */
   async ensureNetwork(): Promise<void> {
@@ -477,6 +549,7 @@ export class AgentManager {
         cpus: c.Labels?.[CPUS_LABEL] ? Number(c.Labels[CPUS_LABEL]) : undefined,
         memoryMb: c.Labels?.[MEMORY_LABEL] ? Number(c.Labels[MEMORY_LABEL]) : undefined,
         timezone: c.Labels?.[TZ_LABEL],
+        autoCompactPct: this.readIdentity(id)?.autoCompactPct ?? null,
       };
     });
   }
@@ -485,17 +558,215 @@ export class AgentManager {
     // Refresh credentials into the disk first so a restart reloads them.
     await this.pushCredentials(id).catch(() => {});
     await this.docker.getContainer(this.containerName(id)).start();
+    // Reconnect any `active` integrations once the terminal is reachable.
+    void this.reconnectIntegrations(id);
   }
 
   async stop(id: string): Promise<void> {
+    await this.discord.disconnect(id);
     await this.docker.getContainer(this.containerName(id)).stop();
   }
 
   async remove(id: string): Promise<void> {
+    await this.discord.disconnect(id);
     await this.docker.getContainer(this.containerName(id)).remove({ force: true });
     // Also delete the agent's persistent disk (the caller must have warned the
     // user — this is irreversible).
     rmSync(this.agentDataDir(id), { recursive: true, force: true });
+  }
+
+  // --- Integrations --------------------------------------------------------
+  // CRUD + test + apply for per-agent platform connectors (Discord first). The
+  // receive side (incoming messages) is the DiscordBridge, which types accepted
+  // messages into the agent's claude terminal; the send side is the in-agent
+  // Discord MCP server, which reads these same credentials off the disk.
+
+  /** Inject a single line into the agent's claude terminal (the receive path).
+   *  Right after a (re)start the terminal/claude session may not be listening
+   *  yet, so we retry — but ONLY on "not ready" signals (a connection error, or
+   *  404 = session not registered yet), where the message definitely was not
+   *  typed. A real HTTP response (success or a permanent error like 400) is never
+   *  retried, so a message the server already processed can't be typed twice. */
+  private async injectToTerminal(id: string, text: string): Promise<void> {
+    const MAX = 5;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const t = await this.resolveTarget(id, 'terminal');
+        const res = await fetch(`http://${t.host}:${t.port}/api/inject`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ session: 'claude', text }),
+        });
+        if (res.ok) return;
+        // 404 = the claude session isn't up yet (transient on (re)start); retry.
+        // Anything else is permanent (e.g. 400) — fail without retrying.
+        if (res.status !== 404 || attempt >= MAX - 1)
+          throw new Error(`inject failed: HTTP ${res.status}`);
+      } catch (e) {
+        // Permanent HTTP errors (thrown above) propagate; connection-level errors
+        // (terminal not listening yet) are retriable until we run out of tries.
+        if (e instanceof Error && /inject failed: HTTP/.test(e.message)) throw e;
+        if (attempt >= MAX - 1) throw e;
+      }
+      await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
+    }
+  }
+
+  /** Per-agent delivery chain so concurrent inbound messages are injected one at
+   *  a time (typing two messages into the terminal at once merges them and one
+   *  gets lost). Each link injects, then settles briefly so claude registers a
+   *  distinct message before the next is typed. */
+  private deliverChain = new Map<string, Promise<unknown>>();
+  private queueDeliver(
+    id: string,
+    msg: { text: string; attachments: { url: string; name: string }[] },
+  ): void {
+    const prev = this.deliverChain.get(id) ?? Promise.resolve();
+    const next = prev
+      .catch(() => {})
+      .then(async () => {
+        await this.deliverInbound(id, msg);
+        await new Promise((r) => setTimeout(r, 450));
+      });
+    this.deliverChain.set(id, next);
+    void next.catch(() => {});
+  }
+
+  /** Deliver one accepted inbound message: download its attachments onto the
+   *  agent's disk (so the agent can read/view them) and inject the line, with
+   *  any saved paths appended inline. Attachments land in the agent's home at
+   *  /home/agent/.swarm/discord-inbox/ (world-readable). */
+  private async deliverInbound(
+    id: string,
+    msg: { text: string; attachments: { url: string; name: string }[] },
+  ): Promise<void> {
+    let text = msg.text;
+    if (msg.attachments.length) {
+      const dir = join(this.agentDataDir(id), '.swarm', 'discord-inbox');
+      const paths: string[] = [];
+      for (const a of msg.attachments.slice(0, 5)) {
+        try {
+          const res = await fetch(a.url);
+          if (!res.ok) continue;
+          const buf = Buffer.from(await res.arrayBuffer());
+          if (buf.byteLength > 25 * 1024 * 1024) continue; // 25MB cap
+          mkdirSync(dir, { recursive: true });
+          const safe = a.name.replace(/[^\w.-]/g, '_');
+          const fname = `${Date.now()}-${safe}`;
+          writeFileSync(join(dir, fname), buf);
+          paths.push(`/home/agent/.swarm/discord-inbox/${fname}`);
+        } catch {
+          /* skip an attachment that fails to download */
+        }
+      }
+      if (paths.length) text += `  [attachment saved — read to view: ${paths.join(', ')}]`;
+    }
+    await this.injectToTerminal(id, text);
+  }
+
+  /** On gateway startup, reconnect bridges for every running agent that has an
+   *  active integration (bridge connections don't survive a gateway restart). */
+  async reconnectAllIntegrations(): Promise<void> {
+    try {
+      for (const a of await this.list()) {
+        if (a.status === 'running') await this.reconnectIntegrations(a.id).catch(() => {});
+      }
+    } catch {
+      /* docker not ready / no agents — nothing to reconnect */
+    }
+  }
+
+  /** On (re)start, bring back any integration that was left `active`. */
+  private async reconnectIntegrations(id: string): Promise<void> {
+    for (const i of integrations.listIntegrations(this.agentDataDir(id))) {
+      if (i.type === 'discord' && i.status === 'active' && i.credentials.botToken) {
+        await this.discord
+          .connect(id, i.credentials.botToken, i.rules, (m) => this.queueDeliver(id, m))
+          .catch(() => {});
+      }
+    }
+  }
+
+  private requireAgentDir(id: string): string {
+    const dir = this.agentDataDir(id);
+    if (!existsSync(dir)) throw Object.assign(new Error('agent not found'), { statusCode: 404 });
+    return dir;
+  }
+
+  listIntegrations(id: string): IntegrationPublic[] {
+    return integrations.listIntegrations(this.requireAgentDir(id)).map(integrations.toPublic);
+  }
+
+  addIntegration(id: string, type: IntegrationType): IntegrationPublic {
+    return integrations.toPublic(
+      integrations.addIntegration(this.requireAgentDir(id), type, Date.now()),
+    );
+  }
+
+  updateIntegration(id: string, type: IntegrationType, patch: IntegrationPatch): IntegrationPublic {
+    const dir = this.requireAgentDir(id);
+    if (!integrations.getIntegration(dir, type))
+      throw Object.assign(new Error('integration not found'), { statusCode: 404 });
+    // Editing config invalidates a running connection until re-applied.
+    void this.discord.disconnect(id);
+    return integrations.toPublic(integrations.patchIntegration(dir, type, patch, Date.now()));
+  }
+
+  /** Validate the bot token over REST and record the result. */
+  async testIntegration(id: string, type: IntegrationType): Promise<IntegrationPublic> {
+    const dir = this.requireAgentDir(id);
+    const cur = integrations.getIntegration(dir, type);
+    if (!cur) throw Object.assign(new Error('integration not found'), { statusCode: 404 });
+    if (!cur.credentials.botToken)
+      throw Object.assign(new Error('add a bot token first'), { statusCode: 400 });
+    const result = await testDiscordToken(cur.credentials.botToken);
+    cur.lastTest = result;
+    // A test never changes a live `active` integration — record the result only,
+    // so a transient failure can't leave status `error` while the bridge stays up.
+    if (cur.status !== 'active') {
+      if (result.ok && (cur.status === 'configured' || cur.status === 'error'))
+        cur.status = 'tested-ok';
+      else if (!result.ok) cur.status = 'error';
+    }
+    cur.updatedAt = Date.now();
+    integrations.setIntegration(dir, type, cur);
+    return integrations.toPublic(cur);
+  }
+
+  /** Activate an integration: connect the bridge live (if the agent is running). */
+  async applyIntegration(id: string, type: IntegrationType): Promise<IntegrationPublic> {
+    const dir = this.requireAgentDir(id);
+    const cur = integrations.getIntegration(dir, type);
+    if (!cur) throw Object.assign(new Error('integration not found'), { statusCode: 404 });
+    if (!cur.credentials.botToken)
+      throw Object.assign(new Error('add a bot token first'), { statusCode: 400 });
+    if (type === 'discord') {
+      await this.discord.connect(id, cur.credentials.botToken, cur.rules, (m) =>
+        this.queueDeliver(id, m),
+      );
+    }
+    cur.status = 'active';
+    cur.updatedAt = Date.now();
+    integrations.setIntegration(dir, type, cur);
+    return integrations.toPublic(cur);
+  }
+
+  /** Disable an integration: drop the live connection, keep the config. */
+  async disableIntegration(id: string, type: IntegrationType): Promise<IntegrationPublic> {
+    const dir = this.requireAgentDir(id);
+    const cur = integrations.getIntegration(dir, type);
+    if (!cur) throw Object.assign(new Error('integration not found'), { statusCode: 404 });
+    await this.discord.disconnect(id);
+    cur.status = 'disabled';
+    cur.updatedAt = Date.now();
+    integrations.setIntegration(dir, type, cur);
+    return integrations.toPublic(cur);
+  }
+
+  async removeIntegration(id: string, type: IntegrationType): Promise<void> {
+    const dir = this.requireAgentDir(id);
+    await this.discord.disconnect(id);
+    integrations.removeIntegration(dir, type);
   }
 
   /** Top-level entries of an agent's persistent home (for the package picker). */
@@ -831,6 +1102,7 @@ export class AgentManager {
       cpus: labels[CPUS_LABEL] ? Number(labels[CPUS_LABEL]) : undefined,
       memoryMb: labels[MEMORY_LABEL] ? Number(labels[MEMORY_LABEL]) : undefined,
       timezone: labels[TZ_LABEL],
+      autoCompactPct: this.readIdentity(id)?.autoCompactPct ?? null,
     };
   }
 }

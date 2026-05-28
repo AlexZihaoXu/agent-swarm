@@ -4,8 +4,10 @@ import { Button, Input, Label, Modal, TextField } from '@heroui/react';
 import { useEffect, useState, type ReactNode } from 'react';
 
 /**
- * Controlled type-the-name confirmation dialog for disruptive actions (Stop,
- * Remove). Open/close is driven by the parent so it can be triggered from a menu.
+ * Controlled confirmation dialog for disruptive actions. For irreversible ones
+ * (Remove) pass `confirmWord` to require typing the name; for reversible ones
+ * (Stop) omit it for a plain warning + Cancel/confirm. Open/close is driven by
+ * the parent so it can be triggered from a menu.
  */
 export function ConfirmActionDialog({
   isOpen,
@@ -18,7 +20,8 @@ export function ConfirmActionDialog({
 }: {
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
-  confirmWord: string;
+  /** Require typing this exact word to enable the action (irreversible ops). */
+  confirmWord?: string;
   action: string;
   title: string;
   description: ReactNode;
@@ -26,7 +29,7 @@ export function ConfirmActionDialog({
 }) {
   const [typed, setTyped] = useState('');
   const [busy, setBusy] = useState(false);
-  const matches = typed.trim() === confirmWord;
+  const matches = !confirmWord || typed.trim() === confirmWord;
 
   useEffect(() => {
     if (isOpen) setTyped('');
@@ -62,12 +65,15 @@ export function ConfirmActionDialog({
                 }}
               >
                 <p className="text-muted text-sm">{description}</p>
-                <TextField value={typed} onChange={setTyped} autoFocus>
-                  <Label>
-                    Type <span className="text-foreground font-mono">{confirmWord}</span> to confirm
-                  </Label>
-                  <Input placeholder={confirmWord} />
-                </TextField>
+                {confirmWord && (
+                  <TextField value={typed} onChange={setTyped} autoFocus>
+                    <Label>
+                      Type <span className="text-foreground font-mono">{confirmWord}</span> to
+                      confirm
+                    </Label>
+                    <Input placeholder={confirmWord} />
+                  </TextField>
+                )}
               </form>
             </Modal.Body>
             <Modal.Footer>

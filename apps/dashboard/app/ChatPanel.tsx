@@ -1,16 +1,18 @@
 'use client';
 
 import { Button } from '@heroui/react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { animate, motion, AnimatePresence } from 'framer-motion';
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  LuArrowDown,
   LuArrowUp,
   LuBrain,
   LuCheck,
   LuChevronDown,
   LuCircle,
   LuCircleCheck,
+  LuImageOff,
   LuListChecks,
   LuListTodo,
   LuPaperclip,
@@ -292,6 +294,34 @@ function TasksPanel({ tasks }: { tasks: AgentTask[] }) {
   );
 }
 
+/** Live generated-token count that eases (lerps) to each new value and shifts
+ *  colour by magnitude as it climbs — same idea as the dashboard usage rings. */
+function AnimatedTokens({ value }: { value: number }) {
+  const [display, setDisplay] = useState(value);
+  const prev = useRef(value);
+  useEffect(() => {
+    const controls = animate(prev.current, value, {
+      duration: 0.6,
+      ease: 'easeOut',
+      onUpdate: (v) => setDisplay(v),
+    });
+    prev.current = value;
+    return () => controls.stop();
+  }, [value]);
+  const n = Math.round(display);
+  const text = n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+  // muted → accent → warning → danger as the response grows.
+  const color =
+    n >= 30000
+      ? 'text-danger'
+      : n >= 10000
+        ? 'text-warning'
+        : n >= 2000
+          ? 'text-accent'
+          : 'text-muted/70';
+  return <span className={`tabular-nums transition-colors duration-700 ${color}`}>{text}</span>;
+}
+
 /** Three bouncing dots, shown where the agent's next reply will appear. */
 function TypingDots() {
   return (
@@ -305,6 +335,43 @@ function TypingDots() {
         />
       ))}
     </div>
+  );
+}
+
+/**
+ * A captured screenshot in the chat. Screenshots live in a size-capped temp
+ * folder on the agent and are evicted once it fills up, so an older one may be
+ * gone (404 / failed load). When that happens we replace the broken <img> with
+ * a tidy "no longer available" notice instead of a broken-image glyph.
+ */
+function ChatImage({
+  agentId,
+  file,
+  onOpen,
+}: {
+  agentId: string;
+  file: string;
+  onOpen: (url: string) => void;
+}) {
+  const [lost, setLost] = useState(false);
+  const url = `${terminalHttpBase(agentId)}api/shots/${file}`;
+  if (lost) {
+    return (
+      <div className="border-separator text-muted/80 flex items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-xs">
+        <LuImageOff className="size-4 shrink-0" />
+        Screenshot no longer available
+      </div>
+    );
+  }
+  return (
+    <img
+      src={url}
+      alt="screenshot"
+      loading="lazy"
+      onError={() => setLost(true)}
+      onClick={() => onOpen(url)}
+      className="border-separator max-h-80 w-auto max-w-full cursor-zoom-in rounded-lg border"
+    />
   );
 }
 
@@ -563,16 +630,7 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
                     ) : it.kind === 'todos' ? (
                       <TodosCard key={j} todos={it.todos ?? []} />
                     ) : it.kind === 'image' && it.file ? (
-                      <img
-                        key={j}
-                        src={`${terminalHttpBase(agentId)}api/shots/${it.file}`}
-                        alt="screenshot"
-                        loading="lazy"
-                        onClick={() =>
-                          setLightbox(`${terminalHttpBase(agentId)}api/shots/${it.file}`)
-                        }
-                        className="border-separator max-h-80 w-auto max-w-full cursor-zoom-in rounded-lg border"
-                      />
+                      <ChatImage key={j} agentId={agentId} file={it.file} onOpen={setLightbox} />
                     ) : (
                       <ToolItem key={j} name={it.name ?? ''} detail={it.detail} />
                     ),
@@ -587,19 +645,33 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.2, ease: 'easeOut' }}
-              className="text-muted flex items-center gap-2 text-xs"
+              className="flex items-center gap-2 text-xs"
             >
-              <TypingDots />
-              {stats?.activity && (
-                <span>
-                  {stats.activity.thinking ? 'thinking' : 'working'}
-                  {stats.activity.genTokens
-                    ? ` · ${
-                        stats.activity.genTokens >= 1000
-                          ? `${(stats.activity.genTokens / 1000).toFixed(1)}k`
-                          : stats.activity.genTokens
-                      } tokens`
-                    : ''}
+              {stats?.activity?.verb ? (
+                // Mirror the TUI's flashing gerund (e.g. "Flibbertigibbeting…").
+                <motion.span
+                  className="text-warning font-medium"
+                  animate={{ opacity: [1, 0.45, 1] }}
+                  transition={{ duration: 1.4, repeat: Infinity, ease: 'easeInOut' }}
+                >
+                  {stats.activity.verb}…
+                </motion.span>
+              ) : (
+                <span className="text-muted flex items-center gap-2">
+                  <TypingDots />
+                  working
+                </span>
+              )}
+              {stats?.activity && (stats.activity.elapsed || stats.activity.genTokens != null) && (
+                <span className="text-muted/70 flex items-center gap-1 tabular-nums">
+                  {stats.activity.elapsed && <span>{stats.activity.elapsed}</span>}
+                  {stats.activity.genTokens != null && (
+                    <span className="flex items-center gap-0.5">
+                      {stats.activity.elapsed && <span className="mr-0.5">·</span>}
+                      <LuArrowDown className="size-3" />
+                      <AnimatedTokens value={stats.activity.genTokens} /> tokens
+                    </span>
+                  )}
                 </span>
               )}
             </motion.div>
