@@ -190,7 +190,7 @@ function TasksPanel({ tasks }: { tasks: AgentTask[] }) {
   const [open, setOpen] = useState(true);
   const done = tasks.filter((t) => t.status === 'completed').length;
   return (
-    <div className="border-separator bg-surface-secondary/50 shrink-0 border-b">
+    <div className="border-separator bg-surface-secondary/50 relative z-10 shrink-0 border-b shadow-[0_12px_28px_-12px_rgba(0,0,0,0.6)]">
       <button
         onClick={() => setOpen((o) => !o)}
         className="text-muted hover:text-foreground flex w-full items-center gap-1.5 px-3 py-2 text-xs font-semibold tracking-wide uppercase"
@@ -202,39 +202,34 @@ function TasksPanel({ tasks }: { tasks: AgentTask[] }) {
           {done}/{tasks.length} done
         </span>
       </button>
-      <AnimatePresence initial={false}>
-        {open && (
-          <motion.div
-            key="list"
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.22, ease: 'easeOut' }}
-            className="overflow-hidden"
-          >
-            {/* The list grows with the task count, up to ~half the viewport,
-                then scrolls — so long lists get plenty of room. */}
-            <ul className="max-h-[45vh] space-y-1 overflow-auto px-3 pb-2">
-              {tasks.map((t) => (
-                <li key={t.id} className="flex items-start gap-2 text-sm">
-                  <StatusIcon status={t.status} />
-                  <span
-                    className={
-                      t.status === 'completed'
-                        ? 'text-muted line-through'
-                        : t.status === 'in_progress'
-                          ? 'text-foreground font-medium'
-                          : 'text-foreground'
-                    }
-                  >
-                    {t.status === 'in_progress' && t.activeForm ? t.activeForm : t.subject}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* Collapse via grid-rows (0fr↔1fr): animates smoothly AND sizes to the
+          content when open (so nothing gets clipped); long lists scroll at 45vh. */}
+      <div
+        className={`grid transition-[grid-template-rows] duration-200 ease-out ${
+          open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
+        }`}
+      >
+        <div className="overflow-hidden">
+          <ul className="max-h-[45vh] space-y-1 overflow-auto px-3 pb-2">
+            {tasks.map((t) => (
+              <li key={t.id} className="flex items-start gap-2 text-sm">
+                <StatusIcon status={t.status} />
+                <span
+                  className={
+                    t.status === 'completed'
+                      ? 'text-muted line-through'
+                      : t.status === 'in_progress'
+                        ? 'text-foreground font-medium'
+                        : 'text-foreground'
+                  }
+                >
+                  {t.status === 'in_progress' && t.activeForm ? t.activeForm : t.subject}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
     </div>
   );
 }
