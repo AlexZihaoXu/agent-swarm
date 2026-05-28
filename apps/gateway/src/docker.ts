@@ -587,7 +587,7 @@ export class AgentManager {
    *  404 = session not registered yet), where the message definitely was not
    *  typed. A real HTTP response (success or a permanent error like 400) is never
    *  retried, so a message the server already processed can't be typed twice. */
-  private async injectToTerminal(id: string, text: string): Promise<void> {
+  private async injectToTerminal(id: string, text: string, interrupt = false): Promise<void> {
     const MAX = 5;
     for (let attempt = 0; ; attempt++) {
       try {
@@ -595,7 +595,7 @@ export class AgentManager {
         const res = await fetch(`http://${t.host}:${t.port}/api/inject`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ session: 'claude', text }),
+          body: JSON.stringify({ session: 'claude', text, interrupt }),
         });
         if (res.ok) return;
         // 404 = the claude session isn't up yet (transient on (re)start); retry.
@@ -619,8 +619,14 @@ export class AgentManager {
   private deliverChain = new Map<string, Promise<unknown>>();
   private queueDeliver(
     id: string,
-    msg: { text: string; attachments: { url: string; name: string }[] },
+    msg: { text: string; attachments: { url: string; name: string }[]; interrupt?: boolean },
   ): void {
+    // Interrupts jump the queue: deliver immediately (Esc + message) instead of
+    // waiting behind serialized plain messages.
+    if (msg.interrupt) {
+      void this.deliverInbound(id, msg).catch(() => {});
+      return;
+    }
     const prev = this.deliverChain.get(id) ?? Promise.resolve();
     const next = prev
       .catch(() => {})
@@ -638,7 +644,7 @@ export class AgentManager {
    *  /home/agent/.swarm/discord-inbox/ (world-readable). */
   private async deliverInbound(
     id: string,
-    msg: { text: string; attachments: { url: string; name: string }[] },
+    msg: { text: string; attachments: { url: string; name: string }[]; interrupt?: boolean },
   ): Promise<void> {
     let text = msg.text;
     if (msg.attachments.length) {
@@ -661,7 +667,7 @@ export class AgentManager {
       }
       if (paths.length) text += `  [attachment saved — read to view: ${paths.join(', ')}]`;
     }
-    await this.injectToTerminal(id, text);
+    await this.injectToTerminal(id, text, msg.interrupt);
   }
 
   /** On gateway startup, reconnect bridges for every running agent that has an

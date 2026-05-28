@@ -12,8 +12,10 @@ import {
   LuChevronDown,
   LuCircle,
   LuCircleCheck,
+  LuClock,
   LuImageOff,
   LuListChecks,
+  LuSquare,
   LuListTodo,
   LuPaperclip,
   LuTerminal,
@@ -391,6 +393,10 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
   const atBottomRef = useRef(true);
   const [attaching, setAttaching] = useState(false);
   const [lightbox, setLightbox] = useState<string | null>(null);
+  // Messages sent locally that haven't appeared in the polled transcript yet
+  // (e.g. queued while the agent is busy). Rendered as "queued" so they don't
+  // vanish when the 2s poll replaces `turns` with the server transcript.
+  const [pending, setPending] = useState<{ text: string; ts: number }[]>([]);
   const stats = useAgentStats(agentId);
   const working = stats?.status === 'busy';
   const tasks = stats?.tasks ?? [];
@@ -399,6 +405,7 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
   useEffect(() => {
     setTurns([]);
     setInput('');
+    setPending([]);
   }, [agentId]);
 
   const awaiting = !!stats?.awaitingInput;
@@ -459,6 +466,21 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
         seenLen.current = next.length;
       }
       setTurns(next);
+      // Drop any pending message that now shows up as a user turn in the transcript.
+      setPending((p) => {
+        if (!p.length) return p;
+        const sent = new Set(
+          next
+            .filter((t) => t.role === 'user')
+            .map((t) =>
+              t.items
+                .map((it) => it.text ?? '')
+                .join('')
+                .trim(),
+            ),
+        );
+        return p.filter((pi) => !sent.has(pi.text.trim()));
+      });
     } catch {
       /* unreachable */
     }
@@ -541,11 +563,15 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
       if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'data', data: '\r' }));
     }, 250);
     atBottomRef.current = true;
-    setTurns((prev) => [
-      ...prev,
-      { role: 'user', ts: Date.now(), items: [{ kind: 'text', text }] },
-    ]);
+    // Track it as pending; the poll reconciles it once it lands in the transcript.
+    setPending((p) => [...p, { text, ts: Date.now() }]);
     setInput('');
+  };
+
+  /** Send Esc over the pty to interrupt the agent's current turn. */
+  const interrupt = () => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'data', data: '\x1b' }));
   };
 
   const driveKeys = (keys: string[]) => {
@@ -637,6 +663,24 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
                   )}
                 </div>
               )}
+            </motion.div>
+          ))}
+
+          {pending.map((p, i) => (
+            <motion.div
+              key={`pending-${p.ts}-${i}`}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.25, ease: 'easeOut' }}
+              className="flex flex-col items-end gap-0.5"
+            >
+              <div className="bg-surface-secondary/60 text-surface-secondary-foreground max-w-[85%] rounded-2xl rounded-br-md px-3.5 py-2 text-sm font-medium">
+                <p className="whitespace-pre-wrap">{p.text}</p>
+              </div>
+              <span className="text-muted/70 flex items-center gap-1 pr-1 text-[11px]">
+                <LuClock className="size-3" />
+                {working ? 'queued' : 'sending…'}
+              </span>
             </motion.div>
           ))}
 
@@ -823,14 +867,26 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
                 <input ref={fileRef} type="file" hidden onChange={onPickFile} />
                 {attaching && <span className="text-muted text-xs">uploading…</span>}
               </div>
-              <Button
-                isIconOnly
-                aria-label="Send"
-                onPress={send}
-                isDisabled={!input.trim() || composerLocked}
-              >
-                <LuArrowUp className="size-4" />
-              </Button>
+              <div className="flex items-center gap-2">
+                {working && (
+                  <Button
+                    isIconOnly
+                    variant="secondary"
+                    aria-label="Stop (interrupt the agent)"
+                    onPress={interrupt}
+                  >
+                    <LuSquare className="size-3.5 fill-current" />
+                  </Button>
+                )}
+                <Button
+                  isIconOnly
+                  aria-label="Send"
+                  onPress={send}
+                  isDisabled={!input.trim() || composerLocked}
+                >
+                  <LuArrowUp className="size-4" />
+                </Button>
+              </div>
             </div>
           </div>
         </div>

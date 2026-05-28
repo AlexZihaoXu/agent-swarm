@@ -13,6 +13,10 @@ export interface InboundMessage {
   text: string;
   /** Attachment URLs to download so the agent can view/read them. */
   attachments: { url: string; name: string }[];
+  /** Interrupt the agent's current turn (Esc) and handle this now, rather than
+   *  letting it queue behind the in-flight turn. Set for direct address
+   *  (@mention / reply / DM). */
+  interrupt?: boolean;
 }
 
 /** Delivers an accepted message to the agent (download attachments + inject). */
@@ -115,8 +119,11 @@ export class DiscordBridge {
       onlineUntil = Date.now() + ONLINE_MS;
       setPresence('online');
     };
-    const send = (text: string, attachments: { url: string; name: string }[] = []) =>
-      void Promise.resolve(deliver({ text, attachments })).catch(() => {});
+    const send = (
+      text: string,
+      attachments: { url: string; name: string }[] = [],
+      interrupt = false,
+    ) => void Promise.resolve(deliver({ text, attachments, interrupt })).catch(() => {});
 
     client.once(Events.ClientReady, () => setPresence('idle'));
 
@@ -140,7 +147,8 @@ export class DiscordBridge {
           if (!rules.forwardDms) return;
           bumpOnline();
           unread.clear();
-          return send(formatLine(msg, true), attachments);
+          // A DM is direct address → interrupt if the agent is mid-turn.
+          return send(formatLine(msg, true), attachments, true);
         }
 
         if (rules.forwardChannelIds.length) {
@@ -149,7 +157,9 @@ export class DiscordBridge {
           if (mentioned || Date.now() < onlineUntil) {
             bumpOnline();
             unread.clear();
-            return send(formatLine(msg, false), attachments);
+            // @mention/reply = handle now (interrupt); a plain message while
+            // online just gets forwarded and queues if the agent is busy.
+            return send(formatLine(msg, false), attachments, mentioned);
           }
           unread.set(msg.channelId, (unread.get(msg.channelId) ?? 0) + 1);
           setPresence('idle');
@@ -159,7 +169,7 @@ export class DiscordBridge {
         // No watch list → whole server: only @mentions/replies (or gate-off) pass.
         if (mentioned || rules.requireMention === false) {
           bumpOnline();
-          send(formatLine(msg, false), attachments);
+          send(formatLine(msg, false), attachments, mentioned);
         }
       } catch {
         /* never let a malformed event take the bridge down */

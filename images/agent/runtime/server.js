@@ -700,6 +700,10 @@ const server = http.createServer(async (req, res) => {
   // TUI needs a moment between the pasted text and the carriage return), exactly
   // like the dashboard chat send. Callers are trusted (gateway-side) and are
   // responsible for sanitizing untrusted content before calling.
+  //
+  // `interrupt: true` sends Esc first (the claude TUI interrupt key) so the
+  // message is handled NOW instead of queued behind the current turn. With no
+  // `text`, it's a pure interrupt (e.g. a Stop action).
   if (u.pathname === '/api/inject' && req.method === 'POST') {
     let body = {};
     try {
@@ -710,18 +714,33 @@ const server = http.createServer(async (req, res) => {
     }
     const name = body.session || 'claude';
     const text = typeof body.text === 'string' ? body.text : '';
+    const interrupt = !!body.interrupt;
     const sess = sessions.get(name);
     if (!sess) return sendJson(res, 404, { error: 'session not found' });
-    if (!text.trim()) return sendJson(res, 400, { error: 'text required' });
-    const clean = text.replace(/\r\n?/g, '\n');
-    sess.pty.write(clean);
-    setTimeout(() => {
-      try {
-        sess.pty.write('\r');
-      } catch {
-        /* session may have closed */
-      }
-    }, 150);
+    if (!text.trim() && !interrupt)
+      return sendJson(res, 400, { error: 'text or interrupt required' });
+
+    const typeMessage = () => {
+      if (!text.trim()) return;
+      const clean = text.replace(/\r\n?/g, '\n');
+      sess.pty.write(clean);
+      setTimeout(() => {
+        try {
+          sess.pty.write('\r');
+        } catch {
+          /* session may have closed */
+        }
+      }, 150);
+    };
+
+    if (interrupt) {
+      // Esc interrupts the current generation; give claude a beat to settle back
+      // to the prompt before typing the new message.
+      sess.pty.write('\x1b');
+      setTimeout(typeMessage, 350);
+    } else {
+      typeMessage();
+    }
     return sendJson(res, 200, { ok: true });
   }
   // Attachment upload: raw body → ~/uploads/<name>; returns the in-agent path
