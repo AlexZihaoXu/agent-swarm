@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  LuArrowDown,
   LuArrowUp,
   LuBrain,
   LuCheck,
@@ -634,15 +635,18 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
                 </span>
               )}
               {stats?.activity && (stats.activity.elapsed || stats.activity.genTokens != null) && (
-                <span className="text-muted/70 tabular-nums">
-                  {stats.activity.elapsed ?? ''}
-                  {stats.activity.genTokens
-                    ? `${stats.activity.elapsed ? ' · ' : ''}↓ ${
-                        stats.activity.genTokens >= 1000
-                          ? `${(stats.activity.genTokens / 1000).toFixed(1)}k`
-                          : stats.activity.genTokens
-                      } tokens`
-                    : ''}
+                <span className="text-muted/70 flex items-center gap-1 tabular-nums">
+                  {stats.activity.elapsed && <span>{stats.activity.elapsed}</span>}
+                  {stats.activity.genTokens != null && (
+                    <span className="flex items-center gap-0.5">
+                      {stats.activity.elapsed && <span className="mr-0.5">·</span>}
+                      <LuArrowDown className="size-3" />
+                      {stats.activity.genTokens >= 1000
+                        ? `${(stats.activity.genTokens / 1000).toFixed(1)}k`
+                        : stats.activity.genTokens}{' '}
+                      tokens
+                    </span>
+                  )}
                 </span>
               )}
             </motion.div>
