@@ -293,8 +293,9 @@ export function IntegrationsPanel({ agentId, active }: { agentId: string; active
               <Switch.Content>
                 <Label className="text-sm">Only when mentioned</Label>
                 <p className="text-muted text-xs">
-                  In channels, only forward messages that @-mention the bot (DMs always come
-                  through). Keeps the agent out of unrelated chatter.
+                  Applies when no channels are watched above: across the server, only react to
+                  messages that @-mention or reply to the bot (DMs always come through). Watched
+                  channels always forward everything.
                 </p>
               </Switch.Content>
             </Switch>
@@ -319,8 +320,8 @@ export function IntegrationsPanel({ agentId, active }: { agentId: string; active
           </div>
 
           <div>
-            <FieldLabel hint="Only messages posted in these channels reach the agent. In Discord turn on Settings → Advanced → Developer Mode, then right-click a channel → Copy Channel ID. Empty = no channels forwarded (DMs still work if enabled above).">
-              Forwarded channels
+            <FieldLabel hint="The agent receives EVERY message in these channels and decides for itself what to answer. Turn on Developer Mode in Discord, then right-click a channel → Copy Channel ID. Leave empty to instead watch the whole server — see 'Only when mentioned' below.">
+              Watched channels
             </FieldLabel>
             <TagInput
               values={channels}

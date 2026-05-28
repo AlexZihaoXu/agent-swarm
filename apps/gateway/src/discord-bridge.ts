@@ -155,13 +155,14 @@ function formatInbound(
   const isDm = !msg.guildId;
   if (isDm) {
     if (!rules.forwardDms) return null;
+  } else if (rules.forwardChannelIds.length) {
+    // Explicit watch list: the agent receives EVERY message in these channels and
+    // decides for itself what (if anything) to answer. Other channels are ignored.
+    if (!rules.forwardChannelIds.includes(msg.channelId)) return null;
   } else {
-    if (rules.forwardChannelIds.length && !rules.forwardChannelIds.includes(msg.channelId))
-      return null;
-    // In channels, only forward when the bot is actually addressed — @mentioned,
-    // replied to, or mid-conversation (default on, incl. legacy configs missing
-    // the field) — so the agent isn't pulled into every message. DMs are
-    // inherently directed.
+    // No watch list → the whole server. To avoid noise, only forward when the bot
+    // is addressed — @mentioned, replied to, or mid-conversation (default on,
+    // incl. legacy configs missing the field).
     if (rules.requireMention !== false && !addressed) return null;
   }
   if (rules.allowedUserIds.length && !rules.allowedUserIds.includes(msg.author.id)) return null;
