@@ -120,11 +120,17 @@ export const statsStreamUrl = (id: string) => `${wsOrigin()}/a/${id}/terminal/st
 /** Low-res desktop screenshot (for fleet-card previews). */
 export const screenshotUrl = (id: string) => `${GATEWAY_BASE}/a/${id}/terminal/api/screenshot`;
 
+export interface ChatTodo {
+  content: string;
+  activeForm?: string;
+  status: string;
+}
 export interface ChatItem {
-  kind: 'text' | 'tool' | 'plan';
+  kind: 'text' | 'tool' | 'plan' | 'todos';
   text?: string;
   name?: string;
   detail?: string;
+  todos?: ChatTodo[];
 }
 export interface ChatTurn {
   role: 'user' | 'assistant';

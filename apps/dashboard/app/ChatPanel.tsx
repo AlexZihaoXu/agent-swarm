@@ -7,7 +7,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   LuArrowUp,
   LuCheck,
+  LuCircle,
+  LuCircleCheck,
   LuListChecks,
+  LuListTodo,
   LuPaperclip,
   LuTerminal,
   LuTriangleAlert,
@@ -23,6 +26,7 @@ import {
   getTranscript,
   terminalWsUrl,
   uploadToAgent,
+  type ChatTodo,
   type ChatTurn,
 } from '@/lib/gateway';
 import { useAgentStats } from './AgentStats';
@@ -113,6 +117,51 @@ function PlanCard({ text }: { text: string }) {
           {text}
         </ReactMarkdown>
       </div>
+    </div>
+  );
+}
+
+/** A to-do list (TodoWrite) — a checklist that marks steps done as the agent
+ * works through them. */
+function TodosCard({ todos }: { todos: ChatTodo[] }) {
+  return (
+    <div className="border-separator bg-surface-secondary/40 space-y-2 rounded-xl border p-3">
+      <div className="text-muted flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase">
+        <LuListTodo className="size-3.5" />
+        Tasks
+      </div>
+      <ul className="space-y-1.5">
+        {todos.map((td, i) => {
+          const done = td.status === 'completed';
+          const active = td.status === 'in_progress';
+          return (
+            <li key={i} className="flex items-start gap-2 text-sm">
+              {done ? (
+                <LuCircleCheck className="text-success mt-0.5 size-4 shrink-0" />
+              ) : active ? (
+                <motion.span
+                  className="bg-accent mt-1.5 size-2 shrink-0 rounded-full"
+                  animate={{ opacity: [1, 0.3, 1], scale: [1, 1.25, 1] }}
+                  transition={{ duration: 1, repeat: Infinity, ease: 'easeInOut' }}
+                />
+              ) : (
+                <LuCircle className="text-muted mt-0.5 size-4 shrink-0" />
+              )}
+              <span
+                className={
+                  done
+                    ? 'text-muted line-through'
+                    : active
+                      ? 'text-foreground font-medium'
+                      : 'text-foreground'
+                }
+              >
+                {active && td.activeForm ? td.activeForm : td.content}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
@@ -379,6 +428,8 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
                     )
                   ) : it.kind === 'plan' ? (
                     <PlanCard key={j} text={it.text ?? ''} />
+                  ) : it.kind === 'todos' ? (
+                    <TodosCard key={j} todos={it.todos ?? []} />
                   ) : (
                     <ToolItem key={j} name={it.name ?? ''} detail={it.detail} />
                   ),

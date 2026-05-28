@@ -158,6 +158,7 @@ function readTranscript() {
   const raw = newest && safeRead(newest.path);
   if (!raw) return [];
   const out = [];
+  let lastTodos = null; // signature of the last emitted todo list (dedup repeats)
   for (const line of raw.split('\n').slice(-500)) {
     if (!line.trim()) continue;
     let o;
@@ -178,7 +179,24 @@ function readTranscript() {
           // Plan mode: surface the full plan markdown so the chat can render it
           // as a plan card (rather than a truncated tool one-liner).
           items.push({ kind: 'plan', text: String(b.input.plan) });
-        else if (b.type === 'tool_use')
+        else if (
+          b.type === 'tool_use' &&
+          /^todo_?write$/i.test(b.name || '') &&
+          Array.isArray(b.input?.todos)
+        ) {
+          // Todo list: render as a checklist. Each TodoWrite rewrites the whole
+          // list, so collapse runs that didn't change (skip identical repeats).
+          const todos = b.input.todos.map((td) => ({
+            content: String(td.content || td.activeForm || ''),
+            activeForm: String(td.activeForm || ''),
+            status: String(td.status || 'pending'),
+          }));
+          const sig = JSON.stringify(todos);
+          if (sig !== lastTodos) {
+            items.push({ kind: 'todos', todos });
+            lastTodos = sig;
+          }
+        } else if (b.type === 'tool_use')
           items.push({ kind: 'tool', name: b.name, detail: toolDetail(b.input) });
       }
     }
