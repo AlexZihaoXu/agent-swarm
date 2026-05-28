@@ -295,20 +295,25 @@ def look_at(args: dict) -> dict:
 
 
 def show_image(args: dict) -> dict:
-    # Display an image file in the dashboard chat (near full quality, original
-    # dimensions). Doesn't render in the Claude TUI, but the GUI shows it.
+    # Display an image in the dashboard chat at near-full quality. With no path,
+    # captures the CURRENT screen full-resolution; with a path, shows that file.
+    # Doesn't render in the Claude TUI, but the GUI shows it.
     path = str(args.get("path") or "").strip()
-    if not path:
-        return _err("show_image needs a 'path' to an image file on this machine")
-    p = os.path.expanduser(path)
-    if not os.path.isfile(p):
-        return _err(f"no such file: {p}")
-    r = subprocess.run(["convert", p, "-quality", "90", "jpeg:-"], capture_output=True)
-    if r.returncode != 0 or not r.stdout:
-        return _err("could not read image: " + r.stderr.decode("utf-8", "replace")[:200])
-    name = _save_shot(r.stdout, "image", user=True)
-    note = f"Shown in chat: {os.path.basename(p)}." + _shot_marker(name)
-    return _image(r.stdout, "image/jpeg", note)
+    if path:
+        p = os.path.expanduser(path)
+        if not os.path.isfile(p):
+            return _err(f"no such file: {p}")
+        r = subprocess.run(["convert", p, "-quality", "90", "jpeg:-"], capture_output=True)
+        if r.returncode != 0 or not r.stdout:
+            return _err("could not read image: " + r.stderr.decode("utf-8", "replace")[:200])
+        jpeg, label = r.stdout, os.path.basename(p)
+    else:
+        jpeg = _capture(["-quality", "90"], "jpeg")  # native full-res, near full quality
+        if not jpeg:
+            return _err("screenshot failed")
+        label = "current screen"
+    name = _save_shot(jpeg, "image", user=True)
+    return _image(jpeg, "image/jpeg", f"Shown in chat: {label}." + _shot_marker(name))
 
 
 _xfixes_ready = False
@@ -706,8 +711,8 @@ TOOLS = [
      {"detail": {"type": "string", "enum": ["low", "normal"]}, "cursor": {"type": "boolean"}}, [], glance),
     ("look_at", "Native-resolution crop centered on a point, for precision (dragging/resizing). Returns the crop + its full_res origin. Uses the 'full' coordinate system. w/h default 256, clamped to 128..1024. cursor:true marks the pointer.",
      {"center": COORD, "w": {"type": "integer"}, "h": {"type": "integer"}, "cursor": {"type": "boolean"}}, ["center"], look_at),
-    ("show_image", "Display an image file (by path) in the dashboard chat — for sharing a screenshot, render, or any image with the user. Near full quality.",
-     {"path": {"type": "string"}}, ["path"], show_image),
+    ("show_image", "Show an image in the dashboard chat at near-full quality — with no args, captures the CURRENT screen full-resolution; with `path`, shows that image file. Use it to share a clear view with the user.",
+     {"path": {"type": "string"}}, [], show_image),
     ("move_to", "Move the cursor to a point in a straight line, smoothly (eased).",
      {"pos": COORD, "duration": {"type": "number"}}, ["pos"], move_to),
     ("move_rel", "Move the cursor by (dx, dy) in a coordinate system, straight and smooth (eased).",
