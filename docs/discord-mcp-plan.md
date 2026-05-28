@@ -10,11 +10,12 @@ Discord MCP server that lets an agent do "anything a normal user can do" in Disc
   A bot covers ~all of the requested actions; the gaps are small and called out below.
 - **Runtime: Bun + `discord.js` v14** (TypeScript). discord.js has first-class Bun support and the
   fleet already leans Node/TS, so this fits.
-- The server is a **long-running process** that holds one Discord **Gateway** (WebSocket) connection
-  for live events, and calls the **REST** API for actions. The agent drives it through MCP tools.
-- The one real architectural wrinkle is **incoming events**: MCP over stdio is request/response, so
-  the server can't push "a new message arrived" mid-turn. We buffer events and expose a
-  `poll_events` / `read_inbox` tool (same idea as this repo's `claude-link`).
+- Split by direction: **outgoing** actions are MCP tools the agent calls (REST); **incoming**
+  messages are delivered by a **gateway-side bridge** that holds the Discord Gateway (WebSocket)
+  connection and types each accepted message into the agent's `claude` terminal — like a human / the
+  dashboard "send". No mid-turn push needed; the agent just reacts to a real prompt.
+- Messages carry a `scheme://` routing prefix (e.g. `[discord://dm/<user>]`) so the agent knows the
+  source and has an address to reply to. Untrusted bodies are sanitized so they can't forge a prefix.
 
 ---
 
@@ -234,7 +235,32 @@ type picker → per-type settings panel.
 
 ---
 
-## 7. Open questions before building
+## 7. Worked example — driving Lobbify QA from Discord
+
+A real target use case (validates the design end-to-end). Lobbify is a multiplayer
+platform (backend + website + Electron app); the operator wants several agents to spin up app
+instances and test multiplayer by talking to them in Discord. (Repo access / `gh` is set up
+manually on the agent after creation — not handled by this feature.)
+
+```
+you (Discord DM) ──► "[discord://dm/you] build the latest app and open it"
+   bridge injects that line into the agent's claude terminal
+agent ──► (computer-use) git pull / build / launch the Electron app
+agent ──► discord_send_message(discord://dm/you, "built v1.4.2, app is open")
+you  ──► "log in, create a room, tell me the room code"
+agent ──► (computer-use) clicks through login + create-room
+agent ──► discord_upload_file(discord://dm/you, /tmp/swarm-shots/<shot>.jpg, "waiting in room ABCD")
+you  ──► join room ABCD from your own client and test
+```
+
+What this exercises (all in scope): inbound DM → terminal injection; replying to the same
+address; **desktop screenshot → Discord** (computer-use saves to `/tmp/swarm-shots`, then
+`discord_upload_file`); plain file send; reading back chat history. Several agents run this
+independently, each its own Discord integration. A `discord_send_screenshot(address, caption)`
+convenience (capture current screen + upload in one call) is worth adding so the agent doesn't
+have to chain capture→upload every time.
+
+## 8. Open questions before building
 
 1. **Scope of "search"** — is the Aug-2025 bot search preview enough, or do we need richer
    filtering (date ranges, has-attachment) that may still be user-only?
