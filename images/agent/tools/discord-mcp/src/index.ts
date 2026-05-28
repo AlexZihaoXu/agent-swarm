@@ -63,6 +63,12 @@ function parseAddress(address: string): Parsed {
   return { channelId, messageId };
 }
 
+/** Read the target from whatever the model called the arg: address (canonical),
+ *  or the common guesses channel / channelId. */
+function addrOf(args: Record<string, unknown>): string {
+  return String(args.address ?? args.channel ?? args.channelId ?? args.channel_id ?? '');
+}
+
 /** Resolve an address to a concrete channel id (opening a DM channel if needed). */
 async function resolveChannel(
   rest: REST,
@@ -223,7 +229,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
     case 'discord_list_channels':
       return ok(await rest.get(Routes.guildChannels(String(args.guild))));
     case 'discord_read_messages': {
-      const { channelId } = await resolveChannel(rest, String(args.address));
+      const { channelId } = await resolveChannel(rest, addrOf(args));
       const query = new URLSearchParams({ limit: String(Math.min(100, Number(args.limit) || 25)) });
       if (args.before) query.set('before', String(args.before));
       return ok(await rest.get(Routes.channelMessages(channelId), { query }));
@@ -237,20 +243,20 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       return ok(await rest.get(`/guilds/${String(args.guild)}/messages/search`, { query }));
     }
     case 'discord_send_message': {
-      const { channelId, messageId } = await resolveChannel(rest, String(args.address));
+      const { channelId, messageId } = await resolveChannel(rest, addrOf(args));
       const body: Record<string, unknown> = { content: String(args.content) };
       if (args.reply && messageId) body.message_reference = { message_id: messageId };
       return ok(await rest.post(Routes.channelMessages(channelId), { body }));
     }
     case 'discord_add_reaction': {
-      const { channelId, messageId } = await resolveChannel(rest, String(args.address));
+      const { channelId, messageId } = await resolveChannel(rest, addrOf(args));
       if (!messageId) throw new Error('address must include a #messageId to react to');
       const emoji = encodeURIComponent(String(args.emoji));
       await rest.put(Routes.channelMessageOwnReaction(channelId, messageId, emoji));
       return ok('reacted');
     }
     case 'discord_create_thread': {
-      const { channelId, messageId } = await resolveChannel(rest, String(args.address));
+      const { channelId, messageId } = await resolveChannel(rest, addrOf(args));
       const route = messageId ? Routes.threads(channelId, messageId) : Routes.threads(channelId);
       const body: Record<string, unknown> = { name: String(args.name) };
       // A channel-level thread (no anchor message) requires a thread `type`;
@@ -259,7 +265,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       return ok(await rest.post(route, { body }));
     }
     case 'discord_upload_file': {
-      const { channelId } = await resolveChannel(rest, String(args.address));
+      const { channelId } = await resolveChannel(rest, addrOf(args));
       const path = String(args.path);
       const data = await readFile(path);
       const body: Record<string, unknown> = {};
@@ -272,7 +278,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       );
     }
     case 'discord_send_screenshot': {
-      const { channelId } = await resolveChannel(rest, String(args.address));
+      const { channelId } = await resolveChannel(rest, addrOf(args));
       const file = await captureScreen();
       const data = await readFile(file);
       const body: Record<string, unknown> = {};
