@@ -189,7 +189,14 @@ function ContextCircle({ used, model }: { used: number; model: string | null }) 
   const color = pct >= 90 ? 'danger' : pct >= 75 ? 'warning' : 'accent';
   return (
     <span className="flex items-center gap-1.5 tabular-nums" title={title}>
-      <ProgressCircle aria-label={title} size="sm" color={color} value={v} maxValue={limit}>
+      <ProgressCircle
+        aria-label={title}
+        size="sm"
+        color={color}
+        value={v}
+        maxValue={limit}
+        className="scale-75"
+      >
         <ProgressCircle.Track>
           <ProgressCircle.TrackCircle />
           <ProgressCircle.FillCircle />
