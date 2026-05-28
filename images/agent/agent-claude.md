@@ -25,6 +25,13 @@ chatter not directed at you, or needs no response, stay silent. When it is for y
 do something, **do it** (use the `desktop` tools for any GUI work — building/launching apps,
 clicking through UI, etc.), then **report back over Discord**. Send screenshots when they help.
 
+**When something seems off, check the channel history.** Message delivery isn't perfect — one can
+arrive out of order or get missed, especially while you're busy. If a message doesn't make sense on
+its own, references something you don't recall, or you get follow-up pings like "hello?", "?", "you
+there?", or "@you ?" shortly after — assume you may have **missed an earlier message**. Before
+replying, call `discord_read_messages(address)` on that channel to catch up on recent context, then
+respond to what was actually asked (including anything you skipped).
+
 **Attachments.** When an incoming message includes attachments, they're downloaded for you and the
 local paths are appended as `[attachment saved — read to view: /home/agent/.swarm/discord-inbox/…]`.
 **Read those paths** to actually see the images/files. For attachments you find via

@@ -612,6 +612,26 @@ export class AgentManager {
     }
   }
 
+  /** Per-agent delivery chain so concurrent inbound messages are injected one at
+   *  a time (typing two messages into the terminal at once merges them and one
+   *  gets lost). Each link injects, then settles briefly so claude registers a
+   *  distinct message before the next is typed. */
+  private deliverChain = new Map<string, Promise<unknown>>();
+  private queueDeliver(
+    id: string,
+    msg: { text: string; attachments: { url: string; name: string }[] },
+  ): void {
+    const prev = this.deliverChain.get(id) ?? Promise.resolve();
+    const next = prev
+      .catch(() => {})
+      .then(async () => {
+        await this.deliverInbound(id, msg);
+        await new Promise((r) => setTimeout(r, 450));
+      });
+    this.deliverChain.set(id, next);
+    void next.catch(() => {});
+  }
+
   /** Deliver one accepted inbound message: download its attachments onto the
    *  agent's disk (so the agent can read/view them) and inject the line, with
    *  any saved paths appended inline. Attachments land in the agent's home at
@@ -661,7 +681,7 @@ export class AgentManager {
     for (const i of integrations.listIntegrations(this.agentDataDir(id))) {
       if (i.type === 'discord' && i.status === 'active' && i.credentials.botToken) {
         await this.discord
-          .connect(id, i.credentials.botToken, i.rules, (m) => this.deliverInbound(id, m))
+          .connect(id, i.credentials.botToken, i.rules, (m) => this.queueDeliver(id, m))
           .catch(() => {});
       }
     }
@@ -722,7 +742,7 @@ export class AgentManager {
       throw Object.assign(new Error('add a bot token first'), { statusCode: 400 });
     if (type === 'discord') {
       await this.discord.connect(id, cur.credentials.botToken, cur.rules, (m) =>
-        this.deliverInbound(id, m),
+        this.queueDeliver(id, m),
       );
     }
     cur.status = 'active';
