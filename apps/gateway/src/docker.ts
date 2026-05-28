@@ -48,6 +48,16 @@ interface AgentIdentity {
   createdAt: number;
 }
 
+/** Per-million-token USD pricing (mirrors the agent runtime's modelRates).
+ *  cw = cache write (5-min), cr = cache read. */
+function modelRates(model: string | undefined, ctxTokens: number) {
+  const m = (model || '').toLowerCase();
+  if (m.includes('opus')) return { in: 15, out: 75, cw: 18.75, cr: 1.5 };
+  if (m.includes('haiku')) return { in: 1, out: 5, cw: 1.25, cr: 0.1 };
+  if (ctxTokens > 200000) return { in: 6, out: 22.5, cw: 7.5, cr: 0.6 };
+  return { in: 3, out: 15, cw: 3.75, cr: 0.3 };
+}
+
 /** Random `workspace-XXXXXX` id, suffix from 0-9 + A-Z. */
 export function generateAgentId(): string {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -233,25 +243,38 @@ export class AgentManager {
   }
 
   /**
-   * Global token metrics from every agent's transcripts: total tokens burnt in
-   * the last 24h, plus per-agent tokens bucketed into 24 hourly slots. Reads the
-   * agent disks directly (no need for them to be running).
+   * Global usage metrics for the dashboard, read straight off the agent disks:
+   *  - per-agent 24h totals (tokens + computed cost) — x=agent bar chart;
+   *  - 24 hourly slots summed across agents (tokens + cost) — x=time chart;
+   *  - the account-level 5h / 7d rate-limit windows (from any agent's
+   *    statusline.json — they're shared across agents on one account).
    */
   async metrics(): Promise<{
-    totalTokens: number;
-    agents: { id: string; name: string }[];
-    buckets: { t: number; tokens: Record<string, number> }[];
+    rateLimits: {
+      fiveHour: { usedPercent: number; resetsAt: number };
+      sevenDay: { usedPercent: number; resetsAt: number };
+    } | null;
+    agents: { id: string; name: string; tokens: number; cost: number }[];
+    buckets: { t: number; tokens: number; cost: number }[];
   }> {
     const HOUR = 3_600_000;
-    const base = Math.floor(Date.now() / HOUR) * HOUR - 23 * HOUR; // start of the oldest hour
-    const slots: { t: number; tokens: Record<string, number> }[] = Array.from(
-      { length: 24 },
-      (_, i) => ({ t: base + i * HOUR, tokens: {} }),
-    );
-    const agents = (await this.list()).map((a) => ({ id: a.id, name: a.username || a.id }));
-    for (const a of agents) {
-      const dir = join(this.agentDataDir(a.id), '.claude', 'projects');
-      for (const file of this.walkJsonl(dir)) {
+    const base = Math.floor(Date.now() / HOUR) * HOUR - 23 * HOUR;
+    const buckets = Array.from({ length: 24 }, (_, i) => ({
+      t: base + i * HOUR,
+      tokens: 0,
+      cost: 0,
+    }));
+    const agents: { id: string; name: string; tokens: number; cost: number }[] = [];
+    let rateLimits: {
+      fiveHour: { usedPercent: number; resetsAt: number };
+      sevenDay: { usedPercent: number; resetsAt: number };
+    } | null = null;
+    let rlMtime = 0;
+
+    for (const a of await this.list()) {
+      let tokens = 0;
+      let cost = 0;
+      for (const file of this.walkJsonl(join(this.agentDataDir(a.id), '.claude', 'projects'))) {
         let raw: string;
         try {
           raw = readFileSync(file, 'utf8');
@@ -263,7 +286,7 @@ export class AgentManager {
           let o: {
             type?: string;
             timestamp?: string;
-            message?: { usage?: Record<string, number> };
+            message?: { usage?: Record<string, number>; model?: string };
           };
           try {
             o = JSON.parse(line);
@@ -273,22 +296,54 @@ export class AgentManager {
           const u = o.message?.usage;
           const ts = o.timestamp ? Date.parse(o.timestamp) : NaN;
           if (o.type !== 'assistant' || !u || !Number.isFinite(ts)) continue;
-          const tokens =
-            (u.input_tokens || 0) +
-            (u.output_tokens || 0) +
-            (u.cache_read_input_tokens || 0) +
-            (u.cache_creation_input_tokens || 0);
+          const inp = u.input_tokens || 0;
+          const out = u.output_tokens || 0;
+          const cr = u.cache_read_input_tokens || 0;
+          const cc = u.cache_creation_input_tokens || 0;
+          const tk = inp + out + cr + cc;
           const idx = Math.floor((ts - base) / HOUR);
-          if (!tokens || idx < 0 || idx >= 24) continue;
-          slots[idx]!.tokens[a.id] = (slots[idx]!.tokens[a.id] || 0) + tokens;
+          if (!tk || idx < 0 || idx >= 24) continue;
+          const r = modelRates(o.message?.model, inp + cr + cc);
+          const c = (inp * r.in + out * r.out + cc * r.cw + cr * r.cr) / 1_000_000;
+          tokens += tk;
+          cost += c;
+          buckets[idx]!.tokens += tk;
+          buckets[idx]!.cost += c;
         }
       }
+      agents.push({ id: a.id, name: a.username || a.id, tokens, cost });
+
+      // Rate-limit windows are account-global; take the freshest statusline.
+      try {
+        const slPath = join(this.agentDataDir(a.id), '.claude', 'statusline.json');
+        const mt = statSync(slPath).mtimeMs;
+        if (mt > rlMtime) {
+          const sl = JSON.parse(readFileSync(slPath, 'utf8')) as {
+            rate_limits?: {
+              five_hour?: { used_percentage?: number; resets_at?: number };
+              seven_day?: { used_percentage?: number; resets_at?: number };
+            };
+          };
+          const rl = sl.rate_limits;
+          if (rl) {
+            rateLimits = {
+              fiveHour: {
+                usedPercent: rl.five_hour?.used_percentage ?? 0,
+                resetsAt: (rl.five_hour?.resets_at ?? 0) * 1000,
+              },
+              sevenDay: {
+                usedPercent: rl.seven_day?.used_percentage ?? 0,
+                resetsAt: (rl.seven_day?.resets_at ?? 0) * 1000,
+              },
+            };
+            rlMtime = mt;
+          }
+        }
+      } catch {
+        /* no statusline for this agent */
+      }
     }
-    const totalTokens = slots.reduce(
-      (s, b) => s + Object.values(b.tokens).reduce((x, y) => x + y, 0),
-      0,
-    );
-    return { totalTokens, agents, buckets: slots };
+    return { rateLimits, agents, buckets };
   }
 
   /** Create the shared network if it doesn't exist yet (idempotent). */

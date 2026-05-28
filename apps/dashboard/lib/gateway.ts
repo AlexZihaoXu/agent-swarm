@@ -234,14 +234,19 @@ export interface HostInfo {
 /** Host hardware limits, to cap the per-agent resource sliders. */
 export const getHostInfo = () => api<HostInfo>('/api/host');
 
-export interface Metrics {
-  /** Total tokens burnt across all agents in the last 24h. */
-  totalTokens: number;
-  agents: { id: string; name: string }[];
-  /** 24 hourly buckets (oldest→newest); tokens keyed by agent id. */
-  buckets: { t: number; tokens: Record<string, number> }[];
+export interface RateWindow {
+  usedPercent: number;
+  resetsAt: number;
 }
-/** Global token metrics (tokens burnt + per-agent tokens/hour, last 24h). */
+export interface Metrics {
+  /** Account-level 5h / 7d usage windows (shared across agents). */
+  rateLimits: { fiveHour: RateWindow; sevenDay: RateWindow } | null;
+  /** Per-agent 24h totals (tokens + computed cost). */
+  agents: { id: string; name: string; tokens: number; cost: number }[];
+  /** 24 hourly buckets (oldest→newest) summed across agents. */
+  buckets: { t: number; tokens: number; cost: number }[];
+}
+/** Global usage metrics (per-agent 24h tokens/cost, hourly totals, rate limits). */
 export const getMetrics = () => api<Metrics>('/api/metrics');
 
 export const listAgents = () => api<Agent[]>('/api/agents');
