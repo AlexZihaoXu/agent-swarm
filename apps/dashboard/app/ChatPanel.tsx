@@ -190,7 +190,7 @@ function TasksPanel({ tasks }: { tasks: AgentTask[] }) {
   const [open, setOpen] = useState(true);
   const done = tasks.filter((t) => t.status === 'completed').length;
   return (
-    <div className="border-separator bg-surface-secondary/50 relative z-10 shrink-0 border-b shadow-[0_12px_28px_-12px_rgba(0,0,0,0.3)]">
+    <div className="border-separator bg-surface-secondary/50 relative z-10 shrink-0 border-b shadow-[0_4px_12px_-6px_rgba(0,0,0,0.15)]">
       <button
         onClick={() => setOpen((o) => !o)}
         className="text-muted hover:text-foreground flex w-full items-center gap-1.5 px-3 py-2 text-xs font-semibold tracking-wide uppercase"
