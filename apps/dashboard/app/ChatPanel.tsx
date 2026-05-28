@@ -294,6 +294,7 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const atBottomRef = useRef(true);
   const [attaching, setAttaching] = useState(false);
+  const [lightbox, setLightbox] = useState<string | null>(null);
   const stats = useAgentStats(agentId);
   const working = stats?.status === 'busy';
   const tasks = stats?.tasks ?? [];
@@ -476,250 +477,269 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {tasks.length > 0 && <TasksPanel tasks={tasks} />}
-      <div
-        ref={scrollRef}
-        onScroll={onScroll}
-        className="chat-convo min-h-0 flex-1 space-y-4 overflow-auto p-3"
-      >
-        {turns.length === 0 && (
-          <p className="text-muted text-sm">No messages yet. Say something below.</p>
-        )}
-        {turns.map((t, i) => (
-          <motion.div
-            key={i}
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.25, ease: 'easeOut' }}
-            className={t.role === 'user' ? 'flex justify-end' : ''}
-          >
-            {t.error ? (
-              <div className="border-danger/50 bg-danger/10 space-y-1 rounded-xl border px-3 py-2 text-sm">
-                <div className="text-danger flex items-center gap-1.5 font-semibold">
-                  <LuTriangleAlert className="size-3.5 shrink-0" />
-                  Error
+    <>
+      <div className="flex min-h-0 flex-1 flex-col">
+        {tasks.length > 0 && <TasksPanel tasks={tasks} />}
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          className="chat-convo min-h-0 flex-1 space-y-4 overflow-auto p-3"
+        >
+          {turns.length === 0 && (
+            <p className="text-muted text-sm">No messages yet. Say something below.</p>
+          )}
+          {turns.map((t, i) => (
+            <motion.div
+              key={i}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.25, ease: 'easeOut' }}
+              className={t.role === 'user' ? 'flex justify-end' : ''}
+            >
+              {t.error ? (
+                <div className="border-danger/50 bg-danger/10 space-y-1 rounded-xl border px-3 py-2 text-sm">
+                  <div className="text-danger flex items-center gap-1.5 font-semibold">
+                    <LuTriangleAlert className="size-3.5 shrink-0" />
+                    Error
+                  </div>
+                  <p className="text-foreground whitespace-pre-wrap">
+                    {t.items.map((it) => it.text ?? '').join('\n')}
+                  </p>
                 </div>
-                <p className="text-foreground whitespace-pre-wrap">
-                  {t.items.map((it) => it.text ?? '').join('\n')}
-                </p>
-              </div>
-            ) : (
-              <div
-                className={
-                  t.role === 'user'
-                    ? 'bg-surface-secondary text-surface-secondary-foreground max-w-[85%] rounded-2xl rounded-br-md px-3.5 py-2 text-sm font-medium'
-                    : 'max-w-full space-y-2 font-medium'
-                }
-              >
-                {t.items.map((it, j) =>
-                  it.kind === 'text' ? (
-                    t.role === 'user' ? (
-                      <p key={j} className="whitespace-pre-wrap">
-                        {it.text}
-                      </p>
-                    ) : (
-                      <AssistantText
-                        key={j}
-                        text={it.text ?? ''}
-                        animate={animateIdx.current.has(i)}
-                      />
-                    )
-                  ) : it.kind === 'plan' ? (
-                    <PlanCard key={j} text={it.text ?? ''} />
-                  ) : it.kind === 'todos' ? (
-                    <TodosCard key={j} todos={it.todos ?? []} />
-                  ) : it.kind === 'image' && it.file ? (
-                    <a
-                      key={j}
-                      href={`${terminalHttpBase(agentId)}api/shots/${it.file}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="block"
-                    >
+              ) : (
+                <div
+                  className={
+                    t.role === 'user'
+                      ? 'bg-surface-secondary text-surface-secondary-foreground max-w-[85%] rounded-2xl rounded-br-md px-3.5 py-2 text-sm font-medium'
+                      : 'max-w-full space-y-2 font-medium'
+                  }
+                >
+                  {t.items.map((it, j) =>
+                    it.kind === 'text' ? (
+                      t.role === 'user' ? (
+                        <p key={j} className="whitespace-pre-wrap">
+                          {it.text}
+                        </p>
+                      ) : (
+                        <AssistantText
+                          key={j}
+                          text={it.text ?? ''}
+                          animate={animateIdx.current.has(i)}
+                        />
+                      )
+                    ) : it.kind === 'plan' ? (
+                      <PlanCard key={j} text={it.text ?? ''} />
+                    ) : it.kind === 'todos' ? (
+                      <TodosCard key={j} todos={it.todos ?? []} />
+                    ) : it.kind === 'image' && it.file ? (
                       <img
+                        key={j}
                         src={`${terminalHttpBase(agentId)}api/shots/${it.file}`}
                         alt="screenshot"
                         loading="lazy"
-                        className="border-separator max-h-80 w-auto max-w-full rounded-lg border"
+                        onClick={() =>
+                          setLightbox(`${terminalHttpBase(agentId)}api/shots/${it.file}`)
+                        }
+                        className="border-separator max-h-80 w-auto max-w-full cursor-zoom-in rounded-lg border"
                       />
-                    </a>
-                  ) : (
-                    <ToolItem key={j} name={it.name ?? ''} detail={it.detail} />
-                  ),
-                )}
-              </div>
-            )}
-          </motion.div>
-        ))}
+                    ) : (
+                      <ToolItem key={j} name={it.name ?? ''} detail={it.detail} />
+                    ),
+                  )}
+                </div>
+              )}
+            </motion.div>
+          ))}
 
-        {working && (
-          <motion.div
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.2, ease: 'easeOut' }}
-          >
-            <TypingDots />
-          </motion.div>
-        )}
-      </div>
+          {working && (
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.2, ease: 'easeOut' }}
+            >
+              <TypingDots />
+            </motion.div>
+          )}
+        </div>
 
-      <AnimatePresence>
-        {awaiting && (
-          <motion.div
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 8 }}
-            transition={{ duration: 0.2, ease: 'easeOut' }}
-            className="border-warning/40 bg-warning/10 mx-2 mb-1 rounded-xl border p-2.5"
-          >
-            {promptHtml ? (
-              <div
-                className="chat-prompt border-separator mb-1 overflow-auto rounded-lg border"
-                dangerouslySetInnerHTML={{ __html: promptHtml }}
-              />
-            ) : (
-              <p className="text-foreground text-sm font-medium">
-                {stats?.promptText ? `“${stats.promptText}”` : 'The agent is asking a question'}
-              </p>
-            )}
+        <AnimatePresence>
+          {awaiting && (
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 8 }}
+              transition={{ duration: 0.2, ease: 'easeOut' }}
+              className="border-warning/40 bg-warning/10 mx-2 mb-1 rounded-xl border p-2.5"
+            >
+              {promptHtml ? (
+                <div
+                  className="chat-prompt border-separator mb-1 overflow-auto rounded-lg border"
+                  dangerouslySetInnerHTML={{ __html: promptHtml }}
+                />
+              ) : (
+                <p className="text-foreground text-sm font-medium">
+                  {stats?.promptText ? `“${stats.promptText}”` : 'The agent is asking a question'}
+                </p>
+              )}
 
-            {multiSelect && promptOptions.some((o) => o.checkable) ? (
-              <div className="mt-2 space-y-1.5">
-                <div className="max-h-44 space-y-1 overflow-auto">
-                  {promptOptions
-                    .filter((o) => o.checkable && !/^type something/i.test(o.label))
-                    .map((o) => {
-                      const on = picked.has(o.n);
-                      return (
-                        <button
-                          key={o.n}
-                          onClick={() =>
-                            setPicked((prev) => {
-                              const s = new Set(prev);
-                              if (s.has(o.n)) s.delete(o.n);
-                              else s.add(o.n);
-                              return s;
-                            })
-                          }
-                          className={`flex w-full items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left text-sm transition-colors ${
-                            on
-                              ? 'border-accent bg-accent/10'
-                              : 'border-separator bg-surface hover:bg-surface-secondary'
-                          }`}
-                        >
-                          <span
-                            className={`flex size-4 shrink-0 items-center justify-center rounded border ${
+              {multiSelect && promptOptions.some((o) => o.checkable) ? (
+                <div className="mt-2 space-y-1.5">
+                  <div className="max-h-44 space-y-1 overflow-auto">
+                    {promptOptions
+                      .filter((o) => o.checkable && !/^type something/i.test(o.label))
+                      .map((o) => {
+                        const on = picked.has(o.n);
+                        return (
+                          <button
+                            key={o.n}
+                            onClick={() =>
+                              setPicked((prev) => {
+                                const s = new Set(prev);
+                                if (s.has(o.n)) s.delete(o.n);
+                                else s.add(o.n);
+                                return s;
+                              })
+                            }
+                            className={`flex w-full items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left text-sm transition-colors ${
                               on
-                                ? 'border-accent bg-accent text-accent-foreground'
-                                : 'border-separator'
+                                ? 'border-accent bg-accent/10'
+                                : 'border-separator bg-surface hover:bg-surface-secondary'
                             }`}
                           >
-                            {on && <LuCheck className="size-3" />}
-                          </span>
-                          <span className="min-w-0">{o.label}</span>
-                        </button>
-                      );
-                    })}
+                            <span
+                              className={`flex size-4 shrink-0 items-center justify-center rounded border ${
+                                on
+                                  ? 'border-accent bg-accent text-accent-foreground'
+                                  : 'border-separator'
+                              }`}
+                            >
+                              {on && <LuCheck className="size-3" />}
+                            </span>
+                            <span className="min-w-0">{o.label}</span>
+                          </button>
+                        );
+                      })}
+                  </div>
+                  <Button size="sm" onPress={submitMulti} isDisabled={picked.size === 0}>
+                    Submit{picked.size > 0 ? ` (${picked.size})` : ''}
+                  </Button>
                 </div>
-                <Button size="sm" onPress={submitMulti} isDisabled={picked.size === 0}>
-                  Submit{picked.size > 0 ? ` (${picked.size})` : ''}
-                </Button>
-              </div>
-            ) : promptOptions.length > 0 ? (
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {promptOptions.map((o) => (
-                  <button
-                    key={o.n}
-                    onClick={() => {
-                      answerOption(o.n);
-                      if (/^type something/i.test(o.label)) {
-                        setFreeText(true);
-                        setTimeout(() => inputRef.current?.focus(), 350);
-                      }
-                    }}
-                    className="border-separator bg-surface hover:border-accent hover:bg-surface-secondary flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-sm transition-colors"
+              ) : promptOptions.length > 0 ? (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {promptOptions.map((o) => (
+                    <button
+                      key={o.n}
+                      onClick={() => {
+                        answerOption(o.n);
+                        if (/^type something/i.test(o.label)) {
+                          setFreeText(true);
+                          setTimeout(() => inputRef.current?.focus(), 350);
+                        }
+                      }}
+                      className="border-separator bg-surface hover:border-accent hover:bg-surface-secondary flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-sm transition-colors"
+                    >
+                      <span className="text-muted font-mono text-xs">{o.n}</span>
+                      <span>{o.label}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <>
+                  <p className="text-muted mt-0.5 text-xs">
+                    Couldn’t read the choices — answer it in the Terminal.
+                  </p>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    className="mt-2 gap-1.5"
+                    render={(props) => (
+                      <Link
+                        {...(props as React.ComponentProps<typeof Link>)}
+                        href={`/agents/${agentId}/terminal`}
+                      />
+                    )}
                   >
-                    <span className="text-muted font-mono text-xs">{o.n}</span>
-                    <span>{o.label}</span>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <>
-                <p className="text-muted mt-0.5 text-xs">
-                  Couldn’t read the choices — answer it in the Terminal.
-                </p>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  className="mt-2 gap-1.5"
-                  render={(props) => (
-                    <Link
-                      {...(props as React.ComponentProps<typeof Link>)}
-                      href={`/agents/${agentId}/terminal`}
-                    />
-                  )}
-                >
-                  <LuTerminal className="size-3.5" />
-                  Open Terminal
-                </Button>
-              </>
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
+                    <LuTerminal className="size-3.5" />
+                    Open Terminal
+                  </Button>
+                </>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-      <div className="p-2">
-        <div
-          className={`border-separator bg-surface flex flex-col gap-2 rounded-2xl border p-2.5 transition-colors ${
-            composerLocked ? 'opacity-60' : 'focus-within:border-accent'
-          }`}
-        >
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key !== 'Enter') return;
-              if (e.ctrlKey || e.metaKey) {
-                e.preventDefault();
-                insertNewline();
-              } else if (!e.shiftKey) {
-                e.preventDefault();
-                send();
-              }
-            }}
-            rows={2}
-            disabled={composerLocked}
-            placeholder={composerLocked ? 'Pick an option above…' : 'Message the agent…'}
-            className="placeholder:text-muted max-h-32 min-h-0 resize-none bg-transparent text-sm outline-none disabled:cursor-not-allowed"
-          />
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                aria-label="Attach file"
-                disabled={composerLocked}
-                onClick={() => fileRef.current?.click()}
-                className="text-muted hover:text-foreground hover:bg-surface-secondary flex size-8 items-center justify-center transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+        <div className="p-2">
+          <div
+            className={`border-separator bg-surface flex flex-col gap-2 rounded-2xl border p-2.5 transition-colors ${
+              composerLocked ? 'opacity-60' : 'focus-within:border-accent'
+            }`}
+          >
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter') return;
+                if (e.ctrlKey || e.metaKey) {
+                  e.preventDefault();
+                  insertNewline();
+                } else if (!e.shiftKey) {
+                  e.preventDefault();
+                  send();
+                }
+              }}
+              rows={2}
+              disabled={composerLocked}
+              placeholder={composerLocked ? 'Pick an option above…' : 'Message the agent…'}
+              className="placeholder:text-muted max-h-32 min-h-0 resize-none bg-transparent text-sm outline-none disabled:cursor-not-allowed"
+            />
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  aria-label="Attach file"
+                  disabled={composerLocked}
+                  onClick={() => fileRef.current?.click()}
+                  className="text-muted hover:text-foreground hover:bg-surface-secondary flex size-8 items-center justify-center transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <LuPaperclip className="size-4" />
+                </button>
+                <input ref={fileRef} type="file" hidden onChange={onPickFile} />
+                {attaching && <span className="text-muted text-xs">uploading…</span>}
+              </div>
+              <Button
+                isIconOnly
+                aria-label="Send"
+                onPress={send}
+                isDisabled={!input.trim() || composerLocked}
               >
-                <LuPaperclip className="size-4" />
-              </button>
-              <input ref={fileRef} type="file" hidden onChange={onPickFile} />
-              {attaching && <span className="text-muted text-xs">uploading…</span>}
+                <LuArrowUp className="size-4" />
+              </Button>
             </div>
-            <Button
-              isIconOnly
-              aria-label="Send"
-              onPress={send}
-              isDisabled={!input.trim() || composerLocked}
-            >
-              <LuArrowUp className="size-4" />
-            </Button>
           </div>
         </div>
       </div>
-    </div>
+
+      <AnimatePresence>
+        {lightbox && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setLightbox(null)}
+            className="fixed inset-0 z-[60] flex cursor-zoom-out items-center justify-center bg-black/80 p-6"
+          >
+            <motion.img
+              src={lightbox}
+              alt="screenshot"
+              initial={{ scale: 0.96 }}
+              animate={{ scale: 1 }}
+              exit={{ scale: 0.96 }}
+              className="max-h-full max-w-full rounded-lg object-contain shadow-2xl"
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </>
   );
 }

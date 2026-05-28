@@ -322,7 +322,10 @@ function detectAwaiting(screen) {
   // A selector is open if the footer says so, OR the cursor (❯) is sitting on a
   // numbered row. The latter catches screens whose footer scrolls out of view
   // (e.g. the multi-select "Submit answers / Cancel" review).
-  const navFooter = /to navigate/i.test(screen);
+  // The selector footer is "↑↓ to navigate · …"; require the arrow glyphs on
+  // the SAME line as "navigate" so it can't fire on the model's prose (e.g.
+  // "Want me to navigate somewhere…").
+  const navFooter = screen.split('\n').some((l) => /navigate/i.test(l) && /[↑↓⬆⬇]/.test(l));
   let cursorOnOption = false;
   let prompt = null;
   let multiSelect = false;
