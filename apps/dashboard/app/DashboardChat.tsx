@@ -2,7 +2,7 @@
 
 import { AnimatePresence, motion } from 'framer-motion';
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { LuChevronLeft, LuMessageSquare, LuSettings, LuUsers, LuX } from 'react-icons/lu';
 import { listGroups, type Agent, type Group } from '@/lib/gateway';
 import { Identicon } from '@/lib/identicon';
@@ -25,13 +25,22 @@ function AgentRow({
   agent,
   selected,
   onSelect,
+  onActivity,
 }: {
   agent: Agent;
   selected: boolean;
   onSelect: () => void;
+  /** Report this agent's last-activity timestamp up so the list can sort by it. */
+  onActivity?: (id: string, ts: number) => void;
 }) {
   const stats = useAgentStats(agent.id, { enabled: agent.status === 'running' });
   const chip = agentChip(agent.status, stats?.status);
+  const lastActivity = stats?.lastActivity;
+  useEffect(() => {
+    if (lastActivity == null) return;
+    const ts = new Date(lastActivity).getTime();
+    if (!Number.isNaN(ts)) onActivity?.(agent.id, ts);
+  }, [lastActivity, agent.id, onActivity]);
   return (
     <button
       onClick={onSelect}
@@ -122,6 +131,18 @@ export function DashboardChat({ agents }: { agents: Agent[] }) {
   const running = agents.filter((a) => a.status === 'running');
   const ids = running.map((a) => a.id).join(',');
   const [open, setOpen] = useState(false);
+  // Per-agent last-activity (epoch ms), reported up by each row's stats sub, so
+  // the list can show whoever finished a message most recently on top.
+  const [activity, setActivity] = useState<Record<string, number>>({});
+  const reportActivity = useCallback((id: string, ts: number) => {
+    setActivity((m) => (m[id] === ts ? m : { ...m, [id]: ts }));
+  }, []);
+  // Newest activity first; agents with no recorded activity yet sort last
+  // (stable by the original order via the filtered list).
+  const sortedRunning = useMemo(
+    () => [...running].sort((a, b) => (activity[b.id] ?? 0) - (activity[a.id] ?? 0)),
+    [running, activity],
+  );
   const [groups, setGroups] = useState<Group[]>([]);
   const [sel, setSel] = useState<Selection | null>(null);
   // Mobile is single-pane: show either the list or the chat. Desktop shows both.
@@ -217,10 +238,11 @@ export function DashboardChat({ agents }: { agents: Agent[] }) {
                       </button>
                     </div>
                     <div className="space-y-1">
-                      {running.map((a) => (
+                      {sortedRunning.map((a) => (
                         <AgentRow
                           key={a.id}
                           agent={a}
+                          onActivity={reportActivity}
                           selected={sel?.kind === 'agent' && a.id === sel.id}
                           onSelect={() => {
                             setSel({ kind: 'agent', id: a.id });
