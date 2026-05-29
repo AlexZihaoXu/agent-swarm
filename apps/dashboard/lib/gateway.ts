@@ -20,6 +20,8 @@ export interface Agent {
   /** Assigned role ids + group ids. */
   roles?: string[];
   groups?: string[];
+  /** Identicon avatar seed (defaults to the id; reshuffleable). */
+  avatarSeed?: string;
 }
 
 // --- Roles & groups --------------------------------------------------------
@@ -86,6 +88,8 @@ export interface GroupMessage {
   group: string;
   /** Sender display name (agent name, or "operator" for the human). */
   from: string;
+  /** Sender's agent id (for a stable avatar); absent for the human operator. */
+  fromId?: string;
   kind: 'agent' | 'human';
   text: string;
   ts: number;
@@ -415,6 +419,7 @@ export const updateAgent = (
     model?: string | null;
     roles?: string[];
     groups?: string[];
+    avatarSeed?: string;
   },
 ) =>
   api<Agent>(`/api/agents/${id}`, {

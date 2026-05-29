@@ -41,7 +41,7 @@ function AgentRow({
     >
       <span className="relative shrink-0">
         <Identicon
-          seed={agent.id}
+          seed={agent.avatarSeed || agent.id}
           title={agent.username || agent.id}
           className="size-7 rounded-md"
         />
@@ -273,7 +273,7 @@ export function DashboardChat({ agents }: { agents: Agent[] }) {
                     <div className="flex min-w-0 flex-1 items-center gap-2.5">
                       {selectedAgent && (
                         <Identicon
-                          seed={selectedAgent.id}
+                          seed={selectedAgent.avatarSeed || selectedAgent.id}
                           title={selectedAgent.username || selectedAgent.id}
                           className="size-9 shrink-0 rounded-lg"
                         />
@@ -323,6 +323,7 @@ export function DashboardChat({ agents }: { agents: Agent[] }) {
                     <GroupChatPanel
                       key={selectedGroup.id}
                       groupId={selectedGroup.id}
+                      agents={agents}
                       active={open}
                     />
                   )}

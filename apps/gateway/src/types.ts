@@ -43,6 +43,8 @@ export interface Agent {
   roles?: string[];
   /** Ids of groups this agent belongs to (scopes who it can swarm with). */
   groups?: string[];
+  /** Seed for this agent's identicon avatar. Defaults to the id; reshuffleable. */
+  avatarSeed?: string;
 }
 
 // --- Roles -----------------------------------------------------------------
@@ -79,6 +81,8 @@ export interface GroupMessage {
   group: string;
   /** Display name of the sender (agent name, or "operator" for the human). */
   from: string;
+  /** Sender's agent id (for a stable avatar); omitted for the human operator. */
+  fromId?: string;
   kind: 'agent' | 'human';
   text: string;
   ts: number;

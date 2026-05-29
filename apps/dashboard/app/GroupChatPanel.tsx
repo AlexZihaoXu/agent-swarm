@@ -4,7 +4,7 @@ import { Button, Input, TextField, toast } from '@heroui/react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useRef, useState } from 'react';
 import { LuSend } from 'react-icons/lu';
-import { listGroupMessages, sendGroupMessage, type GroupMessage } from '@/lib/gateway';
+import { listGroupMessages, sendGroupMessage, type Agent, type GroupMessage } from '@/lib/gateway';
 import { Identicon } from '@/lib/identicon';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
@@ -23,8 +23,23 @@ function clock(ts: number): string {
  * group. Agent messages appear left with an identicon + name; the operator's own
  * messages align right.
  */
-export function GroupChatPanel({ groupId, active }: { groupId: string; active: boolean }) {
+export function GroupChatPanel({
+  groupId,
+  agents,
+  active,
+}: {
+  groupId: string;
+  /** Fleet, so a sender's avatar matches their (reshuffleable) seed elsewhere. */
+  agents: Agent[];
+  active: boolean;
+}) {
   const [messages, setMessages] = useState<GroupMessage[]>([]);
+  // Resolve a group message's sender to a stable avatar seed: prefer the live
+  // agent's current avatarSeed (so a reshuffle reflects here too), else the id.
+  const seedFor = (m: GroupMessage) => {
+    const a = agents.find((x) => x.id === m.fromId);
+    return a?.avatarSeed || a?.id || m.fromId || m.from;
+  };
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
@@ -87,14 +102,14 @@ export function GroupChatPanel({ groupId, active }: { groupId: string; active: b
                   className={`flex items-end gap-2 ${human ? 'flex-row-reverse' : ''}`}
                 >
                   {human ? (
-                    <span className="bg-accent/15 text-accent flex size-7 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold">
+                    <span className="bg-accent/15 text-accent flex size-7 shrink-0 items-center justify-center rounded-md text-[11px] font-semibold">
                       You
                     </span>
                   ) : (
                     <Identicon
-                      seed={m.from}
+                      seed={seedFor(m)}
                       title={m.from}
-                      className="size-7 shrink-0 rounded-full"
+                      className="size-7 shrink-0 rounded-md"
                     />
                   )}
                   <div className={`max-w-[80%] ${human ? 'items-end text-right' : ''}`}>

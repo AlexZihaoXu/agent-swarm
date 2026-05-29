@@ -309,12 +309,14 @@ async function handleAgents(
         model?: string | null;
         roles?: string[];
         groups?: string[];
+        avatarSeed?: string;
       } = {};
       if (body.username !== undefined) patch.username = body.username;
       if (body.autoCompactPct !== undefined) patch.autoCompactPct = body.autoCompactPct;
       if (body.model !== undefined) patch.model = body.model;
       if (body.roles !== undefined) patch.roles = body.roles;
       if (body.groups !== undefined) patch.groups = body.groups;
+      if (body.avatarSeed !== undefined) patch.avatarSeed = body.avatarSeed;
       return (sendJson(res, 200, await manager.patchAgent(id, patch)), true);
     }
   } else if (action === 'upgrade') {
@@ -515,6 +517,7 @@ async function readJson(req: IncomingMessage): Promise<{
   permissions?: string[];
   action?: string;
   group?: string;
+  avatarSeed?: string;
 }> {
   const chunks: Buffer[] = [];
   for await (const c of req) chunks.push(c as Buffer);

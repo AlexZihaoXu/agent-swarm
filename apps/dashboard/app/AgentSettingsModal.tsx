@@ -2,7 +2,8 @@
 
 import { Button, Input, Label, Modal, Slider, Switch, Tabs, TextField, toast } from '@heroui/react';
 import { useEffect, useState } from 'react';
-import { LuDices } from 'react-icons/lu';
+import { LuDices, LuDownload, LuShuffle } from 'react-icons/lu';
+import { Identicon, downloadIdenticon, randomSeed } from '@/lib/identicon';
 import {
   getAgent,
   startAgent,
@@ -50,6 +51,7 @@ export function AgentSettingsModal({
   const [model, setModel] = useState(''); // '' = claude default
   const [roles, setRoles] = useState<string[]>([]);
   const [groups, setGroups] = useState<string[]>([]);
+  const [avatarSeed, setAvatarSeed] = useState('');
   const [allRoles, setAllRoles] = useState<Role[]>([]);
   const [allGroups, setAllGroups] = useState<Role[]>([]);
   const [busy, setBusy] = useState(false);
@@ -84,6 +86,7 @@ export function AgentSettingsModal({
         setModel(a.model ?? '');
         setRoles(a.roles ?? []);
         setGroups(a.groups ?? []);
+        setAvatarSeed(a.avatarSeed || a.id);
       })
       .catch(() => {});
     return () => {
@@ -111,6 +114,7 @@ export function AgentSettingsModal({
         model: model || null,
         roles,
         groups,
+        avatarSeed,
       });
       onChanged?.();
       if (modelChanged && running) {
@@ -182,6 +186,45 @@ export function AgentSettingsModal({
                       id="general"
                       className="max-h-[60vh] space-y-5 overflow-y-auto pt-5 pr-1"
                     >
+                      <div className="flex items-center gap-3">
+                        <Identicon
+                          seed={avatarSeed || agentId}
+                          title={name || agentId}
+                          className="size-14 shrink-0 rounded-lg"
+                        />
+                        <div className="space-y-1">
+                          <Label className="text-sm">Avatar</Label>
+                          <div className="flex gap-2">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="secondary"
+                              className="gap-1.5"
+                              onPress={() => setAvatarSeed(randomSeed())}
+                            >
+                              <LuShuffle className="size-3.5" /> Shuffle
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="tertiary"
+                              className="gap-1.5"
+                              onPress={() =>
+                                downloadIdenticon(
+                                  avatarSeed || agentId,
+                                  `${name || agentId}-avatar`,
+                                )
+                              }
+                            >
+                              <LuDownload className="size-3.5" /> Download
+                            </Button>
+                          </div>
+                          <p className="text-muted text-xs">
+                            A generated identicon. Shuffle for a new one; saved with the agent.
+                          </p>
+                        </div>
+                      </div>
+
                       <div className="flex items-end gap-2">
                         <TextField className="flex-1" value={name} onChange={setName} isRequired>
                           <Label>Display name</Label>

@@ -72,6 +72,8 @@ interface AgentIdentity {
   /** Assigned role ids + group ids (resolved against the global registries). */
   roles?: string[];
   groups?: string[];
+  /** Identicon avatar seed (defaults to the id; reshuffleable from the UI). */
+  avatarSeed?: string;
 }
 
 /** Per-million-token USD pricing (mirrors the agent runtime's modelRates).
@@ -174,6 +176,7 @@ export class AgentManager {
       model: patch.model !== undefined ? patch.model : (cur?.model ?? null),
       roles: patch.roles !== undefined ? patch.roles : (cur?.roles ?? []),
       groups: patch.groups !== undefined ? patch.groups : (cur?.groups ?? []),
+      avatarSeed: patch.avatarSeed !== undefined ? patch.avatarSeed : cur?.avatarSeed,
     };
     mkdirSync(dirname(this.identityFile(id)), { recursive: true });
     writeFileSync(this.identityFile(id), JSON.stringify(next, null, 2));
@@ -200,6 +203,7 @@ export class AgentManager {
       model?: string | null;
       roles?: string[];
       groups?: string[];
+      avatarSeed?: string;
     },
   ): Promise<Agent> {
     if (!existsSync(this.agentDataDir(id)))
@@ -224,6 +228,7 @@ export class AgentManager {
     }
     if (Array.isArray(patch.roles)) idPatch.roles = patch.roles;
     if (Array.isArray(patch.groups)) idPatch.groups = patch.groups;
+    if (patch.avatarSeed !== undefined) idPatch.avatarSeed = patch.avatarSeed.trim() || undefined;
     const prevModel = this.readIdentity(id)?.model ?? null;
     const prevRoles = JSON.stringify(this.readIdentity(id)?.roles ?? []);
     this.writeIdentity(id, idPatch);
@@ -960,6 +965,7 @@ export class AgentManager {
         model: this.readIdentity(id)?.model ?? null,
         roles: this.readIdentity(id)?.roles ?? [],
         groups: this.readIdentity(id)?.groups ?? [],
+        avatarSeed: this.readIdentity(id)?.avatarSeed ?? id,
       };
     });
   }
@@ -1196,6 +1202,7 @@ export class AgentManager {
 
     const record = appendGroupMessage(grp.id, {
       from: senderName,
+      fromId: isAgent ? opts.fromId : undefined,
       kind: isAgent ? 'agent' : 'human',
       text: body,
       ts: Date.now(),
@@ -1702,6 +1709,7 @@ export class AgentManager {
       model: this.readIdentity(id)?.model ?? null,
       roles: this.readIdentity(id)?.roles ?? [],
       groups: this.readIdentity(id)?.groups ?? [],
+      avatarSeed: this.readIdentity(id)?.avatarSeed ?? id,
     };
   }
 }
