@@ -4,7 +4,7 @@ import { config } from './config.js';
 import { AgentManager } from './docker.js';
 import { parseAgentPath } from './router.js';
 import { applyCors, handleApi } from './api.js';
-import { isAuthed, validSwarmToken } from './auth.js';
+import { isAuthed, swarmTokenMayAccess, validSwarmToken } from './auth.js';
 import { proxyHttp, proxyToUpstream, relayWs } from './proxy.js';
 
 /** Paths reachable without a session: the login page + its assets, the auth API,
@@ -35,13 +35,20 @@ const server = http.createServer(async (req, res) => {
   try {
     // 0. Auth gate. Preflights pass (no cookie/side effects); everything else
     //    that isn't public needs either a valid operator session (browser) or a
-    //    valid swarm token (agents' machine-to-machine /api/swarm/* calls).
-    //    API/agent routes get 401; page requests redirect to the login screen.
-    const passes = isAuthed(req.headers.cookie) || validSwarmToken(req.headers['x-swarm-token']);
-    if (req.method !== 'OPTIONS' && !isPublicPath(url.pathname) && !passes) {
+    //    valid swarm token (agents' machine-to-machine /api/swarm/* calls). The
+    //    operator session grants full access; the swarm token is confined to the
+    //    agent-facing endpoints (swarmTokenMayAccess) so it can't be reused to
+    //    reach operator-only APIs. API/agent routes get 401/403; page requests
+    //    redirect to the login screen.
+    const byCookie = isAuthed(req.headers.cookie);
+    const byToken = !byCookie && validSwarmToken(req.headers['x-swarm-token']);
+    const authorized =
+      byCookie || (byToken && swarmTokenMayAccess(req.method ?? 'GET', url.pathname));
+    if (req.method !== 'OPTIONS' && !isPublicPath(url.pathname) && !authorized) {
       if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/a/')) {
-        res.writeHead(401, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ error: 'unauthorized' }));
+        // A valid-but-out-of-scope swarm token is forbidden (403), not 401.
+        res.writeHead(byToken ? 403 : 401, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: byToken ? 'forbidden' : 'unauthorized' }));
       } else {
         res.writeHead(302, { location: '/login' });
         res.end();

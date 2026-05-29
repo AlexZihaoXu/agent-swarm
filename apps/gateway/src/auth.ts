@@ -135,6 +135,19 @@ export function swarmToken(): string {
   return t;
 }
 
+/** Endpoints the machine-to-machine swarm token may reach — exactly the agent-
+ *  facing routes the in-agent swarm tools (swarm.py) call: the roster + groups
+ *  it reads, and the agent↔agent messaging/manage/view actions. Everything else
+ *  (operator settings incl. the OAuth token, other agents' files, agent
+ *  lifecycle, the dashboard, the agent proxy) stays operator-session-only, so a
+ *  leaked or prompt-injected agent can't reuse its swarm token to pivot beyond
+ *  agent↔agent calls. No legitimate agent request falls outside this set. */
+export function swarmTokenMayAccess(method: string, pathname: string): boolean {
+  if (pathname.startsWith('/api/swarm/')) return true;
+  if (method === 'GET' && (pathname === '/api/agents' || pathname === '/api/groups')) return true;
+  return false;
+}
+
 /** Constant-time check of an agent's x-swarm-token header. */
 export function validSwarmToken(header: string | string[] | undefined): boolean {
   const got = Array.isArray(header) ? header[0] : header;
