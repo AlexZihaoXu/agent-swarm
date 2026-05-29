@@ -95,20 +95,28 @@ export function DashboardChat({ agents }: { agents: Agent[] }) {
 
   return (
     <>
-      {!open && (
-        <motion.button
-          onClick={() => {
-            setShowList(false);
-            setOpen(true);
-          }}
-          whileHover={{ scale: 1.04 }}
-          whileTap={{ scale: 0.97 }}
-          className="border-separator bg-surface hover:bg-surface-secondary fixed bottom-6 left-1/2 z-40 flex -translate-x-1/2 items-center gap-2 rounded-full border px-5 py-2.5 text-sm font-medium shadow-[0_8px_30px_rgba(0,0,0,0.25)]"
-        >
-          <LuMessageSquare className="size-4" />
-          Chat with agents
-        </motion.button>
-      )}
+      <AnimatePresence>
+        {!open && (
+          <motion.button
+            onClick={() => {
+              setShowList(false);
+              setOpen(true);
+            }}
+            // x:'-50%' keeps it centered while framer drives the y entrance
+            // (a Tailwind -translate-x-1/2 would be overridden by framer's transform).
+            initial={{ opacity: 0, y: 24, x: '-50%' }}
+            animate={{ opacity: 1, y: 0, x: '-50%' }}
+            exit={{ opacity: 0, y: 24, x: '-50%' }}
+            transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+            whileHover={{ scale: 1.04, x: '-50%' }}
+            whileTap={{ scale: 0.97, x: '-50%' }}
+            className="border-separator bg-surface hover:bg-surface-secondary fixed bottom-6 left-1/2 z-40 flex items-center gap-2 rounded-full border px-5 py-2.5 text-sm font-medium shadow-[0_8px_30px_rgba(0,0,0,0.25)]"
+          >
+            <LuMessageSquare className="size-4" />
+            Chat with agents
+          </motion.button>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {open && (
