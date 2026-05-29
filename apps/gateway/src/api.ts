@@ -74,6 +74,12 @@ export async function handleApi(
   try {
     if (pathname.startsWith('/api/auth/')) return await handleAuth(req, res, method);
     if (pathname === '/api/fs') return await handleFs(req, res, manager, method);
+    // Reveal the full stored OAuth token (operator-only — the gate already
+    // requires a session). Lets the operator copy back what they pasted.
+    if (pathname === '/api/settings/token') {
+      if (method !== 'GET') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+      return (sendJson(res, 200, { token: getSettings().oauthToken ?? '' }), true);
+    }
     if (pathname === '/api/settings') return await handleSettings(req, res, manager, method);
     if (pathname === '/api/host') return await handleHost(res, manager, method);
     if (pathname === '/api/metrics') return await handleMetrics(res, manager, method);

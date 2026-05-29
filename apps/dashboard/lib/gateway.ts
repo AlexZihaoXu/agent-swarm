@@ -201,6 +201,8 @@ export const changePassword = (currentPassword: string, newPassword: string) =>
   authPost('/api/auth/password', { currentPassword, newPassword });
 
 export const getSettings = () => api<Settings>('/api/settings');
+/** Reveal the full stored OAuth token (operator-only). */
+export const getOauthToken = () => api<{ token: string }>('/api/settings/token');
 /** Set/clear the Claude OAuth token (`claude setup-token`). Empty clears it back
  *  to the env default. */
 export const updateSettings = (oauthToken: string) =>

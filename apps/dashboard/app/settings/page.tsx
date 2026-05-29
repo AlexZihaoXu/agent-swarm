@@ -4,10 +4,11 @@ import { Button, buttonVariants, Card, Input, Label, TextField, toast } from '@h
 import { motion } from 'framer-motion';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { LuChevronLeft, LuLogOut } from 'react-icons/lu';
+import { LuChevronLeft, LuCopy, LuEye, LuEyeOff, LuLogOut } from 'react-icons/lu';
 import {
   getSettings,
   updateSettings,
+  getOauthToken,
   changePassword,
   logout,
   listRoles,
@@ -28,6 +29,33 @@ import { PasswordField } from '@/app/PasswordField';
 
 type Status = { kind: 'ok' | 'warn' | 'err'; msg: string } | null;
 
+/** Copy text to the clipboard, falling back to execCommand for non-secure
+ *  contexts (plain HTTP on a LAN/tailnet, where navigator.clipboard is blocked). */
+async function writeClipboard(text: string): Promise<boolean> {
+  try {
+    if (window.isSecureContext && navigator.clipboard) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* fall through to the legacy path */
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 export default function SettingsPage() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [token, setToken] = useState('');
@@ -37,6 +65,33 @@ export default function SettingsPage() {
   const [curPw, setCurPw] = useState('');
   const [newPw, setNewPw] = useState('');
   const [pwBusy, setPwBusy] = useState(false);
+  const [revealed, setRevealed] = useState<string | null>(null);
+
+  const toggleReveal = async () => {
+    if (revealed) return setRevealed(null);
+    try {
+      const { token } = await getOauthToken();
+      setRevealed(token || '(empty)');
+    } catch (e) {
+      toast.warning(e instanceof Error ? e.message : 'Failed to reveal token.');
+    }
+  };
+
+  const copyToken = async () => {
+    try {
+      const { token } = await getOauthToken();
+      if (await writeClipboard(token)) {
+        toast.success('Token copied to clipboard.');
+      } else {
+        // Clipboard API needs a secure context (HTTPS/localhost); over plain
+        // HTTP the copy is blocked — reveal it so it can be selected manually.
+        setRevealed(token || '(empty)');
+        toast.warning('Copy unavailable over plain HTTP — token revealed; select it to copy.');
+      }
+    } catch (e) {
+      toast.warning(e instanceof Error ? e.message : 'Failed to copy token.');
+    }
+  };
 
   const doLogout = async () => {
     try {
@@ -79,6 +134,7 @@ export default function SettingsPage() {
     try {
       const r = await updateSettings(token.trim());
       setToken('');
+      setRevealed(null);
       await load();
       setStatus(
         r.hasToken
@@ -130,15 +186,37 @@ export default function SettingsPage() {
           </Card.Description>
         </Card.Header>
         <Card.Content className="mt-2 flex flex-col gap-3">
-          <div className="text-muted text-sm">
-            Current:{' '}
+          <div className="text-muted flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+            <span>Current:</span>
             {settings?.hasToken ? (
-              <span className="text-foreground font-mono">•••• {settings.tokenHint}</span>
+              <span className="text-foreground font-mono break-all">
+                {revealed ?? `•••• ${settings.tokenHint}`}
+              </span>
             ) : (
               <span className="text-warning">not configured</span>
             )}
             {settings?.hasToken && settings.fromEnv && (
-              <span className="text-muted/70"> (from environment)</span>
+              <span className="text-muted/70">(from environment)</span>
+            )}
+            {settings?.hasToken && (
+              <span className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => void toggleReveal()}
+                  aria-label={revealed ? 'Hide token' : 'Reveal token'}
+                  className="hover:text-foreground focus-visible:text-foreground rounded p-1 focus-visible:outline-none"
+                >
+                  {revealed ? <LuEyeOff className="size-4" /> : <LuEye className="size-4" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void copyToken()}
+                  aria-label="Copy token"
+                  className="hover:text-foreground focus-visible:text-foreground rounded p-1 focus-visible:outline-none"
+                >
+                  <LuCopy className="size-4" />
+                </button>
+              </span>
             )}
           </div>
           <TextField value={token} onChange={setToken} name="oauthToken">
