@@ -40,6 +40,12 @@ services:
       # Set it in .env / the shell, or leave blank and paste it in the dashboard
       # Settings page (persisted in the gateway-data volume).
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      # Pass the host GPU (/dev/dri) into agents for hardware-accelerated graphics
+      # (set AGENT_GPU=1 on a host with a GPU; agents fall back to software if the
+      # device is missing). AGENT_SHM_MB sizes the agents' /dev/shm (Chrome needs
+      # more than the 64MB default or it crashes).
+      AGENT_GPU: ${AGENT_GPU:-}
+      AGENT_SHM_MB: ${AGENT_SHM_MB:-512}
       # Persistent agent disks. SWARM_DATA_HOST is a HOST path (the daemon
       # resolves it when bind-mounting each agent's home); SWARM_DATA_MOUNT is
       # where this container sees that same tree (the volume below) so the

@@ -1,0 +1,14 @@
+[Unit]
+Description=Grant the agent user access to the GPU render node (if present)
+# Must run before the desktop + terminal supervisor so the agent session
+# inherits the device group.
+Before=agent-terminals.service novnc.service tigervncserver@:1.service
+After=systemd-tmpfiles-setup.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/agent-gpu
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -918,7 +918,6 @@ export class AgentManager {
     const timezone = opts.timezone?.trim() || undefined;
     const model = opts.model?.trim() || undefined;
     const name = this.containerName(id);
-    const portMode = this.cfg.mode === 'ports';
 
     // Tag with the stack's compose project so Docker UIs (Portainer) nest the
     // agent under the dashboard, plus our own marker for management.
@@ -947,45 +946,131 @@ export class AgentManager {
     this.writeSwarmToken(id);
     this.writeRolesDoc(id);
 
-    const container = await this.docker.createContainer({
-      name,
-      Image: this.cfg.agentImage,
-      Hostname: id,
-      Labels: labels,
-      // TZ is read at boot by the agent-timezone service to set /etc/localtime,
-      // and respected directly by CLI tools (claude, node) for timestamps.
-      Env: timezone ? [`TZ=${timezone}`] : undefined,
-      ExposedPorts: { '6080/tcp': {}, '7681/tcp': {} },
-      HostConfig: {
-        // systemd as PID 1 + GNOME Shell need these — mirrors README run flags.
-        // `CgroupnsMode` is cast in: it's a valid Docker API field that the
-        // current @types/dockerode HostConfig doesn't declare yet.
-        CgroupnsMode: 'host',
-        // Hard resource caps (omitted → unlimited). NanoCpus is cores × 1e9.
-        NanoCpus: cpus ? Math.round(cpus * 1e9) : undefined,
-        Memory: memoryMb ? memoryMb * 1024 * 1024 : undefined,
-        Binds: [
-          '/sys/fs/cgroup:/sys/fs/cgroup:rw',
-          // Persistent home (host folder). Credentials are seeded into it (see
-          // seedAgentDisk) rather than bind-mounted — Docker Desktop can't nest
-          // a file bind inside a bind-mounted dir.
-          `${this.agentHostDir(id)}:/home/agent`,
-        ],
-        Tmpfs: { '/run': '', '/run/lock': '', '/tmp': '' },
-        CapAdd: ['SYS_BOOT', 'SYS_ADMIN'],
-        SecurityOpt: ['seccomp=unconfined', 'apparmor=unconfined'],
-        NetworkMode: this.cfg.networkName,
-        // Dev (macOS): let Docker assign ephemeral host ports so the host-run
-        // gateway can reach them on 127.0.0.1 — no manual port juggling.
-        PortBindings: portMode
-          ? { '6080/tcp': [{ HostPort: '' }], '7681/tcp': [{ HostPort: '' }] }
-          : undefined,
-        RestartPolicy: { Name: 'unless-stopped' },
-      } as Docker.ContainerCreateOptions['HostConfig'],
-    });
+    return this.spawnContainer(id, name, labels, cpus, memoryMb, timezone);
+  }
+
+  /** Build the HostConfig + create & start the container for an agent id (shared
+   *  by create + recreate). Adds the bigger /dev/shm and, when enabled, the GPU
+   *  render nodes — falling back to software render if the device is missing. */
+  private async spawnContainer(
+    id: string,
+    name: string,
+    labels: Record<string, string>,
+    cpus: number | undefined,
+    memoryMb: number | undefined,
+    timezone: string | undefined,
+  ): Promise<Agent> {
+    const portMode = this.cfg.mode === 'ports';
+    // GPU passthrough (opt-in): map the host's DRM render nodes in so Chrome/Mesa
+    // can use the GPU. A boot service grants the agent user the device group;
+    // browser flags fall back to software if the GPU context fails.
+    const gpuDevices = this.cfg.agentGpu
+      ? [
+          {
+            PathOnHost: '/dev/dri/renderD128',
+            PathInContainer: '/dev/dri/renderD128',
+            CgroupPermissions: 'rwm',
+          },
+          {
+            PathOnHost: '/dev/dri/card0',
+            PathInContainer: '/dev/dri/card0',
+            CgroupPermissions: 'rwm',
+          },
+        ]
+      : undefined;
+    const hostConfig = {
+      // systemd as PID 1 + GNOME Shell need these — mirrors README run flags.
+      // `CgroupnsMode` is cast in: it's a valid Docker API field that the
+      // current @types/dockerode HostConfig doesn't declare yet.
+      CgroupnsMode: 'host',
+      // Hard resource caps (omitted → unlimited). NanoCpus is cores × 1e9.
+      NanoCpus: cpus ? Math.round(cpus * 1e9) : undefined,
+      Memory: memoryMb ? memoryMb * 1024 * 1024 : undefined,
+      // Chrome needs a real /dev/shm (64MB default → SIGTRAP under load).
+      ShmSize: this.cfg.agentShmMb * 1024 * 1024,
+      Binds: [
+        '/sys/fs/cgroup:/sys/fs/cgroup:rw',
+        // Persistent home (host folder). Credentials are seeded into it (see
+        // seedAgentDisk) rather than bind-mounted — Docker Desktop can't nest
+        // a file bind inside a bind-mounted dir.
+        `${this.agentHostDir(id)}:/home/agent`,
+      ],
+      Tmpfs: { '/run': '', '/run/lock': '', '/tmp': '' },
+      CapAdd: ['SYS_BOOT', 'SYS_ADMIN'],
+      SecurityOpt: ['seccomp=unconfined', 'apparmor=unconfined'],
+      NetworkMode: this.cfg.networkName,
+      ...(gpuDevices ? { Devices: gpuDevices } : {}),
+      // Dev (macOS): let Docker assign ephemeral host ports so the host-run
+      // gateway can reach them on 127.0.0.1 — no manual port juggling.
+      PortBindings: portMode
+        ? { '6080/tcp': [{ HostPort: '' }], '7681/tcp': [{ HostPort: '' }] }
+        : undefined,
+      RestartPolicy: { Name: 'unless-stopped' },
+    } as Docker.ContainerCreateOptions['HostConfig'];
+
+    const createWith = (hc: Docker.ContainerCreateOptions['HostConfig']) =>
+      this.docker.createContainer({
+        name,
+        Image: this.cfg.agentImage,
+        Hostname: id,
+        Labels: labels,
+        // TZ is read at boot by the agent-timezone service to set /etc/localtime,
+        // and respected directly by CLI tools (claude, node) for timestamps.
+        Env: timezone ? [`TZ=${timezone}`] : undefined,
+        ExposedPorts: { '6080/tcp': {}, '7681/tcp': {} },
+        HostConfig: hc,
+      });
+    let container;
+    try {
+      container = await createWith(hostConfig);
+    } catch (e) {
+      // GPU device missing/unusable on this host → fall back to software render.
+      if (
+        gpuDevices &&
+        /\/dev\/dri|device|no such file/i.test(e instanceof Error ? e.message : '')
+      ) {
+        const soft = { ...(hostConfig as Record<string, unknown>) };
+        delete soft.Devices;
+        container = await createWith(soft as Docker.ContainerCreateOptions['HostConfig']);
+      } else {
+        throw e;
+      }
+    }
     await container.start();
     await this.stampVersion(container);
     return this.toAgent(await container.inspect());
+  }
+
+  /** Recreate an agent's container in place (same id, home, name, caps) so that
+   *  changes only applied at create time — a bigger /dev/shm, GPU devices, a
+   *  rebuilt agent image — take effect on an EXISTING agent. The home is a host
+   *  bind-mount, so removing the container preserves everything on disk. */
+  async recreate(id: string): Promise<Agent> {
+    if (!existsSync(this.agentDataDir(id)))
+      throw Object.assign(new Error('agent not found'), { statusCode: 404 });
+    const name = this.containerName(id);
+    const prev = await this.docker
+      .getContainer(name)
+      .inspect()
+      .catch(() => null);
+    const labels: Record<string, string> = (prev?.Config?.Labels as Record<string, string>) ?? {
+      'swarm.managed': 'true',
+      'com.docker.compose.project': this.cfg.project,
+      [USERNAME_LABEL]: this.readIdentity(id)?.name ?? id,
+    };
+    const cpus = labels[CPUS_LABEL] ? Number(labels[CPUS_LABEL]) : undefined;
+    const memoryMb = labels[MEMORY_LABEL] ? Number(labels[MEMORY_LABEL]) : undefined;
+    const timezone = labels[TZ_LABEL] || undefined;
+    // Drop the old container (the host bind-mounted home is untouched).
+    await this.docker
+      .getContainer(name)
+      .remove({ force: true })
+      .catch(() => {});
+    // Refresh on-disk provisioning so a rebuilt image starts with current state.
+    this.writeAuthToken(id);
+    this.writeSwarmToken(id);
+    this.writeRolesDoc(id);
+    return this.spawnContainer(id, name, labels, cpus, memoryMb, timezone);
   }
 
   async list(): Promise<Agent[]> {

@@ -57,7 +57,7 @@ export function applyCors(req: IncomingMessage, res: ServerResponse): boolean {
 }
 
 // /api/agents, /api/agents/:id, /api/agents/:id/(start|stop|upgrade|paths|package)
-const AGENT_API = /^\/api\/agents(?:\/([^/]+)(?:\/(start|stop|upgrade|paths|package))?)?$/;
+const AGENT_API = /^\/api\/agents(?:\/([^/]+)(?:\/(start|stop|recreate|upgrade|paths|package))?)?$/;
 // /api/agents/:id/files — the per-agent file explorer (op via ?op=…).
 const AGENT_FILES_API = /^\/api\/agents\/([^/]+)\/files$/;
 // /api/agents/:id/integrations[/:type[/(test|apply|disable)]]
@@ -482,6 +482,7 @@ async function handleAgents(
       return (sendJson(res, 200, result), true);
     }
   } else if (method === 'POST') {
+    if (action === 'recreate') return (sendJson(res, 200, await manager.recreate(id)), true);
     if (action === 'start') await manager.start(id);
     else await manager.stop(id);
     return (sendJson(res, 200, { ok: true }), true);

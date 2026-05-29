@@ -53,17 +53,30 @@ RUN set -eux; \
     fi; \
     rm -rf /var/lib/apt/lists/*
 
+# Mesa userspace drivers so the browser can use a passed-in GPU (/dev/dri):
+# radeonsi (AMD GL), radv (Vulkan), VA-API video decode. Harmless on hosts with
+# no GPU — the browser just falls back to software. mesa-utils/vainfo aid debug.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       libgl1-mesa-dri libegl-mesa0 mesa-va-drivers mesa-vulkan-drivers \
+       libvulkan1 vainfo mesa-utils \
+    && rm -rf /var/lib/apt/lists/*
+
 # Make the browser usable inside a container:
 #  --no-sandbox            : the userns sandbox is blocked in containers
 #  --test-type             : hide the "unsupported flag" warning bar
 #  --password-store=basic  : don't prompt to unlock the GNOME keyring
 #  --no-first-run / --no-default-browser-check : skip first-run prompts
-#  --use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader :
-#       software WebGL/GL via SwiftShader (no GPU in the container)
+#  --disable-dev-shm-usage : write shared memory to /tmp, not the small /dev/shm
+#       (Chrome's compositor SIGTRAPs when /dev/shm is the 64MB container default)
+#  --ignore-gpu-blocklist --use-gl=angle --use-angle=gl : use the GPU through
+#       Mesa when /dev/dri is passed in (hardware accel); ANGLE-GL falls back to
+#       Mesa llvmpipe / SwiftShader otherwise. --enable-unsafe-swiftshader keeps
+#       WebGL working as the ultimate software fallback.
 # Also suppress the TigerVNC clipboard-config window (-iconic -> -nowin).
 RUN set -eux; \
     ARCH="$(dpkg --print-architecture)"; \
-    FLAGS="--no-sandbox --test-type --password-store=basic --no-first-run --no-default-browser-check --use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader"; \
+    FLAGS="--no-sandbox --test-type --password-store=basic --no-first-run --no-default-browser-check --disable-dev-shm-usage --ignore-gpu-blocklist --use-gl=angle --use-angle=gl --enable-unsafe-swiftshader"; \
     if [ "$ARCH" = "amd64" ]; then \
       DESKTOP=/usr/share/applications/google-chrome.desktop; BIN=google-chrome-stable; \
     else \
@@ -170,6 +183,12 @@ COPY runtime /opt/agent-runtime
 RUN cd /opt/agent-runtime && npm install --omit=dev
 COPY agent-terminals.service /etc/systemd/system/agent-terminals.service
 
+# GPU access: grant the agent user the render-node group at boot (if /dev/dri
+# was passed in), before the desktop/terminal services come up.
+COPY agent-gpu.sh /usr/local/bin/agent-gpu
+RUN chmod +x /usr/local/bin/agent-gpu
+COPY agent-gpu.service /etc/systemd/system/agent-gpu.service
+
 # MCP tools for Claude Code (computer-use: control the X desktop). Pre-warm the
 # uv cache as the agent (resolves python-xlib at build, cached in the home → the
 # MCP server starts instantly; no X needed since the script connects lazily).
@@ -208,6 +227,7 @@ RUN systemctl set-default multi-user.target \
     && systemctl enable novnc.service \
     && systemctl enable claude-code-update.service \
     && systemctl enable agent-timezone.service \
+    && systemctl enable agent-gpu.service \
     && systemctl enable agent-terminals.service \
     && (systemctl mask gdm3.service 2>/dev/null || true) \
     && echo 'DISABLE_AUTOUPDATER=1' >> /etc/environment

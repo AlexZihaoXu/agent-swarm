@@ -74,6 +74,13 @@ export const config = {
   swarmDataMount: process.env.SWARM_DATA_MOUNT ?? '/swarmdata',
   /** Where to send everything that isn't /api or /a/:id — the Next.js dashboard. */
   dashboardUpstream: process.env.DASHBOARD_UPSTREAM ?? 'http://localhost:3000',
+  /** Shared-memory size for agent containers (MB). Chrome shuttles compositor
+   *  textures through /dev/shm; the 64MB default crashes it (SIGTRAP). */
+  agentShmMb: num(process.env.AGENT_SHM_MB, 512),
+  /** Pass the host GPU (/dev/dri) into agents for hardware-accelerated graphics.
+   *  Opt-in (only set on hosts with a GPU); creation falls back to software if
+   *  the device is missing. */
+  agentGpu: /^(1|true|yes|on)$/i.test(process.env.AGENT_GPU ?? ''),
   /** In-container service ports (fixed by the agent image). */
   desktopPort: 6080,
   terminalPort: 7681,
