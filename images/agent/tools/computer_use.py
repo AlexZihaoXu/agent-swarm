@@ -47,8 +47,10 @@ PROTOCOL_VERSION = "2025-06-18"
 
 INSTRUCTIONS = (
     "Control this Linux desktop. Coordinates are objects {x, y, sys} where sys is "
-    "'low' (720x480), 'medium' (1280x720), or 'full' (native res); you may mix "
-    "systems freely and the tool converts. WORKFLOW: 1) `glance` (low/normal) to "
+    "'low' (720x480), 'medium' (1280x720), or 'full' (native res). **sys is REQUIRED** "
+    "on every coordinate (and on move_rel/get_window/get_focused_window) — there is no "
+    "default; always state the system your numbers are in, matching the screenshot you "
+    "read them from. You may mix systems freely and the tool converts. WORKFLOW: 1) `glance` (low/normal) to "
     "see the screen cheaply and locate UI; 2) `look_at` for pixel-precise work "
     "(dragging, resizing, small targets) — it returns a native crop plus its "
     "full_res origin so a crop pixel (px,py) maps to full coord (origin_x+px, "
@@ -130,7 +132,21 @@ def _from_native(nx: int, ny: int, sys: str) -> dict:
 
 
 def _coord(c: dict) -> tuple[int, int]:
-    return _to_native(c["x"], c["y"], c.get("sys", "full"))
+    # Strict on purpose: no default coordinate system. The agent must say which
+    # system its numbers are in (low|medium|full), so a coord read off a `low`
+    # glance can't be silently mis-scaled as native. Erroring teaches the shape.
+    if not isinstance(c, dict):
+        raise ValueError("coordinate must be an object {x, y, sys}")
+    for k in ("x", "y", "sys"):
+        if k not in c:
+            raise ValueError(
+                f"coordinate is missing required field {k!r} — pass {{x, y, sys}} "
+                "with sys one of low|medium|full (no default; state the system your numbers are in)"
+            )
+    x, y = c["x"], c["y"]
+    if isinstance(x, bool) or isinstance(y, bool) or not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+        raise ValueError("coordinate x and y must be numbers")
+    return _to_native(x, y, c["sys"])
 
 
 def _pointer() -> tuple[int, int, int]:
@@ -392,7 +408,9 @@ def move_to(args: dict) -> dict:
 
 def move_rel(args: dict) -> dict:
     sx, sy, _ = _pointer()
-    dnx, dny = _to_native(args["dx"], args["dy"], args.get("sys", "full"))
+    if "sys" not in args:
+        raise ValueError("move_rel requires 'sys' (low|medium|full) — the system your dx/dy are measured in")
+    dnx, dny = _to_native(args["dx"], args["dy"], args["sys"])
     # _to_native scales as if from origin — that's exactly the delta scale.
     tx, ty = sx + dnx, sy + dny
     _move_curve(tx, ty, args.get("duration"))
@@ -535,7 +553,9 @@ def get_window(args: dict) -> dict:
     # Detailed info for one window, with bounds in the requested coordinate
     # system. Target it by id (from list_windows), by `filter` (first title/app
     # match), or — if neither is given — the currently active window.
-    sys_name = args.get("sys", "full")
+    if "sys" not in args:
+        raise ValueError("get_window requires 'sys' (low|medium|full) — the system to report bounds in")
+    sys_name = args["sys"]
     if sys_name not in SYS_DIMS:
         raise ValueError(f"unknown coordinate system {sys_name!r} (low|medium|full)")
     ids, active_id = _client_ids()
@@ -565,7 +585,9 @@ def get_focused_window(args: dict) -> dict:
     # The window with keyboard input focus right now (where typing goes), with
     # bounds in the requested sys. Uses the X input focus walked up to its
     # managed top-level window, falling back to the WM's active window.
-    sys_name = args.get("sys", "full")
+    if "sys" not in args:
+        raise ValueError("get_focused_window requires 'sys' (low|medium|full) — the system to report bounds in")
+    sys_name = args["sys"]
     if sys_name not in SYS_DIMS:
         raise ValueError(f"unknown coordinate system {sys_name!r} (low|medium|full)")
     ids, active_id = _client_ids()
@@ -717,7 +739,7 @@ TOOLS = [
      {"pos": COORD, "duration": {"type": "number"}}, ["pos"], move_to),
     ("move_rel", "Move the cursor by (dx, dy) in a coordinate system, straight and smooth (eased).",
      {"dx": {"type": "number"}, "dy": {"type": "number"}, "sys": {"type": "string", "enum": ["low", "medium", "full"]}, "duration": {"type": "number"}},
-     ["dx", "dy"], move_rel),
+     ["dx", "dy", "sys"], move_rel),
     ("get_pos", "Current cursor position in all coordinate systems.", {}, [], get_pos),
     ("cursor_shape", "Image of the current mouse-cursor icon (arrow vs hand over a link, I-beam over text, watch while loading). Returns a `serial` that changes whenever the shape changes — useful to confirm a hover landed on a clickable/text target.",
      {}, [], cursor_shape),
@@ -728,10 +750,10 @@ TOOLS = [
     ("get_buttons", "Which mouse buttons are currently held.", {}, [], get_buttons),
     ("list_windows", "List open app windows: each has id, title, app class, full_res bounds {x,y,w,h}, and active flag. Optional case-insensitive `filter` matches title/app. Use get_window for one window's details.",
      {"filter": {"type": "string"}}, [], list_windows),
-    ("get_window", "Detailed info for ONE window, with bounds in the requested coordinate system (sys, default full): id, title, app, bounds {x,y,w,h}, full_bounds (native), frame extents (decoration sizes), active/minimized/maximized/fullscreen, pid. Target by id OR filter (first title/app match) OR neither (the active window).",
-     {"id": {"type": "string"}, "filter": {"type": "string"}, "sys": {"type": "string", "enum": ["low", "medium", "full"]}}, [], get_window),
-    ("get_focused_window", "Same detail as get_window, but for the window that currently has keyboard focus (where typing goes). Useful to confirm which app/field is focused before typing or sending hotkeys.",
-     {"sys": {"type": "string", "enum": ["low", "medium", "full"]}}, [], get_focused_window),
+    ("get_window", "Detailed info for ONE window, with bounds in the requested coordinate system (sys: low|medium|full, required): id, title, app, bounds {x,y,w,h}, full_bounds (native), frame extents (decoration sizes), active/minimized/maximized/fullscreen, pid. Target by id OR filter (first title/app match) OR neither (the active window).",
+     {"id": {"type": "string"}, "filter": {"type": "string"}, "sys": {"type": "string", "enum": ["low", "medium", "full"]}}, ["sys"], get_window),
+    ("get_focused_window", "Same detail as get_window, but for the window that currently has keyboard focus (where typing goes). Useful to confirm which app/field is focused before typing or sending hotkeys. sys (low|medium|full) is required.",
+     {"sys": {"type": "string", "enum": ["low", "medium", "full"]}}, ["sys"], get_focused_window),
     ("focus_window", "Raise and focus a window (by id from list_windows).",
      {"id": {"type": "string"}}, ["id"], focus_window),
     ("close_window", "Close a window (by id from list_windows).",
