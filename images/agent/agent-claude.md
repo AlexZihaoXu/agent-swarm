@@ -89,4 +89,6 @@ if you have a raw channel ID instead.
 - `swarm_list_agents()` — the other agents you can message (id, name, status).
 - `swarm_send(to, text)` — send a message to another agent (by id or name). It arrives in their
   terminal as `[swarm://you]`; they reply with their own `swarm_send`.
+- `swarm_send_file(to, path, note?)` — send a file (under your home) to another agent; it lands in
+  their `~/.swarm/shared-inbox/` and they're notified with the path.
 - `swarm_whoami()` — your own id + name in the swarm.

@@ -14,7 +14,15 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { getMetrics, getUsage, type Metrics, type RateWindow, type Usage } from '@/lib/gateway';
+import {
+  getHostInfo,
+  getMetrics,
+  getUsage,
+  type HostInfo,
+  type Metrics,
+  type RateWindow,
+  type Usage,
+} from '@/lib/gateway';
 
 /** Distinct line colors for per-agent resource graphs (cycled by index). */
 const LINE_COLORS = ['#e0a55e', '#7aa2f7', '#9ece6a', '#bb9af7', '#f7768e', '#7dcfff', '#e0af68'];
@@ -124,6 +132,14 @@ function UsageRing({
 export function DashboardMetrics() {
   const [m, setM] = useState<Metrics | null>(null);
   const [usage, setUsage] = useState<Usage | null>(null);
+  const [host, setHost] = useState<HostInfo | null>(null);
+
+  // Host hardware = the fixed ceiling for the resource graphs (max exposed).
+  useEffect(() => {
+    getHostInfo()
+      .then(setHost)
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -235,7 +251,7 @@ export function DashboardMetrics() {
             <div className="text-muted mb-2 text-xs font-semibold tracking-wide uppercase">
               Tokens per agent · 12h
             </div>
-            <div className="h-40 w-full">
+            <div className="h-28 w-full">
               {perAgent.length === 0 ? (
                 <p className="text-muted pt-8 text-center text-sm">No activity.</p>
               ) : (
@@ -275,7 +291,7 @@ export function DashboardMetrics() {
             <div className="text-muted mb-2 text-xs font-semibold tracking-wide uppercase">
               Total tokens &amp; cost · 12h
             </div>
-            <div className="h-40 w-full">
+            <div className="h-28 w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart data={overTime} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--separator)" vertical={false} />
@@ -322,8 +338,20 @@ export function DashboardMetrics() {
 
         {/* Per-agent resource graphs over the last 12h (one line per agent). */}
         <div className="grid gap-6 lg:grid-cols-2">
-          <ResourceChart title="CPU per agent · 12h" data={cpuData} series={series} unit="%" />
-          <ResourceChart title="Memory per agent · 12h" data={memData} series={series} unit=" MB" />
+          <ResourceChart
+            title="CPU per agent · 12h"
+            data={cpuData}
+            series={series}
+            unit="%"
+            max={host ? host.cpus * 100 : undefined}
+          />
+          <ResourceChart
+            title="Memory per agent · 12h"
+            data={memData}
+            series={series}
+            unit=" MB"
+            max={host ? host.memoryMb : undefined}
+          />
         </div>
       </Card.Content>
     </Card>
@@ -336,16 +364,19 @@ function ResourceChart({
   data,
   series,
   unit,
+  max,
 }: {
   title: string;
   data: Record<string, number>[];
   series: { id: string; name: string }[];
   unit: string;
+  /** Fixed Y-axis ceiling (max resources exposed); auto-scales if undefined. */
+  max?: number;
 }) {
   return (
     <div>
       <div className="text-muted mb-2 text-xs font-semibold tracking-wide uppercase">{title}</div>
-      <div className="h-40 w-full">
+      <div className="h-28 w-full">
         {data.length === 0 || series.length === 0 ? (
           <p className="text-muted pt-8 text-center text-sm">No data yet.</p>
         ) : (
@@ -361,7 +392,13 @@ function ResourceChart({
                 tick={AXIS}
                 stroke="var(--separator)"
               />
-              <YAxis width={44} tick={AXIS} stroke="var(--separator)" />
+              <YAxis
+                width={44}
+                tick={AXIS}
+                stroke="var(--separator)"
+                domain={max ? [0, max] : [0, 'auto']}
+                allowDataOverflow
+              />
               <Tooltip
                 contentStyle={TOOLTIP}
                 labelStyle={{ color: 'var(--muted)' }}

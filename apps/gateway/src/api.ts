@@ -68,6 +68,18 @@ export async function handleApi(
       await manager.sendSwarmMessage(body.from ?? '', body.to ?? '', body.text ?? '');
       return (sendJson(res, 200, { ok: true }), true);
     }
+    if (pathname === '/api/swarm/send-file') {
+      if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+      const body = await readJson(req);
+      const dest = await manager.sendSwarmFile(
+        body.fromId ?? '',
+        body.fromName ?? body.from ?? '',
+        body.to ?? '',
+        body.path ?? '',
+        body.note,
+      );
+      return (sendJson(res, 200, { ok: true, path: dest }), true);
+    }
     if (pathname === '/api/image') return await handleImageStatus(res, manager, method);
     if (pathname === '/api/image/build') return await handleImageBuild(res, manager, method);
     if (pathname.startsWith('/api/packages'))
@@ -355,6 +367,10 @@ async function readJson(req: IncomingMessage): Promise<{
   from?: string;
   to?: string;
   text?: string;
+  fromId?: string;
+  fromName?: string;
+  path?: string;
+  note?: string;
 }> {
   const chunks: Buffer[] = [];
   for await (const c of req) chunks.push(c as Buffer);

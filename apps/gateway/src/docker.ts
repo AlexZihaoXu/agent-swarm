@@ -1,5 +1,7 @@
 import { execFile } from 'node:child_process';
 import {
+  chownSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -8,7 +10,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, sep } from 'node:path';
 import type { Readable } from 'node:stream';
 import { promisify } from 'node:util';
 
@@ -823,6 +825,57 @@ export class AgentManager {
     if (target.status !== 'running')
       throw Object.assign(new Error('target agent is not running'), { statusCode: 409 });
     this.queueDeliver(target.id, { text: `**[swarm://${sender}]** ${body}`, attachments: [] });
+  }
+
+  /** Swarm file-share: copy a file from the sender agent's home to the target
+   *  agent's `~/.swarm/shared-inbox/` and notify the target via a [swarm://]
+   *  message with the saved path. Both disks are mounted into the gateway, so we
+   *  copy directly. Only files under the sender's home (its persistent disk) are
+   *  reachable this way; /tmp etc. is not. Returns the in-container dest path. */
+  async sendSwarmFile(
+    fromId: string,
+    fromName: string,
+    to: string,
+    path: string,
+    note?: string,
+  ): Promise<string> {
+    const sender = sanitizeInbound(fromName).slice(0, 64) || 'agent';
+    if (!existsSync(this.agentDataDir(fromId)))
+      throw Object.assign(new Error('sender not found'), { statusCode: 404 });
+    const target = (await this.list()).find((a) => a.id === to || a.username === to);
+    if (!target) throw Object.assign(new Error(`agent not found: ${to}`), { statusCode: 404 });
+    if (target.status !== 'running')
+      throw Object.assign(new Error('target agent is not running'), { statusCode: 409 });
+
+    // Map the in-container path to the mounted disk (home == the persistent disk).
+    const HOME = '/home/agent/';
+    const rel = (path.startsWith(HOME) ? path.slice(HOME.length) : path).replace(/^\/+/, '');
+    const senderRoot = this.agentDataDir(fromId);
+    const src = join(senderRoot, rel);
+    if (src !== senderRoot && !src.startsWith(senderRoot + sep))
+      throw Object.assign(new Error('path must be under the agent home'), { statusCode: 400 });
+    if (!existsSync(src) || !statSync(src).isFile())
+      throw Object.assign(new Error(`file not found: ${path}`), { statusCode: 404 });
+    if (statSync(src).size > 100 * 1024 * 1024)
+      throw Object.assign(new Error('file too large (>100MB)'), { statusCode: 400 });
+
+    const base = basename(src).replace(/[^\w.-]/g, '_');
+    const destDir = join(this.agentDataDir(target.id), '.swarm', 'shared-inbox');
+    mkdirSync(destDir, { recursive: true });
+    const dest = join(destDir, `${Date.now()}-${base}`);
+    copyFileSync(src, dest);
+    try {
+      chownSync(dest, 1000, 1000); // owned by the agent user inside the container
+    } catch {
+      /* best-effort */
+    }
+    const inContainer = `/home/agent/.swarm/shared-inbox/${basename(dest)}`;
+    const tail = note ? ` — ${sanitizeInbound(note)}` : '';
+    this.queueDeliver(target.id, {
+      text: `**[swarm://${sender}]** shared a file → ${inContainer}${tail}`,
+      attachments: [],
+    });
+    return inContainer;
   }
 
   /** On gateway startup, reconnect bridges for every running agent that has an

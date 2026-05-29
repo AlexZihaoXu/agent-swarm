@@ -95,6 +95,32 @@ def send(args: dict) -> dict:
     return _ok(f"sent to {to}")
 
 
+def send_file(args: dict) -> dict:
+    to = str(args.get("to") or "").strip()
+    path = str(args.get("path") or "").strip()
+    note = str(args.get("note") or "").strip()
+    if not to or not path:
+        return _err("'to' (agent id or name) and 'path' are required")
+    me = _identity()
+    try:
+        r = _http(
+            "POST",
+            "/api/swarm/send-file",
+            {
+                "fromId": me["id"],
+                "fromName": me["name"] or me["id"] or "agent",
+                "to": to,
+                "path": path,
+                "note": note,
+            },
+        )
+    except urllib.error.HTTPError as e:
+        return _err(f"HTTP {e.code}: {e.read().decode()[:200]}")
+    except Exception as e:  # noqa: BLE001
+        return _err(str(e))
+    return _ok(f"sent file to {to} → {(r or {}).get('path', '?')}")
+
+
 TOOLS = [
     ("swarm_whoami", "Your own identity (id + name) within the swarm.", {}, [], whoami),
     (
@@ -114,6 +140,19 @@ TOOLS = [
         },
         ["to", "text"],
         send,
+    ),
+    (
+        "swarm_send_file",
+        "Send a file to another agent. The file must be under your home (~/...); it "
+        "lands in their ~/.swarm/shared-inbox/ and they're notified with the path. "
+        "Target by agent id or name.",
+        {
+            "to": {"type": "string", "description": "Target agent id or display name"},
+            "path": {"type": "string", "description": "Path to a file under your home"},
+            "note": {"type": "string", "description": "Optional message to send with it"},
+        },
+        ["to", "path"],
+        send_file,
     ),
 ]
 HANDLERS = {name: fn for name, _d, _p, _r, fn in TOOLS}
