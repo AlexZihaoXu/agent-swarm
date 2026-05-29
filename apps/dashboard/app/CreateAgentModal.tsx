@@ -2,7 +2,7 @@
 
 import { Button, Input, Label, Modal, Slider, Tabs, TextField, toast } from '@heroui/react';
 import { useState } from 'react';
-import { LuChevronRight, LuDices } from 'react-icons/lu';
+import { LuChevronRight, LuDices, LuRefreshCw } from 'react-icons/lu';
 import {
   createAgent,
   getHostInfo,
@@ -198,14 +198,18 @@ export function CreateAgentModal({
                   <button
                     type="button"
                     onClick={() => setAvatarSeed(randomSeed())}
-                    title="Shuffle avatar"
-                    aria-label="Shuffle avatar"
-                    className="focus-visible:ring-accent shrink-0 rounded-lg focus-visible:ring-2 focus-visible:outline-none"
+                    title="Click to generate a new avatar"
+                    aria-label="Generate a new avatar"
+                    className="group focus-visible:ring-accent relative shrink-0 cursor-pointer overflow-hidden rounded-lg focus-visible:ring-2 focus-visible:outline-none"
                   >
                     <Identicon
                       seed={avatarSeed || hostname || name}
-                      className="size-10 rounded-lg"
+                      className="size-10 rounded-lg transition group-hover:brightness-75"
                     />
+                    {/* Hover affordance: darken + a regenerate indicator. */}
+                    <span className="absolute inset-0 grid place-items-center opacity-0 transition-opacity group-hover:opacity-100">
+                      <LuRefreshCw className="size-4 text-white drop-shadow" />
+                    </span>
                   </button>
                   <TextField
                     className="flex-1"

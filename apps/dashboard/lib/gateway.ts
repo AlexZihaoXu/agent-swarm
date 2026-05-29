@@ -482,6 +482,9 @@ export const deleteAgentFile = (id: string, path: string) => filesPost(id, 'dele
 /** Direct URL for downloading a file (same-origin → the session cookie is sent). */
 export const agentFileDownloadUrl = (id: string, path: string) =>
   `${GATEWAY_BASE}${filesBase(id)}?op=download&path=${encodeURIComponent(path)}`;
+/** Direct URL for downloading a folder as a .zip (same-origin → cookie is sent). */
+export const agentFolderZipUrl = (id: string, path: string) =>
+  `${GATEWAY_BASE}${filesBase(id)}?op=zip&path=${encodeURIComponent(path)}`;
 /** Upload a File into `dir` (raw body; filename in the query). */
 export async function uploadAgentFile(id: string, dir: string, file: File): Promise<void> {
   const res = await fetch(

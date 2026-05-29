@@ -5,9 +5,10 @@ import { motion } from 'framer-motion';
 import Link from 'next/link';
 import { useSelectedLayoutSegment } from 'next/navigation';
 import { use, useState, type ComponentProps, type ReactNode } from 'react';
-import { LuChevronLeft, LuMonitor, LuSettings, LuTerminal } from 'react-icons/lu';
+import { LuChevronLeft, LuFolderOpen, LuMonitor, LuSettings, LuTerminal } from 'react-icons/lu';
 import { AgentSettingsModal } from '@/app/AgentSettingsModal';
 import { AgentStatsBar } from '@/app/AgentStats';
+import { FileExplorer } from '@/app/FileExplorer';
 import { ChatWidget } from './ChatWidget';
 import { DesktopLockButton, DesktopLockProvider } from './DesktopLock';
 
@@ -33,6 +34,7 @@ export default function AgentLayout({
   const { id } = use(params);
   const segment = useSelectedLayoutSegment() ?? 'desktop';
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(false);
 
   return (
     <motion.div
@@ -74,6 +76,16 @@ export default function AgentLayout({
           <Button
             size="sm"
             variant="tertiary"
+            className="gap-1.5"
+            aria-label="Files"
+            onPress={() => setFilesOpen(true)}
+          >
+            <LuFolderOpen className="size-4" />
+            <span className="hidden sm:inline">Files</span>
+          </Button>
+          <Button
+            size="sm"
+            variant="tertiary"
             aria-label="Agent settings"
             onPress={() => setSettingsOpen(true)}
           >
@@ -92,6 +104,7 @@ export default function AgentLayout({
         <div className="min-h-0 flex-1">{children}</div>
       </DesktopLockProvider>
       <AgentSettingsModal agentId={id} isOpen={settingsOpen} onOpenChange={setSettingsOpen} />
+      <FileExplorer agentId={id} agentName={id} isOpen={filesOpen} onOpenChange={setFilesOpen} />
       <ChatWidget agentId={id} />
     </motion.div>
   );

@@ -25,6 +25,7 @@ import {
   move as moveFile,
   remove as removeFile,
   fileForDownload,
+  zipDir,
   writeUpload,
   MAX_UPLOAD_BYTES,
 } from './files.js';
@@ -250,6 +251,26 @@ async function handleAgentFiles(
       });
       stream.pipe(res);
       stream.on('error', () => res.destroyed || res.end());
+      return true;
+    }
+    if (op === 'zip') {
+      const { name, stream } = zipDir(root, qpath);
+      // Hold headers until the archive actually starts producing bytes: if 7z
+      // fails to spawn or errors before any output, we can still return a 500
+      // instead of a truncated 200. 'readable' keeps the stream paused so no
+      // chunk is lost between writeHead and pipe.
+      stream.once('readable', () => {
+        if (res.headersSent) return;
+        res.writeHead(200, {
+          'content-type': 'application/zip',
+          'content-disposition': `attachment; filename="${name.replace(/["\\]/g, '_')}"`,
+        });
+        stream.pipe(res);
+      });
+      stream.on('error', () => {
+        if (!res.headersSent) sendJson(res, 500, { error: 'failed to create archive' });
+        else if (!res.destroyed) res.destroy();
+      });
       return true;
     }
     return (sendJson(res, 400, { error: 'unknown op' }), true);

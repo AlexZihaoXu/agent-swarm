@@ -292,6 +292,22 @@ export class AgentManager {
     }
   }
 
+  /** Ensure the agent's `~/.swarm` dir exists AND is owned by the agent user
+   *  (uid 1000). The gateway writes here as root; if the *directory* stays
+   *  root-owned, the agent-user runtime (uid 1000) can't create or delete files
+   *  in it — which silently broke the heartbeat write and the restart-marker
+   *  delete (both done by the runtime). chown the dir, not just the files. */
+  private ensureSwarmDir(id: string): string {
+    const dir = join(this.agentDataDir(id), '.swarm');
+    mkdirSync(dir, { recursive: true });
+    try {
+      chownSync(dir, 1000, 1000);
+    } catch {
+      /* macOS bind-mounts don't enforce ownership; best-effort on Linux */
+    }
+    return dir;
+  }
+
   /** Write the operator's Claude OAuth token to the agent's disk at
    *  `.swarm/auth`; the supervisor injects it as CLAUDE_CODE_OAUTH_TOKEN when it
    *  (re)launches claude (see runtime/server.js settingsEnv). The gateway has the
@@ -299,10 +315,9 @@ export class AgentManager {
    *  on create + every start so a rotated token applies on the next restart. */
   private writeAuthToken(id: string): void {
     const token = getSettings().oauthToken;
-    const dir = join(this.agentDataDir(id), '.swarm');
+    const dir = this.ensureSwarmDir(id);
     const file = join(dir, 'auth');
     try {
-      mkdirSync(dir, { recursive: true });
       if (token) {
         writeFileSync(file, token, { mode: 0o600 });
         // The terminal supervisor runs as the agent user (uid 1000); the gateway
@@ -323,10 +338,9 @@ export class AgentManager {
    *  operator login). Called on create + every start; also backfilled to all
    *  existing agents on gateway boot so running agents keep working. */
   private writeSwarmToken(id: string): void {
-    const dir = join(this.agentDataDir(id), '.swarm');
+    const dir = this.ensureSwarmDir(id);
     const file = join(dir, 'gateway-token');
     try {
-      mkdirSync(dir, { recursive: true });
       writeFileSync(file, swarmToken(), { mode: 0o600 });
       chownSync(file, 1000, 1000);
     } catch {
@@ -340,10 +354,9 @@ export class AgentManager {
    *  distinct from the runtime's own heartbeat-gap resume nudge, which only fires
    *  after real unexpected downtime. The runtime consumes (deletes) the marker. */
   private markDeliberateRestart(id: string): void {
-    const dir = join(this.agentDataDir(id), '.swarm');
+    const dir = this.ensureSwarmDir(id); // dir owned by uid 1000 so the runtime can delete the marker
     const file = join(dir, 'restart');
     try {
-      mkdirSync(dir, { recursive: true });
       writeFileSync(file, String(Date.now()), { mode: 0o644 });
       chownSync(file, 1000, 1000); // readable by the agent-user supervisor (uid 1000)
     } catch {
@@ -373,6 +386,7 @@ export class AgentManager {
         rmSync(file, { force: true });
         return;
       }
+      this.ensureSwarmDir(id); // make sure the dir exists and is agent-owned
       const roles = getRoles(ids);
       const granted = CAPABILITIES.filter((c) => rolesGrant(ids, c.key));
       const perms = granted.length
@@ -388,7 +402,7 @@ export class AgentManager {
         roles.map((r) => `## ${r.name}\n\n${r.description || '(no description)'}`).join('\n\n') +
         perms +
         '\n';
-      mkdirSync(dirname(file), { recursive: true });
+      this.ensureSwarmDir(id); // dir already exists+chowned; keep roles.md write self-contained
       writeFileSync(file, body);
     } catch {
       /* best-effort */

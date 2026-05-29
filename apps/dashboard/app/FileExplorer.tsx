@@ -1,20 +1,36 @@
 'use client';
 
-import { Button, Input, Label, Modal, TextArea, TextField, toast } from '@heroui/react';
+import {
+  Button,
+  Description,
+  Dropdown,
+  Header,
+  Input,
+  Label,
+  Modal,
+  TextArea,
+  TextField,
+  toast,
+} from '@heroui/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  LuCopy,
   LuDownload,
   LuFile,
+  LuFileArchive,
   LuFileText,
   LuFolder,
+  LuFolderOpen,
   LuFolderPlus,
   LuHouse,
   LuPencil,
+  LuSearch,
   LuTrash2,
   LuUpload,
 } from 'react-icons/lu';
 import {
   agentFileDownloadUrl,
+  agentFolderZipUrl,
   deleteAgentFile,
   listAgentFiles,
   mkdirAgentFile,
@@ -25,6 +41,9 @@ import {
   type DirView,
   type FileEntry,
 } from '@/lib/gateway';
+
+/** The path the agent itself sees for its home, used by "Copy path". */
+const AGENT_HOME = '/home/agent';
 
 /** Extensions we open in the built-in text editor; everything else downloads. */
 const TEXT_EXT = new Set([
@@ -139,6 +158,8 @@ export function FileExplorer({
   const [renaming, setRenaming] = useState<string | null>(null); // entry name being renamed
   const [renameValue, setRenameValue] = useState('');
   const [newFolder, setNewFolder] = useState<string | null>(null); // null = not creating
+  const [query, setQuery] = useState(''); // in-folder filter
+  const [menu, setMenu] = useState<{ x: number; y: number; entry: FileEntry } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const load = useCallback(
@@ -160,9 +181,43 @@ export function FileExplorer({
       setEditing(null);
       setRenaming(null);
       setNewFolder(null);
+      setQuery('');
       load('');
     }
   }, [isOpen, load]);
+
+  // Reset the filter whenever we change folders.
+  useEffect(() => setQuery(''), [cwd]);
+
+  const copyPath = (name: string) => {
+    const full = `${AGENT_HOME}/${join(cwd, name)}`;
+    navigator.clipboard
+      .writeText(full)
+      .then(() => toast.success('Path copied.'))
+      .catch(() => toast.warning('Could not copy to clipboard.'));
+  };
+  const startRename = (name: string) => {
+    setRenaming(name);
+    setRenameValue(name);
+  };
+  const removeEntry = (e: FileEntry) => {
+    if (confirm(`Delete "${e.name}"${e.dir ? ' and its contents' : ''}?`))
+      void run(() => deleteAgentFile(agentId, join(cwd, e.name)));
+  };
+
+  // Right-click context-menu actions, keyed by Dropdown.Item id.
+  const onMenuAction = (key: string, e: FileEntry) => {
+    setMenu(null);
+    const rel = join(cwd, e.name);
+    if (key === 'open') openEntry(e);
+    else if (key === 'download')
+      window.location.href = e.dir
+        ? agentFolderZipUrl(agentId, rel)
+        : agentFileDownloadUrl(agentId, rel);
+    else if (key === 'copy') copyPath(e.name);
+    else if (key === 'rename') startRename(e.name);
+    else if (key === 'delete') removeEntry(e);
+  };
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -204,17 +259,24 @@ export function FileExplorer({
   };
 
   const segments = cwd ? cwd.split('/') : [];
+  const q = query.trim().toLowerCase();
+  const entries = q
+    ? (view?.entries ?? []).filter((e) => e.name.toLowerCase().includes(q))
+    : (view?.entries ?? []);
 
   return (
     <Modal>
       <Modal.Backdrop isOpen={isOpen} onOpenChange={(o) => !o && onOpenChange(false)}>
         <Modal.Container placement="center">
-          <Modal.Dialog className="sm:max-w-[760px]">
+          <Modal.Dialog className="max-h-[88vh] sm:max-w-[760px]">
             <Modal.CloseTrigger />
             <Modal.Header>
               <Modal.Heading>Files — {agentName}</Modal.Heading>
             </Modal.Header>
-            <Modal.Body className="flex h-[70vh] flex-col gap-3 overflow-hidden">
+            <Modal.Body
+              className="flex max-h-[74vh] min-h-0 flex-1 flex-col gap-3 overflow-hidden"
+              onContextMenu={(e) => e.preventDefault()}
+            >
               {editing ? (
                 <EditorPane
                   agentId={agentId}
@@ -303,18 +365,37 @@ export function FileExplorer({
                     </div>
                   )}
 
+                  {/* Search within the current folder */}
+                  <div className="relative">
+                    <LuSearch className="text-muted pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
+                    <Input
+                      placeholder="Search this folder…"
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Escape' && setQuery('')}
+                      className="pl-8"
+                    />
+                  </div>
+
                   {/* Listing */}
                   <div className="border-separator min-h-0 flex-1 overflow-y-auto rounded-lg border">
                     {loading ? (
                       <p className="text-muted p-6 text-center text-sm">Loading…</p>
                     ) : view && view.entries.length === 0 ? (
                       <p className="text-muted p-6 text-center text-sm">Empty folder.</p>
+                    ) : entries.length === 0 ? (
+                      <p className="text-muted p-6 text-center text-sm">No matches.</p>
                     ) : (
                       <ul className="divide-separator divide-y">
-                        {view?.entries.map((e) => (
+                        {entries.map((e) => (
                           <li
                             key={e.name}
                             className="hover:bg-surface-secondary/50 group flex items-center gap-3 px-3 py-2"
+                            onContextMenu={(ev) => {
+                              ev.preventDefault();
+                              ev.stopPropagation();
+                              setMenu({ x: ev.clientX, y: ev.clientY, entry: e });
+                            }}
                           >
                             <span className="text-muted shrink-0">
                               {e.dir ? (
@@ -365,36 +446,35 @@ export function FileExplorer({
                               {fmtDate(e.mtime)}
                             </span>
                             <span className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-                              {!e.dir && (
-                                <a
-                                  href={agentFileDownloadUrl(agentId, join(cwd, e.name))}
-                                  className="text-muted hover:text-foreground rounded p-1"
-                                  aria-label={`Download ${e.name}`}
-                                >
+                              <a
+                                href={
+                                  e.dir
+                                    ? agentFolderZipUrl(agentId, join(cwd, e.name))
+                                    : agentFileDownloadUrl(agentId, join(cwd, e.name))
+                                }
+                                className="text-muted hover:text-foreground rounded p-1"
+                                aria-label={
+                                  e.dir ? `Download ${e.name} as zip` : `Download ${e.name}`
+                                }
+                                title={e.dir ? 'Download as .zip' : 'Download'}
+                              >
+                                {e.dir ? (
+                                  <LuFileArchive className="size-4" />
+                                ) : (
                                   <LuDownload className="size-4" />
-                                </a>
-                              )}
+                                )}
+                              </a>
                               <button
                                 aria-label={`Rename ${e.name}`}
                                 className="text-muted hover:text-foreground rounded p-1"
-                                onClick={() => {
-                                  setRenaming(e.name);
-                                  setRenameValue(e.name);
-                                }}
+                                onClick={() => startRename(e.name)}
                               >
                                 <LuPencil className="size-4" />
                               </button>
                               <button
                                 aria-label={`Delete ${e.name}`}
                                 className="text-muted hover:text-danger rounded p-1"
-                                onClick={() => {
-                                  if (
-                                    confirm(
-                                      `Delete "${e.name}"${e.dir ? ' and its contents' : ''}?`,
-                                    )
-                                  )
-                                    void run(() => deleteAgentFile(agentId, join(cwd, e.name)));
-                                }}
+                                onClick={() => removeEntry(e)}
                               >
                                 <LuTrash2 className="size-4" />
                               </button>
@@ -404,6 +484,96 @@ export function FileExplorer({
                       </ul>
                     )}
                   </div>
+
+                  {/* Right-click context menu (anchored to an invisible element
+                      at the cursor, mirroring the agent-card menu). */}
+                  <Dropdown isOpen={menu !== null} onOpenChange={(o) => !o && setMenu(null)}>
+                    <Button
+                      aria-hidden="true"
+                      excludeFromTabOrder
+                      style={{
+                        position: 'fixed',
+                        left: menu?.x ?? 0,
+                        top: menu?.y ?? 0,
+                        width: 0,
+                        height: 0,
+                        minHeight: 0,
+                        padding: 0,
+                        opacity: 0,
+                        pointerEvents: 'none',
+                      }}
+                    />
+                    {menu && (
+                      <Dropdown.Popover>
+                        <Dropdown.Menu onAction={(key) => onMenuAction(String(key), menu.entry)}>
+                          <Dropdown.Section>
+                            <Header>{menu.entry.dir ? 'Folder' : 'File'}</Header>
+                            <Dropdown.Item id="open" textValue="Open">
+                              <div className="flex h-8 items-start justify-center pt-px">
+                                {menu.entry.dir ? (
+                                  <LuFolderOpen className="text-muted size-4 shrink-0" />
+                                ) : (
+                                  <LuFileText className="text-muted size-4 shrink-0" />
+                                )}
+                              </div>
+                              <div className="flex flex-col">
+                                <Label>{menu.entry.dir ? 'Open' : 'Open / edit'}</Label>
+                                <Description>
+                                  {menu.entry.dir ? 'Browse this folder' : 'Edit or download'}
+                                </Description>
+                              </div>
+                            </Dropdown.Item>
+                            <Dropdown.Item id="download" textValue="Download">
+                              <div className="flex h-8 items-start justify-center pt-px">
+                                {menu.entry.dir ? (
+                                  <LuFileArchive className="text-muted size-4 shrink-0" />
+                                ) : (
+                                  <LuDownload className="text-muted size-4 shrink-0" />
+                                )}
+                              </div>
+                              <div className="flex flex-col">
+                                <Label>{menu.entry.dir ? 'Download as .zip' : 'Download'}</Label>
+                                <Description>
+                                  {menu.entry.dir ? 'Zip the folder' : 'Save to your computer'}
+                                </Description>
+                              </div>
+                            </Dropdown.Item>
+                            <Dropdown.Item id="copy" textValue="Copy path">
+                              <div className="flex h-8 items-start justify-center pt-px">
+                                <LuCopy className="text-muted size-4 shrink-0" />
+                              </div>
+                              <div className="flex flex-col">
+                                <Label>Copy path</Label>
+                                <Description>The agent&apos;s filesystem path</Description>
+                              </div>
+                            </Dropdown.Item>
+                            <Dropdown.Item id="rename" textValue="Rename">
+                              <div className="flex h-8 items-start justify-center pt-px">
+                                <LuPencil className="text-muted size-4 shrink-0" />
+                              </div>
+                              <div className="flex flex-col">
+                                <Label>Rename</Label>
+                              </div>
+                            </Dropdown.Item>
+                          </Dropdown.Section>
+                          <Dropdown.Section>
+                            <Header>Danger zone</Header>
+                            <Dropdown.Item id="delete" textValue="Delete" variant="danger">
+                              <div className="flex h-8 items-start justify-center pt-px">
+                                <LuTrash2 className="size-4 shrink-0" />
+                              </div>
+                              <div className="flex flex-col">
+                                <Label>Delete</Label>
+                                <Description>
+                                  {menu.entry.dir ? 'Remove folder + contents' : 'Remove this file'}
+                                </Description>
+                              </div>
+                            </Dropdown.Item>
+                          </Dropdown.Section>
+                        </Dropdown.Menu>
+                      </Dropdown.Popover>
+                    )}
+                  </Dropdown>
                 </>
               )}
             </Modal.Body>

@@ -225,10 +225,18 @@ export function DashboardMetrics() {
   }, []);
 
   if (!m) return null;
-  const perAgent = m.agents
-    .filter((a) => a.tokens > 0)
-    .map((a) => ({ name: a.name, tokens: a.tokens, cost: a.cost }))
-    .sort((a, b) => b.tokens - a.tokens);
+  // Collapse same-named agents (an agent recreated under the same display name
+  // leaves two ids) so the bar chart shows one bar per name, summed.
+  const tokenByName = new Map<string, { name: string; tokens: number; cost: number }>();
+  for (const a of m.agents) {
+    if (a.tokens <= 0) continue;
+    const cur = tokenByName.get(a.name);
+    if (cur) {
+      cur.tokens += a.tokens;
+      cur.cost += a.cost;
+    } else tokenByName.set(a.name, { name: a.name, tokens: a.tokens, cost: a.cost });
+  }
+  const perAgent = [...tokenByName.values()].sort((a, b) => b.tokens - a.tokens);
   const overTime = m.buckets.map((b) => ({ label: fmtHour(b.t), tokens: b.tokens, cost: b.cost }));
   const totalTokens = m.agents.reduce((s, a) => s + a.tokens, 0);
   const totalCost = m.agents.reduce((s, a) => s + a.cost, 0);

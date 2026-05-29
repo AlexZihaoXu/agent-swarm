@@ -16,8 +16,10 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import type { ReadStream } from 'node:fs';
+import type { Readable } from 'node:stream';
 
 /** Max size we'll return for in-browser text editing. */
 export const MAX_TEXT_BYTES = 2 * 1024 * 1024;
@@ -135,6 +137,29 @@ export function fileForDownload(
   const f = safe(root, rel);
   if (!existsSync(f) || !statSync(f).isFile()) throw err('not a file', 404);
   return { path: f, name: basename(f), stream: createReadStream(f) };
+}
+
+/** Stream a folder as a .zip download. Uses 7z (p7zip-full is in the image),
+ *  archiving the folder's contents with cwd set to the folder so entries inside
+ *  the zip are relative to it. Returns the suggested filename + the stdout stream
+ *  (pure zip bytes; logs/progress go to the ignored stderr). */
+export function zipDir(root: string, rel: string): { name: string; stream: Readable } {
+  const dir = safe(root, rel);
+  if (!existsSync(dir) || !statSync(dir).isDirectory()) throw err('not a directory', 404);
+  const name = `${dir === root ? 'home' : basename(dir)}.zip`;
+  const child = spawn('7z', ['a', '-tzip', '-mx=1', '-so', 'archive.zip', '.'], {
+    cwd: dir,
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  const stream = child.stdout;
+  // Surface a failed spawn (e.g. 7z missing → ENOENT) or a non-zero exit as a
+  // stream error, so the caller can still send a 5xx if it hasn't sent headers
+  // yet (rather than streaming an empty/truncated "zip" under a 200).
+  child.on('error', (e) => stream.destroy(e));
+  child.on('close', (code) => {
+    if (code) stream.destroy(new Error(`7z exited with code ${code}`));
+  });
+  return { name, stream };
 }
 
 /** Save an uploaded buffer into `relDir` under a sanitized filename. */
