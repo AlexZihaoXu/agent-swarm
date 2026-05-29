@@ -5,8 +5,23 @@ import { motion } from 'framer-motion';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { LuChevronLeft } from 'react-icons/lu';
-import { getSettings, updateSettings, type Settings } from '@/lib/gateway';
+import {
+  getSettings,
+  updateSettings,
+  listRoles,
+  createRole,
+  updateRole,
+  deleteRole,
+  listGroups,
+  createGroup,
+  updateGroup,
+  deleteGroup,
+  listCapabilities,
+  type CapabilityInfo,
+  type Settings,
+} from '@/lib/gateway';
 import { TokenExpiryBanner } from '@/app/TokenExpiryBanner';
+import { RegistryCard } from '@/app/RolesGroups';
 
 type Status = { kind: 'ok' | 'warn' | 'err'; msg: string } | null;
 
@@ -15,6 +30,7 @@ export default function SettingsPage() {
   const [token, setToken] = useState('');
   const [status, setStatus] = useState<Status>(null);
   const [busy, setBusy] = useState(false);
+  const [capabilities, setCapabilities] = useState<CapabilityInfo[]>([]);
 
   const load = () =>
     getSettings()
@@ -23,6 +39,9 @@ export default function SettingsPage() {
 
   useEffect(() => {
     void load();
+    void listCapabilities()
+      .then(setCapabilities)
+      .catch(() => {});
   }, []);
 
   const save = async () => {
@@ -108,6 +127,30 @@ export default function SettingsPage() {
           </Button>
         </Card.Footer>
       </Card>
+
+      <div className="mt-6">
+        <RegistryCard
+          title="Roles"
+          description="Named responsibilities agents read to understand what they do. Assign them per agent in its settings."
+          noun="role"
+          list={listRoles}
+          onCreate={createRole}
+          onUpdate={updateRole}
+          onDelete={deleteRole}
+          capabilities={capabilities}
+        />
+      </div>
+      <div className="mt-6">
+        <RegistryCard
+          title="Groups"
+          description="Scope swarm communication — agents can only message / share files with peers in a shared group."
+          noun="group"
+          list={listGroups}
+          onCreate={createGroup}
+          onUpdate={updateGroup}
+          onDelete={deleteGroup}
+        />
+      </div>
     </motion.main>
   );
 }

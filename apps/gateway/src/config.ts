@@ -57,6 +57,10 @@ export const config = {
    *  the dashboard restores its graphs after a restart. Beside the settings file
    *  (i.e. in the gateway-data volume). */
   stateFile: process.env.GATEWAY_STATE_FILE ?? join(dirname(settingsFile), 'gateway-state.json'),
+  /** Global role registry (name + description), assignable to agents. */
+  rolesFile: process.env.ROLES_FILE ?? join(dirname(settingsFile), 'roles.json'),
+  /** Global group registry (scopes swarm communication). */
+  groupsFile: process.env.GROUPS_FILE ?? join(dirname(settingsFile), 'groups.json'),
   /**
    * Persistent agent disks. Each agent's home is bind-mounted from
    * `${swarmDataHost}/agents/<id>` on the HOST (the daemon resolves this), and

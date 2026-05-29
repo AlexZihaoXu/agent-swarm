@@ -17,7 +17,67 @@ export interface Agent {
   autoCompactPct?: number | null;
   /** Configured model override (ANTHROPIC_MODEL); null = claude default. */
   model?: string | null;
+  /** Assigned role ids + group ids. */
+  roles?: string[];
+  groups?: string[];
 }
+
+// --- Roles & groups --------------------------------------------------------
+
+/** A special capability a role can grant over the rest of the swarm. */
+export type Capability = 'manage_agents' | 'view_screen';
+
+export interface Role {
+  id: string;
+  name: string;
+  description: string;
+  /** Special capabilities this role grants (roles only; groups never have any). */
+  permissions?: Capability[];
+  createdAt: number;
+}
+export type Group = Role; // same shape
+
+export interface CapabilityInfo {
+  key: Capability;
+  label: string;
+  description: string;
+}
+export const listCapabilities = () => api<CapabilityInfo[]>('/api/capabilities');
+
+export const listRoles = () => api<Role[]>('/api/roles');
+export const createRole = (name: string, description: string, permissions?: Capability[]) =>
+  api<Role>('/api/roles', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name, description, permissions }),
+  });
+export const updateRole = (
+  id: string,
+  patch: { name?: string; description?: string; permissions?: Capability[] },
+) =>
+  api<Role>(`/api/roles/${id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+export const deleteRole = (id: string) =>
+  api<{ ok: true }>(`/api/roles/${id}`, { method: 'DELETE' });
+
+export const listGroups = () => api<Group[]>('/api/groups');
+export const createGroup = (name: string, description: string) =>
+  api<Group>('/api/groups', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name, description }),
+  });
+export const updateGroup = (id: string, patch: { name?: string; description?: string }) =>
+  api<Group>(`/api/groups/${id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+export const deleteGroup = (id: string) =>
+  api<{ ok: true }>(`/api/groups/${id}`, { method: 'DELETE' });
 
 export interface CreateAgentOptions {
   hostname?: string;
@@ -30,6 +90,9 @@ export interface CreateAgentOptions {
   timezone?: string;
   /** Initial model override (ANTHROPIC_MODEL alias/id); omit for default. */
   model?: string;
+  /** Role + group ids to assign at creation. */
+  roles?: string[];
+  groups?: string[];
 }
 
 /** Model choices shared by the create + settings UIs ('' = claude's default).
@@ -324,7 +387,13 @@ export const getAgent = (id: string) => api<Agent>(`/api/agents/${id}`);
  *  Live for the name; the auto-compact % applies on the next stop→start. */
 export const updateAgent = (
   id: string,
-  patch: { username?: string; autoCompactPct?: number | null; model?: string | null },
+  patch: {
+    username?: string;
+    autoCompactPct?: number | null;
+    model?: string | null;
+    roles?: string[];
+    groups?: string[];
+  },
 ) =>
   api<Agent>(`/api/agents/${id}`, {
     method: 'PATCH',

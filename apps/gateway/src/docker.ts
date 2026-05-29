@@ -22,8 +22,11 @@ import { getSettings } from './settings.js';
 import { LATEST_VERSION, migrations, VERSION_MARKER, type MigrationCtx } from './migrations.js';
 import { DiscordBridge, sanitizeInbound, testDiscordToken } from './discord-bridge.js';
 import * as integrations from './integrations.js';
+import { CAPABILITIES, getRoles, rolesGrant } from './roles.js';
+import { canCommunicate } from './groups.js';
 import type {
   Agent,
+  Capability,
   CreateAgentOptions,
   IntegrationPatch,
   IntegrationPublic,
@@ -64,6 +67,9 @@ interface AgentIdentity {
   /** ANTHROPIC_MODEL the agent's claude runs (alias like "opus"/"sonnet"/"haiku"
    *  or a full model id); null/empty = the claude default. */
   model?: string | null;
+  /** Assigned role ids + group ids (resolved against the global registries). */
+  roles?: string[];
+  groups?: string[];
 }
 
 /** Per-million-token USD pricing (mirrors the agent runtime's modelRates).
@@ -164,6 +170,8 @@ export class AgentManager {
       autoCompactPct:
         patch.autoCompactPct !== undefined ? patch.autoCompactPct : (cur?.autoCompactPct ?? null),
       model: patch.model !== undefined ? patch.model : (cur?.model ?? null),
+      roles: patch.roles !== undefined ? patch.roles : (cur?.roles ?? []),
+      groups: patch.groups !== undefined ? patch.groups : (cur?.groups ?? []),
     };
     mkdirSync(dirname(this.identityFile(id)), { recursive: true });
     writeFileSync(this.identityFile(id), JSON.stringify(next, null, 2));
@@ -184,7 +192,13 @@ export class AgentManager {
    *  (i.e. on the next stop→start). */
   async patchAgent(
     id: string,
-    patch: { username?: string; autoCompactPct?: number | null; model?: string | null },
+    patch: {
+      username?: string;
+      autoCompactPct?: number | null;
+      model?: string | null;
+      roles?: string[];
+      groups?: string[];
+    },
   ): Promise<Agent> {
     if (!existsSync(this.agentDataDir(id)))
       throw Object.assign(new Error('agent not found'), { statusCode: 404 });
@@ -206,9 +220,23 @@ export class AgentManager {
       const m = patch.model?.trim();
       idPatch.model = m ? m : null; // empty/whitespace → clear back to default
     }
+    if (Array.isArray(patch.roles)) idPatch.roles = patch.roles;
+    if (Array.isArray(patch.groups)) idPatch.groups = patch.groups;
     const prevModel = this.readIdentity(id)?.model ?? null;
+    const prevRoles = JSON.stringify(this.readIdentity(id)?.roles ?? []);
     this.writeIdentity(id, idPatch);
     const info = await this.docker.getContainer(this.containerName(id)).inspect();
+
+    // Roles changed → rewrite the agent's roles doc and nudge it to (re)read.
+    if (patch.roles !== undefined && JSON.stringify(idPatch.roles ?? []) !== prevRoles) {
+      this.writeRolesDoc(id);
+      if (info.State.Running) {
+        this.queueDeliver(id, {
+          text: `**[sys://role]** Your roles were updated. Read ~/.swarm/roles.md to understand your responsibilities.`,
+          attachments: [],
+        });
+      }
+    }
 
     // Switch the model LIVE by typing `/model <x>` into the running claude
     // session — env (ANTHROPIC_MODEL) only takes effect on a fresh boot, and a
@@ -261,6 +289,58 @@ export class AgentManager {
       mkdirSync(dir, { recursive: true });
       if (token) writeFileSync(file, token, { mode: 0o600 });
       else rmSync(file, { force: true }); // no token configured → ensure none stale
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  /** Write the agent's assigned roles + descriptions to ~/.swarm/roles.md so the
+   *  agent can read what it's expected to do. Rewritten on assignment/role edits
+   *  and on (re)start. Removed when the agent has no roles. */
+  writeRolesDoc(id: string): void {
+    const ids = this.readIdentity(id)?.roles ?? [];
+    const file = join(this.agentDataDir(id), '.swarm', 'roles.md');
+    try {
+      if (!ids.length) {
+        rmSync(file, { force: true });
+        return;
+      }
+      const roles = getRoles(ids);
+      const granted = CAPABILITIES.filter((c) => rolesGrant(ids, c.key));
+      const perms = granted.length
+        ? `\n\n## Your special permissions\n\n` +
+          `Your role(s) grant you these abilities over agents that share a group with you ` +
+          `(group membership scopes who you can act on) — use the swarm tools to exercise them:\n\n` +
+          granted.map((c) => `- **${c.label}** — ${c.description}`).join('\n') +
+          '\n'
+        : '';
+      const body =
+        `# Your roles\n\n` +
+        `You have been assigned the following role(s) in this swarm. Act according to them.\n\n` +
+        roles.map((r) => `## ${r.name}\n\n${r.description || '(no description)'}`).join('\n\n') +
+        perms +
+        '\n';
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, body);
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  /** Rewrite roles docs + nudge every running agent assigned a given role (used
+   *  when a role's description changes or it's deleted). */
+  async refreshAgentsWithRole(roleId: string): Promise<void> {
+    try {
+      for (const a of await this.list()) {
+        if (!(this.readIdentity(a.id)?.roles ?? []).includes(roleId)) continue;
+        this.writeRolesDoc(a.id);
+        if (a.status === 'running') {
+          this.queueDeliver(a.id, {
+            text: `**[sys://role]** A role you hold was updated. Re-read ~/.swarm/roles.md.`,
+            attachments: [],
+          });
+        }
+      }
     } catch {
       /* best-effort */
     }
@@ -804,8 +884,15 @@ export class AgentManager {
     // it. Write the identity + auth token afterwards so the agent can read its
     // own name/id and authenticate (CLAUDE_CODE_OAUTH_TOKEN).
     await this.seedAgentDisk(id);
-    this.writeIdentity(id, { name: username, timezone: timezone ?? null, model: model ?? null });
+    this.writeIdentity(id, {
+      name: username,
+      timezone: timezone ?? null,
+      model: model ?? null,
+      roles: Array.isArray(opts.roles) ? opts.roles : [],
+      groups: Array.isArray(opts.groups) ? opts.groups : [],
+    });
     this.writeAuthToken(id);
+    this.writeRolesDoc(id);
 
     const container = await this.docker.createContainer({
       name,
@@ -869,13 +956,17 @@ export class AgentManager {
         timezone: c.Labels?.[TZ_LABEL],
         autoCompactPct: this.readIdentity(id)?.autoCompactPct ?? null,
         model: this.readIdentity(id)?.model ?? null,
+        roles: this.readIdentity(id)?.roles ?? [],
+        groups: this.readIdentity(id)?.groups ?? [],
       };
     });
   }
 
   async start(id: string): Promise<void> {
-    // Refresh the auth token onto the disk so a restart picks up any change.
+    // Refresh the auth token + roles doc onto the disk so a restart picks up any
+    // change (e.g. an edited role description).
     this.writeAuthToken(id);
+    this.writeRolesDoc(id);
     await this.docker.getContainer(this.containerName(id)).start();
     // Reconnect any `active` integrations once the terminal is reachable.
     void this.reconnectIntegrations(id);
@@ -994,7 +1085,7 @@ export class AgentManager {
    *  replies with its own swarm_send). `from`/`text` are sanitized so an agent
    *  can't forge a trusted routing prefix. Queued (non-interrupt) so coordinating
    *  agents don't violently interrupt each other's work. */
-  async sendSwarmMessage(from: string, to: string, text: string): Promise<void> {
+  async sendSwarmMessage(fromId: string, from: string, to: string, text: string): Promise<void> {
     const sender = sanitizeInbound(from).slice(0, 64) || 'agent';
     const body = sanitizeInbound(text);
     if (!body) throw Object.assign(new Error('text required'), { statusCode: 400 });
@@ -1002,7 +1093,17 @@ export class AgentManager {
     if (!target) throw Object.assign(new Error(`agent not found: ${to}`), { statusCode: 404 });
     if (target.status !== 'running')
       throw Object.assign(new Error('target agent is not running'), { statusCode: 409 });
+    if (!this.sharesGroup(fromId, target.id))
+      throw Object.assign(new Error(`you don't share a group with ${to}`), { statusCode: 403 });
     this.queueDeliver(target.id, { text: `**[swarm://${sender}]** ${body}`, attachments: [] });
+  }
+
+  /** Whether two agents may swarm together (share a group, or both ungrouped). */
+  private sharesGroup(aId: string, bId: string): boolean {
+    return canCommunicate(
+      this.readIdentity(aId)?.groups ?? [],
+      this.readIdentity(bId)?.groups ?? [],
+    );
   }
 
   /** Swarm file-share: copy a file from the sender agent's home to the target
@@ -1024,6 +1125,8 @@ export class AgentManager {
     if (!target) throw Object.assign(new Error(`agent not found: ${to}`), { statusCode: 404 });
     if (target.status !== 'running')
       throw Object.assign(new Error('target agent is not running'), { statusCode: 409 });
+    if (!this.sharesGroup(fromId, target.id))
+      throw Object.assign(new Error(`you don't share a group with ${to}`), { statusCode: 403 });
 
     // Map the in-container path to the mounted disk (home == the persistent disk).
     const HOME = '/home/agent/';
@@ -1054,6 +1157,76 @@ export class AgentManager {
       attachments: [],
     });
     return inContainer;
+  }
+
+  /** Whether an agent's assigned roles grant a special capability. */
+  private agentCan(id: string, cap: Capability): boolean {
+    return rolesGrant(this.readIdentity(id)?.roles ?? [], cap);
+  }
+
+  /** Resolve a peer by id or display name (404 if unknown). Used by the
+   *  capability-gated cross-agent actions below. */
+  private async resolvePeer(to: string): Promise<Agent> {
+    const target = (await this.list()).find((a) => a.id === to || a.username === to);
+    if (!target) throw Object.assign(new Error(`agent not found: ${to}`), { statusCode: 404 });
+    return target;
+  }
+
+  /** Capability-gated lifecycle control over a peer (the `manage_agents` role
+   *  permission), scoped to agents that share a group with the caller. Start/stop
+   *  only — never remove, by design. */
+  async manageAgent(fromId: string, to: string, action: 'start' | 'stop'): Promise<Agent> {
+    if (!this.agentCan(fromId, 'manage_agents'))
+      throw Object.assign(new Error('your role does not permit managing agents'), {
+        statusCode: 403,
+      });
+    if (action !== 'start' && action !== 'stop')
+      throw Object.assign(new Error("action must be 'start' or 'stop'"), { statusCode: 400 });
+    const target = await this.resolvePeer(to);
+    if (target.id === fromId)
+      throw Object.assign(new Error('cannot manage yourself'), { statusCode: 400 });
+    if (!this.sharesGroup(fromId, target.id))
+      throw Object.assign(new Error(`you don't share a group with ${to}`), { statusCode: 403 });
+    if (action === 'start') await this.start(target.id);
+    else await this.stop(target.id);
+    return this.getAgent(target.id);
+  }
+
+  /** Capability-gated screen capture of a peer (the `view_screen` role
+   *  permission): grab the target's live screenshot via its terminal supervisor
+   *  and save it to the caller's `~/.swarm/views/`. Returns the in-container path
+   *  the caller can Read. */
+  async viewAgent(fromId: string, to: string): Promise<string> {
+    if (!this.agentCan(fromId, 'view_screen'))
+      throw Object.assign(new Error('your role does not permit viewing screens'), {
+        statusCode: 403,
+      });
+    if (!existsSync(this.agentDataDir(fromId)))
+      throw Object.assign(new Error('caller not found'), { statusCode: 404 });
+    const target = await this.resolvePeer(to);
+    if (!this.sharesGroup(fromId, target.id))
+      throw Object.assign(new Error(`you don't share a group with ${to}`), { statusCode: 403 });
+    if (target.status !== 'running')
+      throw Object.assign(new Error('target agent is not running'), { statusCode: 409 });
+
+    const { host, port } = await this.resolveTarget(target.id, 'terminal');
+    const resp = await fetch(`http://${host}:${port}/api/screenshot`);
+    if (!resp.ok)
+      throw Object.assign(new Error(`could not capture ${to}'s screen`), { statusCode: 502 });
+    const buf = Buffer.from(await resp.arrayBuffer());
+    const ext = (resp.headers.get('content-type') || '').includes('png') ? 'png' : 'jpg';
+
+    const destDir = join(this.agentDataDir(fromId), '.swarm', 'views');
+    mkdirSync(destDir, { recursive: true });
+    const safeName = (target.username || target.id).replace(/[^\w.-]/g, '_');
+    const dest = join(destDir, `${safeName}-${Date.now()}.${ext}`);
+    writeFileSync(dest, buf);
+    try {
+      chownSync(dest, 1000, 1000);
+    } catch {
+      /* best-effort */
+    }
+    return `/home/agent/.swarm/views/${basename(dest)}`;
   }
 
   /** On gateway startup, reconnect bridges for every running agent that has an
@@ -1470,6 +1643,8 @@ export class AgentManager {
       timezone: labels[TZ_LABEL],
       autoCompactPct: this.readIdentity(id)?.autoCompactPct ?? null,
       model: this.readIdentity(id)?.model ?? null,
+      roles: this.readIdentity(id)?.roles ?? [],
+      groups: this.readIdentity(id)?.groups ?? [],
     };
   }
 }

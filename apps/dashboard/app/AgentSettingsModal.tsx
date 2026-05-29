@@ -8,11 +8,15 @@ import {
   startAgent,
   stopAgent,
   updateAgent,
+  listRoles,
+  listGroups,
   MODEL_OPTIONS,
   type Agent,
+  type Role,
 } from '@/lib/gateway';
 import { randomName } from '@/lib/names';
 import { IntegrationsPanel } from './IntegrationsPanel';
+import { RegistrySelect } from './RolesGroups';
 
 /** Slider default when first enabling the override (a touch earlier than the
  *  ~83% claude default, so it's a meaningful change). */
@@ -44,9 +48,24 @@ export function AgentSettingsModal({
   const [override, setOverride] = useState(false);
   const [pct, setPct] = useState(DEFAULT_PCT);
   const [model, setModel] = useState(''); // '' = claude default
+  const [roles, setRoles] = useState<string[]>([]);
+  const [groups, setGroups] = useState<string[]>([]);
+  const [allRoles, setAllRoles] = useState<Role[]>([]);
+  const [allGroups, setAllGroups] = useState<Role[]>([]);
   const [busy, setBusy] = useState(false);
   const [phase, setPhase] = useState<'form' | 'restart'>('form');
   const [tab, setTab] = useState('general');
+
+  // Load the global role/group registries for the assignment selectors.
+  useEffect(() => {
+    if (!isOpen) return;
+    void listRoles()
+      .then(setAllRoles)
+      .catch(() => {});
+    void listGroups()
+      .then(setAllGroups)
+      .catch(() => {});
+  }, [isOpen]);
 
   // Load fresh settings each time the modal opens.
   useEffect(() => {
@@ -63,6 +82,8 @@ export function AgentSettingsModal({
         setOverride(has);
         setPct(has ? a.autoCompactPct! : DEFAULT_PCT);
         setModel(a.model ?? '');
+        setRoles(a.roles ?? []);
+        setGroups(a.groups ?? []);
       })
       .catch(() => {});
     return () => {
@@ -88,6 +109,8 @@ export function AgentSettingsModal({
         username: name.trim(),
         autoCompactPct: nextPct,
         model: model || null,
+        roles,
+        groups,
       });
       onChanged?.();
       if (modelChanged && running) {
@@ -202,6 +225,21 @@ export function AgentSettingsModal({
                           &ldquo;Default&rdquo; uses claude&apos;s own default.
                         </p>
                       </div>
+
+                      <RegistrySelect
+                        label="Roles"
+                        hint="No roles defined yet — create them in Settings."
+                        options={allRoles}
+                        value={roles}
+                        onChange={setRoles}
+                      />
+                      <RegistrySelect
+                        label="Groups"
+                        hint="No groups defined yet — create them in Settings."
+                        options={allGroups}
+                        value={groups}
+                        onChange={setGroups}
+                      />
 
                       <div className="space-y-3">
                         <Switch isSelected={override} onChange={setOverride}>

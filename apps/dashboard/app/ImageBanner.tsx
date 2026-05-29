@@ -1,6 +1,6 @@
 'use client';
 
-import { Button, Modal, Spinner } from '@heroui/react';
+import { Alert, Button, Modal, Spinner } from '@heroui/react';
 import { motion } from 'framer-motion';
 import { useEffect, useRef, useState } from 'react';
 import { buildImage, getImageStatus } from '@/lib/gateway';
@@ -45,18 +45,32 @@ export function ImageBanner({ image, onBuilt }: { image: string; onBuilt: () => 
       transition={{ duration: 0.2 }}
       className="mb-6"
     >
-      <div className="border-warning bg-warning-soft text-warning-soft-foreground flex items-center gap-4 border px-4 py-3">
-        <div className="flex-1">
-          <p className="text-sm font-semibold">Agent image not built</p>
-          <p className="text-xs opacity-80">
+      <Alert status="warning">
+        <Alert.Indicator />
+        <Alert.Content>
+          <Alert.Title>Agent image not built</Alert.Title>
+          <Alert.Description>
             <span className="font-mono">{image}</span> isn&apos;t present yet — build it before
             creating agents.
-          </p>
-        </div>
-        <Button size="sm" onPress={start} isDisabled={phase === 'building'}>
+          </Alert.Description>
+          <Button
+            className="mt-2 sm:hidden"
+            size="sm"
+            onPress={start}
+            isDisabled={phase === 'building'}
+          >
+            {phase === 'building' ? 'Building…' : 'Build image'}
+          </Button>
+        </Alert.Content>
+        <Button
+          className="hidden sm:block"
+          size="sm"
+          onPress={start}
+          isDisabled={phase === 'building'}
+        >
           {phase === 'building' ? 'Building…' : 'Build image'}
         </Button>
-      </div>
+      </Alert>
 
       <Modal>
         <Modal.Backdrop isOpen={open} onOpenChange={setOpen} isDismissable={phase !== 'building'}>

@@ -4,6 +4,8 @@ import { basename } from 'node:path';
 import type { AgentManager } from './docker.js';
 import { config } from './config.js';
 import { getSettings, updateSettings, tokenDaysLeft, TOKEN_WARN_DAYS } from './settings.js';
+import { CAPABILITIES, listRoles, createRole, updateRole, deleteRole } from './roles.js';
+import { listGroups, createGroup, updateGroup, deleteGroup } from './groups.js';
 import type { DiscordRules, IntegrationType } from './types.js';
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -39,6 +41,9 @@ const INTEGRATION_API =
   /^\/api\/agents\/([^/]+)\/integrations(?:\/([^/]+)(?:\/(test|apply|disable))?)?$/;
 // /api/packages, /api/packages/upload, /api/packages/:file[/(download|import)]
 const PACKAGE_API = /^\/api\/packages(?:\/([^/]+)(?:\/(download|import))?)?$/;
+// /api/roles, /api/roles/:id  •  /api/groups, /api/groups/:id
+const ROLE_API = /^\/api\/roles(?:\/([^/]+))?$/;
+const GROUP_API = /^\/api\/groups(?:\/([^/]+))?$/;
 
 /**
  * Handle the REST API. Returns true if the request was an /api/* route (and has
@@ -58,6 +63,8 @@ export async function handleApi(
     if (pathname === '/api/settings') return await handleSettings(req, res, manager, method);
     if (pathname === '/api/host') return await handleHost(res, manager, method);
     if (pathname === '/api/metrics') return await handleMetrics(res, manager, method);
+    if (pathname.startsWith('/api/roles')) return await handleRoles(req, res, manager, method);
+    if (pathname.startsWith('/api/groups')) return await handleGroups(req, res, method);
     if (pathname === '/api/usage') {
       if (method !== 'GET') return (sendJson(res, 405, { error: 'method not allowed' }), true);
       return (sendJson(res, 200, await manager.usageSnapshot()), true);
@@ -65,7 +72,12 @@ export async function handleApi(
     if (pathname === '/api/swarm/send') {
       if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
       const body = await readJson(req);
-      await manager.sendSwarmMessage(body.from ?? '', body.to ?? '', body.text ?? '');
+      await manager.sendSwarmMessage(
+        body.fromId ?? '',
+        body.from ?? '',
+        body.to ?? '',
+        body.text ?? '',
+      );
       return (sendJson(res, 200, { ok: true }), true);
     }
     if (pathname === '/api/swarm/send-file') {
@@ -79,6 +91,27 @@ export async function handleApi(
         body.note,
       );
       return (sendJson(res, 200, { ok: true, path: dest }), true);
+    }
+    if (pathname === '/api/swarm/manage') {
+      if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+      const body = await readJson(req);
+      const agent = await manager.manageAgent(
+        body.fromId ?? '',
+        body.to ?? '',
+        (body.action ?? '') as 'start' | 'stop',
+      );
+      return (sendJson(res, 200, { ok: true, agent }), true);
+    }
+    if (pathname === '/api/swarm/view') {
+      if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+      const body = await readJson(req);
+      const savedPath = await manager.viewAgent(body.fromId ?? '', body.to ?? '');
+      return (sendJson(res, 200, { ok: true, path: savedPath }), true);
+    }
+    // The capability catalog (for the role editor's permission toggles).
+    if (pathname === '/api/capabilities') {
+      if (method !== 'GET') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+      return (sendJson(res, 200, CAPABILITIES), true);
     }
     if (pathname === '/api/image') return await handleImageStatus(res, manager, method);
     if (pathname === '/api/image/build') return await handleImageBuild(res, manager, method);
@@ -142,6 +175,78 @@ async function handleIntegrations(
   return true;
 }
 
+// Global role registry: list/create, and update/delete by id (editing/removing
+// a role refreshes the docs of agents holding it).
+async function handleRoles(
+  req: IncomingMessage,
+  res: ServerResponse,
+  manager: AgentManager,
+  method: string,
+): Promise<boolean> {
+  const { pathname } = new URL(req.url ?? '/', 'http://localhost');
+  const id = ROLE_API.exec(pathname)?.[1];
+  if (!id) {
+    if (method === 'GET') return (sendJson(res, 200, listRoles()), true);
+    if (method === 'POST') {
+      const body = await readJson(req);
+      return (
+        sendJson(
+          res,
+          201,
+          createRole(body.name ?? '', body.description ?? '', Date.now(), body.permissions),
+        ),
+        true
+      );
+    }
+  } else if (method === 'PATCH') {
+    const body = await readJson(req);
+    const role = updateRole(id, {
+      name: body.name,
+      description: body.description,
+      permissions: body.permissions,
+    });
+    await manager.refreshAgentsWithRole(id);
+    return (sendJson(res, 200, role), true);
+  } else if (method === 'DELETE') {
+    deleteRole(id);
+    await manager.refreshAgentsWithRole(id); // they no longer hold it → doc cleared
+    return (sendJson(res, 200, { ok: true }), true);
+  }
+  sendJson(res, 405, { error: 'method not allowed' });
+  return true;
+}
+
+// Global group registry (scopes swarm comms). No per-agent doc to refresh —
+// membership is read live from each agent's identity at send time.
+async function handleGroups(
+  req: IncomingMessage,
+  res: ServerResponse,
+  method: string,
+): Promise<boolean> {
+  const { pathname } = new URL(req.url ?? '/', 'http://localhost');
+  const id = GROUP_API.exec(pathname)?.[1];
+  if (!id) {
+    if (method === 'GET') return (sendJson(res, 200, listGroups()), true);
+    if (method === 'POST') {
+      const body = await readJson(req);
+      return (
+        sendJson(res, 201, createGroup(body.name ?? '', body.description ?? '', Date.now())),
+        true
+      );
+    }
+  } else if (method === 'PATCH') {
+    const body = await readJson(req);
+    return (
+      sendJson(res, 200, updateGroup(id, { name: body.name, description: body.description })),
+      true
+    );
+  } else if (method === 'DELETE') {
+    return (deleteGroup(id), sendJson(res, 200, { ok: true }), true);
+  }
+  sendJson(res, 405, { error: 'method not allowed' });
+  return true;
+}
+
 async function handleAgents(
   req: IncomingMessage,
   res: ServerResponse,
@@ -164,6 +269,8 @@ async function handleAgents(
         memoryMb: body.memoryMb,
         timezone: body.timezone,
         model: body.model ?? undefined,
+        roles: body.roles,
+        groups: body.groups,
       });
       return (sendJson(res, 201, created), true);
     }
@@ -173,11 +280,18 @@ async function handleAgents(
       return (await manager.remove(id), sendJson(res, 200, { ok: true }), true);
     if (method === 'PATCH') {
       const body = await readJson(req);
-      const patch: { username?: string; autoCompactPct?: number | null; model?: string | null } =
-        {};
+      const patch: {
+        username?: string;
+        autoCompactPct?: number | null;
+        model?: string | null;
+        roles?: string[];
+        groups?: string[];
+      } = {};
       if (body.username !== undefined) patch.username = body.username;
       if (body.autoCompactPct !== undefined) patch.autoCompactPct = body.autoCompactPct;
       if (body.model !== undefined) patch.model = body.model;
+      if (body.roles !== undefined) patch.roles = body.roles;
+      if (body.groups !== undefined) patch.groups = body.groups;
       return (sendJson(res, 200, await manager.patchAgent(id, patch)), true);
     }
   } else if (action === 'upgrade') {
@@ -371,6 +485,12 @@ async function readJson(req: IncomingMessage): Promise<{
   fromName?: string;
   path?: string;
   note?: string;
+  roles?: string[];
+  groups?: string[];
+  name?: string;
+  description?: string;
+  permissions?: string[];
+  action?: string;
 }> {
   const chunks: Buffer[] = [];
   for await (const c of req) chunks.push(c as Buffer);

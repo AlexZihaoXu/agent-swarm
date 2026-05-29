@@ -28,3 +28,7 @@ coverage/
 
 # Persistent agent disks + packages (never commit)
 .swarm_data/
+
+# Python bytecode
+__pycache__/
+*.pyc

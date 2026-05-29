@@ -31,9 +31,20 @@ def _identity() -> dict:
     try:
         with open(IDENTITY_FILE) as f:
             d = json.load(f)
-        return {"id": d.get("id"), "name": d.get("name") or d.get("id")}
+        return {
+            "id": d.get("id"),
+            "name": d.get("name") or d.get("id"),
+            "groups": d.get("groups") or [],
+        }
     except Exception:
-        return {"id": None, "name": None}
+        return {"id": None, "name": None, "groups": []}
+
+
+def _shares_group(mine: list, theirs: list) -> bool:
+    # Mirrors the gateway: share a group, or both ungrouped.
+    if not mine and not theirs:
+        return True
+    return any(g in theirs for g in mine)
 
 
 def _http(method: str, path: str, body: dict | None = None):
@@ -63,15 +74,16 @@ def whoami(_args: dict) -> dict:
 
 
 def list_agents(_args: dict) -> dict:
-    me = _identity()["id"]
+    me = _identity()
     try:
         agents = _http("GET", "/api/agents") or []
     except Exception as e:  # noqa: BLE001
         return _err(f"could not reach the swarm: {e}")
+    # Only peers that share a group with you (or are also ungrouped) are reachable.
     out = [
         {"id": a.get("id"), "name": a.get("username") or a.get("id"), "status": a.get("status")}
         for a in agents
-        if a.get("id") != me
+        if a.get("id") != me["id"] and _shares_group(me["groups"], a.get("groups") or [])
     ]
     return _ok(out)
 
@@ -86,7 +98,7 @@ def send(args: dict) -> dict:
         _http(
             "POST",
             "/api/swarm/send",
-            {"from": me["name"] or me["id"] or "agent", "to": to, "text": text},
+            {"fromId": me["id"], "from": me["name"] or me["id"] or "agent", "to": to, "text": text},
         )
     except urllib.error.HTTPError as e:
         return _err(f"HTTP {e.code}: {e.read().decode()[:200]}")
@@ -121,6 +133,37 @@ def send_file(args: dict) -> dict:
     return _ok(f"sent file to {to} → {(r or {}).get('path', '?')}")
 
 
+def manage_agent(args: dict) -> dict:
+    to = str(args.get("to") or "").strip()
+    action = str(args.get("action") or "").strip().lower()
+    if not to or action not in ("start", "stop"):
+        return _err("'to' (agent id or name) and 'action' ('start' or 'stop') are required")
+    me = _identity()
+    try:
+        r = _http("POST", "/api/swarm/manage", {"fromId": me["id"], "to": to, "action": action})
+    except urllib.error.HTTPError as e:
+        return _err(f"HTTP {e.code}: {e.read().decode()[:200]}")
+    except Exception as e:  # noqa: BLE001
+        return _err(str(e))
+    agent = (r or {}).get("agent") or {}
+    return _ok(f"{action}ed {to} (now: {agent.get('status', '?')})")
+
+
+def view_agent(args: dict) -> dict:
+    to = str(args.get("to") or "").strip()
+    if not to:
+        return _err("'to' (agent id or name) is required")
+    me = _identity()
+    try:
+        r = _http("POST", "/api/swarm/view", {"fromId": me["id"], "to": to})
+    except urllib.error.HTTPError as e:
+        return _err(f"HTTP {e.code}: {e.read().decode()[:200]}")
+    except Exception as e:  # noqa: BLE001
+        return _err(str(e))
+    path = (r or {}).get("path", "?")
+    return _ok(f"captured {to}'s screen → {path} (use Read to view the image)")
+
+
 TOOLS = [
     ("swarm_whoami", "Your own identity (id + name) within the swarm.", {}, [], whoami),
     (
@@ -153,6 +196,30 @@ TOOLS = [
         },
         ["to", "path"],
         send_file,
+    ),
+    (
+        "swarm_manage_agent",
+        "Start or stop another agent. Requires a role with the 'manage agents' "
+        "permission, and only works on agents in your group (403 otherwise). You "
+        "can never remove an agent. Target by agent id or name.",
+        {
+            "to": {"type": "string", "description": "Target agent id or display name"},
+            "action": {"type": "string", "enum": ["start", "stop"], "description": "What to do"},
+        },
+        ["to", "action"],
+        manage_agent,
+    ),
+    (
+        "swarm_view_agent",
+        "Capture another agent's live screen as an image saved to your "
+        "~/.swarm/views/ (Read it to see what they're doing). Requires a role with "
+        "the 'view screens' permission, and only works on agents in your group "
+        "(403 otherwise). Target by agent id or name.",
+        {
+            "to": {"type": "string", "description": "Target agent id or display name"},
+        },
+        ["to"],
+        view_agent,
     ),
 ]
 HANDLERS = {name: fn for name, _d, _p, _r, fn in TOOLS}

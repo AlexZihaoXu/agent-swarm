@@ -39,6 +39,36 @@ export interface Agent {
   /** Configured model override (ANTHROPIC_MODEL: alias or full id); null = the
    *  claude default. Applied by the supervisor on (re)launch. */
   model?: string | null;
+  /** Ids of roles assigned to this agent (descriptions live in the role registry). */
+  roles?: string[];
+  /** Ids of groups this agent belongs to (scopes who it can swarm with). */
+  groups?: string[];
+}
+
+// --- Roles -----------------------------------------------------------------
+// A role is a reusable, named responsibility with a description the agent reads
+// to understand what it's expected to do. An agent can hold many roles.
+
+export interface Role {
+  /** Stable slug id (derived from the name at creation). */
+  id: string;
+  name: string;
+  description: string;
+  /** Special capability keys this role grants (see CAPABILITIES in roles.ts).
+   *  An agent's effective capabilities are the union across its roles. */
+  permissions?: Capability[];
+  createdAt: number;
+}
+
+/** Special capabilities a role can grant over the rest of the swarm. */
+export type Capability = 'manage_agents' | 'view_screen';
+
+/** A group scopes swarm comms: agents only reach peers sharing a group. */
+export interface Group {
+  id: string;
+  name: string;
+  description: string;
+  createdAt: number;
 }
 
 // --- Integrations ----------------------------------------------------------
@@ -132,4 +162,7 @@ export interface CreateAgentOptions {
   /** Initial model override (ANTHROPIC_MODEL: alias/full id). Applied at first
    *  boot (a fresh session, so the env takes effect). Omit for the default. */
   model?: string;
+  /** Role + group ids to assign at creation. */
+  roles?: string[];
+  groups?: string[];
 }
