@@ -268,13 +268,13 @@ export function FileExplorer({
     <Modal>
       <Modal.Backdrop isOpen={isOpen} onOpenChange={(o) => !o && onOpenChange(false)}>
         <Modal.Container placement="center">
-          <Modal.Dialog className="max-h-[88vh] sm:max-w-[760px]">
+          <Modal.Dialog className="flex h-[80vh] max-h-[88vh] flex-col sm:max-w-[760px]">
             <Modal.CloseTrigger />
             <Modal.Header>
               <Modal.Heading>Files — {agentName}</Modal.Heading>
             </Modal.Header>
             <Modal.Body
-              className="flex h-[72vh] flex-col gap-3 overflow-hidden"
+              className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden"
               onContextMenu={(e) => e.preventDefault()}
             >
               {editing ? (
