@@ -46,6 +46,55 @@ const userTurnText = (t: ChatTurn): string =>
     .join('')
     .trim();
 
+// A message delivered into the agent from outside carries a routing prefix
+// `**[scheme://address]** body` (swarm peer, discord, system, …). Parse it so the
+// chat can show it as a labelled *inbound* message rather than a raw operator line.
+const ROUTE_RE = /^\*\*\[([a-z][\w.]*):\/\/([^\]]*)\]\*\*\s*([\s\S]*)$/;
+function parseRoute(text: string): { scheme: string; address: string; body: string } | null {
+  const m = ROUTE_RE.exec(text.trim());
+  return m ? { scheme: m[1] ?? '', address: m[2] ?? '', body: m[3] ?? '' } : null;
+}
+
+const ROUTE_STYLE: Record<string, { label: string; cls: string }> = {
+  swarm: { label: 'swarm', cls: 'bg-accent/15 text-accent' },
+  discord: { label: 'discord', cls: 'bg-[#5865F2]/15 text-[#5865F2]' },
+  sys: { label: 'system', cls: 'bg-warning/15 text-warning' },
+  ui: { label: 'dashboard', cls: 'bg-surface-tertiary text-muted' },
+  peer: { label: 'peer', cls: 'bg-accent/15 text-accent' },
+};
+
+/** An inbound, externally-routed message (from a peer agent, Discord, system…),
+ *  shown left-aligned with a source chip + the clean body — not as an operator
+ *  bubble. */
+function RoutedMessage({
+  scheme,
+  address,
+  body,
+}: {
+  scheme: string;
+  address: string;
+  body: string;
+}) {
+  const style = ROUTE_STYLE[scheme] ?? { label: scheme, cls: 'bg-surface-tertiary text-muted' };
+  return (
+    <div className="border-separator bg-surface-secondary/40 max-w-[85%] space-y-1.5 rounded-2xl rounded-bl-md border px-3.5 py-2">
+      <div className="flex items-center gap-1.5">
+        <span
+          className={`rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide uppercase ${style.cls}`}
+        >
+          {style.label}
+        </span>
+        {address && <span className="text-muted truncate font-mono text-[11px]">{address}</span>}
+      </div>
+      <div className="chat-md text-sm">
+        <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+          {body}
+        </ReactMarkdown>
+      </div>
+    </div>
+  );
+}
+
 /**
  * Reveal `text` character-by-character over `duration` ms (0 = show instantly).
  * Animates once on mount; if the text later changes it snaps to full so polled
@@ -627,61 +676,72 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
           {turns.length === 0 && (
             <p className="text-muted text-sm">No messages yet. Say something below.</p>
           )}
-          {turns.map((t, i) => (
-            <motion.div
-              key={i}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.25, ease: 'easeOut' }}
-              className={t.role === 'user' ? 'flex justify-end' : ''}
-            >
-              {t.error ? (
-                <div className="border-danger/50 bg-danger/10 space-y-1 rounded-xl border px-3 py-2 text-sm">
-                  <div className="text-danger flex items-center gap-1.5 font-semibold">
-                    <LuTriangleAlert className="size-3.5 shrink-0" />
-                    Error
+          {turns.map((t, i) => {
+            // Inbound externally-routed messages (swarm/discord/sys) render as a
+            // labelled left-aligned card, not an operator bubble.
+            const routed = t.role === 'user' && !t.error ? parseRoute(userTurnText(t)) : null;
+            return (
+              <motion.div
+                key={i}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.25, ease: 'easeOut' }}
+                className={t.role === 'user' && !routed ? 'flex justify-end' : ''}
+              >
+                {routed ? (
+                  <RoutedMessage
+                    scheme={routed.scheme}
+                    address={routed.address}
+                    body={routed.body}
+                  />
+                ) : t.error ? (
+                  <div className="border-danger/50 bg-danger/10 space-y-1 rounded-xl border px-3 py-2 text-sm">
+                    <div className="text-danger flex items-center gap-1.5 font-semibold">
+                      <LuTriangleAlert className="size-3.5 shrink-0" />
+                      Error
+                    </div>
+                    <p className="text-foreground whitespace-pre-wrap">
+                      {t.items.map((it) => it.text ?? '').join('\n')}
+                    </p>
                   </div>
-                  <p className="text-foreground whitespace-pre-wrap">
-                    {t.items.map((it) => it.text ?? '').join('\n')}
-                  </p>
-                </div>
-              ) : (
-                <div
-                  className={
-                    t.role === 'user'
-                      ? 'bg-surface-secondary text-surface-secondary-foreground max-w-[85%] rounded-2xl rounded-br-md px-3.5 py-2 text-sm font-medium'
-                      : 'max-w-full space-y-2 font-medium'
-                  }
-                >
-                  {t.items.map((it, j) =>
-                    it.kind === 'text' ? (
-                      t.role === 'user' ? (
-                        <p key={j} className="whitespace-pre-wrap">
-                          {it.text}
-                        </p>
+                ) : (
+                  <div
+                    className={
+                      t.role === 'user'
+                        ? 'bg-surface-secondary text-surface-secondary-foreground max-w-[85%] rounded-2xl rounded-br-md px-3.5 py-2 text-sm font-medium'
+                        : 'max-w-full space-y-2 font-medium'
+                    }
+                  >
+                    {t.items.map((it, j) =>
+                      it.kind === 'text' ? (
+                        t.role === 'user' ? (
+                          <p key={j} className="whitespace-pre-wrap">
+                            {it.text}
+                          </p>
+                        ) : (
+                          <AssistantText
+                            key={j}
+                            text={it.text ?? ''}
+                            animate={animateIdx.current.has(i)}
+                          />
+                        )
+                      ) : it.kind === 'thinking' ? (
+                        <ThinkingCard key={j} text={it.text ?? ''} />
+                      ) : it.kind === 'plan' ? (
+                        <PlanCard key={j} text={it.text ?? ''} />
+                      ) : it.kind === 'todos' ? (
+                        <TodosCard key={j} todos={it.todos ?? []} />
+                      ) : it.kind === 'image' && it.file ? (
+                        <ChatImage key={j} agentId={agentId} file={it.file} onOpen={setLightbox} />
                       ) : (
-                        <AssistantText
-                          key={j}
-                          text={it.text ?? ''}
-                          animate={animateIdx.current.has(i)}
-                        />
-                      )
-                    ) : it.kind === 'thinking' ? (
-                      <ThinkingCard key={j} text={it.text ?? ''} />
-                    ) : it.kind === 'plan' ? (
-                      <PlanCard key={j} text={it.text ?? ''} />
-                    ) : it.kind === 'todos' ? (
-                      <TodosCard key={j} todos={it.todos ?? []} />
-                    ) : it.kind === 'image' && it.file ? (
-                      <ChatImage key={j} agentId={agentId} file={it.file} onOpen={setLightbox} />
-                    ) : (
-                      <ToolItem key={j} name={it.name ?? ''} detail={it.detail} />
-                    ),
-                  )}
-                </div>
-              )}
-            </motion.div>
-          ))}
+                        <ToolItem key={j} name={it.name ?? ''} detail={it.detail} />
+                      ),
+                    )}
+                  </div>
+                )}
+              </motion.div>
+            );
+          })}
 
           {pending.map((p, i) => (
             <motion.div
