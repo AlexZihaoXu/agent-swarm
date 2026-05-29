@@ -47,7 +47,9 @@ services:
       SWARM_DATA_HOST: ${PWD}/.swarm_data
       SWARM_DATA_MOUNT: /swarmdata
     ports:
-      - '8080:8080'
+      # Host port is configurable (DASHBOARD_PORT) for hosts where 8080 is taken;
+      # the gateway still listens on 8080 inside the container.
+      - '${DASHBOARD_PORT:-8080}:8080'
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - gateway-data:/data
