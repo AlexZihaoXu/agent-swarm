@@ -4,6 +4,11 @@ import { Button, Input, TextField, toast } from '@heroui/react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useRef, useState } from 'react';
 import { LuSend } from 'react-icons/lu';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
 import { listGroupMessages, sendGroupMessage, type Agent, type GroupMessage } from '@/lib/gateway';
 import { Identicon } from '@/lib/identicon';
 
@@ -121,13 +126,24 @@ export function GroupChatPanel({
                       <span className="text-muted text-[10px]">{clock(m.ts)}</span>
                     </div>
                     <div
-                      className={`inline-block rounded-2xl px-3.5 py-2 text-sm break-words whitespace-pre-wrap ${
+                      className={`inline-block rounded-2xl px-3.5 py-2 text-sm break-words ${
                         human
-                          ? 'bg-accent text-accent-foreground rounded-br-md'
+                          ? 'bg-accent text-accent-foreground rounded-br-md whitespace-pre-wrap'
                           : 'bg-surface-secondary rounded-bl-md'
                       }`}
                     >
-                      {m.text}
+                      {human ? (
+                        m.text
+                      ) : (
+                        <div className="chat-md text-left">
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm, remarkMath]}
+                            rehypePlugins={[rehypeKatex]}
+                          >
+                            {m.text}
+                          </ReactMarkdown>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </motion.div>

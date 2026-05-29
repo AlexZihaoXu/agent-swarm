@@ -1180,8 +1180,12 @@ export class AgentManager {
     group: string;
     text: string;
   }): Promise<GroupMessage> {
-    const body = sanitizeInbound(opts.text);
-    if (!body) throw Object.assign(new Error('text required'), { statusCode: 400 });
+    // `raw` (real newlines/markdown preserved) is stored in the log + rendered in
+    // the dashboard; `flat` is the single-line, prefix-safe form injected into the
+    // peers' terminals (the routing protocol is one line per message).
+    const raw = (opts.text || '').trim().slice(0, 4000);
+    const flat = sanitizeInbound(opts.text);
+    if (!flat) throw Object.assign(new Error('text required'), { statusCode: 400 });
     const grp = listGroups().find((g) => g.id === opts.group || g.name === opts.group);
     if (!grp) throw Object.assign(new Error(`group not found: ${opts.group}`), { statusCode: 404 });
 
@@ -1204,14 +1208,14 @@ export class AgentManager {
       from: senderName,
       fromId: isAgent ? opts.fromId : undefined,
       kind: isAgent ? 'agent' : 'human',
-      text: body,
+      text: raw,
       ts: Date.now(),
     });
 
     const label = grp.name.replace(/[[\]\n]/g, ' ').trim() || grp.id;
     const line = isAgent
-      ? `**[group://${label}]** ${senderName}: ${body}`
-      : `**[group://${label}]** ${senderName} (human, via dashboard): ${body}`;
+      ? `**[group://${label}]** ${senderName}: ${flat}`
+      : `**[group://${label}]** ${senderName} (human, via dashboard): ${flat}`;
 
     const members = (await this.list()).filter(
       (a) => (a.groups ?? []).includes(grp.id) && a.status === 'running',
