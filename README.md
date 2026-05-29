@@ -11,8 +11,107 @@ Down the line, a shared **MCP layer** will let agents talk to each other, share
 a true swarm. That layer is a planned extension point, not part of the initial
 build (see [Planned: the swarm layer](#planned-the-swarm-layer)).
 
-> **Status:** early design. The structure below is a proposal meant to anchor
-> discussion — see [Open Questions](#open-questions).
+> **Status:** working, self-hostable build — actively evolving. Jump to
+> [Quick start](#quick-start) to run it; the sections below describe how it works.
+
+---
+
+## Quick start
+
+Self-host the whole thing in a few minutes. Like Portainer, it's **one stack you
+run with Docker Compose** — then you create, configure, and watch every agent
+from the web UI. No per-agent ports, no manual container wrangling.
+
+### Prerequisites
+
+- A host with **Docker** + **Docker Compose v2** (`docker compose …`). Linux is
+  ideal for a server; macOS (Docker Desktop) works too.
+- **~20 GB free disk** — each agent runs a full Ubuntu GNOME desktop image.
+- A **Claude subscription** (or Anthropic API access) — you'll generate a login
+  token in step 4.
+- Standard (non-rootless) Docker that allows privileged containers. The dashboard
+  needs the Docker socket. **Run this only on a host you trust** — see
+  [Security](#security).
+
+### 1. Get the code
+
+```bash
+git clone https://github.com/AlexZihaoXu/agent-swarm.git
+cd agent-swarm
+```
+
+### 2. Create the shared network (once)
+
+```bash
+docker network create swarm-net
+```
+
+### 3. Start the dashboard
+
+```bash
+docker compose up --build -d
+```
+
+The control plane (gateway + UI) comes up as a single container on port **8080**.
+Open **`http://<your-server>:8080`**.
+
+### 4. Add your Claude token
+
+Generate a token on any machine that has [Claude Code](https://claude.com/claude-code):
+
+```bash
+claude setup-token        # prints an sk-ant-oat… token
+```
+
+Open the dashboard → **Settings** → paste the token → **Save**. (Or set
+`CLAUDE_CODE_OAUTH_TOKEN` in a `.env` file before step 3 — see
+[`.env.example`](.env.example).)
+
+### 5. Build the agent image + create your first agent
+
+In the dashboard:
+
+1. Click **Build image** on the "Agent image not built" banner — this builds the
+   agent runtime once (a few minutes; it's a full desktop image).
+2. Click **New agent**, give it a name, and **Create**.
+3. Watch it live — an **xterm.js terminal** (the `claude` session) and a **noVNC
+   desktop** (its GUI), both embedded in the dashboard.
+
+That's it. Agents persist on disk and the stack restarts with the host
+(`restart: unless-stopped`).
+
+### Day-2 operations
+
+```bash
+docker compose up --build -d        # update the dashboard after a git pull
+docker compose logs -f dashboard    # tail the control-plane logs
+docker compose down                 # stop the dashboard (agents keep running)
+docker compose down --remove-orphans  # also tear down spawned agents
+```
+
+- **Agent data** persists in `./.swarm_data/agents/<id>` (each agent's home disk);
+  control-plane settings + state live in the `gateway-data` Docker volume. Both
+  survive restarts and `compose up --build`.
+- **Stop/restart/remove** individual agents from the dashboard (or the
+  `/api/agents/:id` routes). Spawned agents aren't in `compose.yml`, so plain
+  `docker compose down` leaves them running — use the dashboard's **Remove** or
+  `--remove-orphans`.
+
+### Remote access
+
+The dashboard binds `:8080` with no built-in auth, so don't expose it directly to
+the internet. For a remote mini-server, reach it over your LAN, an **SSH tunnel**
+(`ssh -L 8080:localhost:8080 user@server`), a VPN (e.g. Tailscale), or put it
+behind a reverse proxy that adds TLS + authentication.
+
+### Security
+
+The dashboard mounts the host's **Docker socket** and spawns agents with
+**privileged flags** (`SYS_ADMIN`/`SYS_BOOT`, unconfined seccomp/apparmor) —
+required for systemd + GNOME inside a container, but it means an agent is **not
+strongly isolated** from the host. Treat the whole stack as trusted-host
+software: run it on a machine you own, don't expose `:8080` publicly, and only
+hand agents work you're comfortable running with that level of access.
 
 ---
 
@@ -194,10 +293,8 @@ pnpm install
 # 1. Build the agent image
 docker build -t agent-swarm/agent:dev images/agent
 
-# 2. Bridge your Claude login to a host file (macOS — see Authentication)
-mkdir -p ~/.agent-swarm
-security find-generic-password -s "Claude Code-credentials" -w \
-  > ~/.agent-swarm/.credentials.json
+# 2. Provide a Claude token (or paste it later in the dashboard Settings page)
+export CLAUDE_CODE_OAUTH_TOKEN="$(claude setup-token)"   # see Authentication
 
 # 3. Gateway: creates swarm-net, drives Docker, proxies agents (ports mode on macOS)
 pnpm --filter @agent-swarm/gateway dev      # http://localhost:8080
@@ -228,8 +325,8 @@ host ports.
   over noVNC, plus a full toolchain. Modern GNOME Shell requires systemd, so the
   container runs with **privileged flags** (see Running an agent) — weaker
   isolation that we've accepted; memory/fleet-density is a non-goal.
-- **Auth = shared host credentials, bind-mounted** — agents reuse the host's
-  Claude login via a single mounted `.credentials.json` (see Authentication).
+- **Auth = a Claude Code OAuth token** — set once (dashboard Settings or
+  `CLAUDE_CODE_OAUTH_TOKEN`) and injected into every agent (see Authentication).
 - **Dashboard UI = HeroUI** — the dashboard uses HeroUI v3 (React, Tailwind-based)
   as its component library. The HeroUI MCP server is wired into project scope
   (`.mcp.json`) so component docs are available while building it.
@@ -245,33 +342,28 @@ host ports.
 
 ## Authentication
 
-Agents reuse the **host's Claude Code login** rather than a separate API key.
-A single credentials file is bind-mounted (read-write) into every container at
-the path Claude Code reads (`$CLAUDE_CONFIG_DIR/.credentials.json`).
-
-**macOS hosts need a bridge.** On macOS the OAuth token lives in the **Keychain**,
-not on disk, so there's no folder to mount directly. At startup the control
-plane extracts it once to a host-side file:
+Agents authenticate with a **Claude Code OAuth token** so sessions bill to your
+Claude subscription. Generate one on any machine that has Claude Code:
 
 ```bash
-# macOS: Keychain → file (run by the control plane on boot)
-security find-generic-password -s "Claude Code-credentials" -w \
-  > ~/.agent-swarm/.credentials.json
-
-# Linux: the file already exists, just point at it
-ln -sf ~/.claude/.credentials.json ~/.agent-swarm/.credentials.json
+claude setup-token        # prints an sk-ant-oat… token
 ```
 
-Each container then mounts it:
+Provide it either way:
 
-```
--v ~/.agent-swarm/.credentials.json:/home/agent/.claude/.credentials.json
-```
+- **Dashboard → Settings** — paste it; it's stored in the `gateway-data` volume
+  and persists across restarts, **or**
+- **`CLAUDE_CODE_OAUTH_TOKEN`** in `.env` (or the environment) before
+  `docker compose up`.
 
-> **Caveat (known):** one OAuth login shared across many containers is fine for
-> a handful of agents, but tokens expire and refresh by _writing back_ a rotated
-> token — concurrent refreshes across a large fleet can invalidate each other.
-> If we scale up, revisit (per-agent creds, a credential broker, or API keys).
+The gateway injects the token into every agent as `CLAUDE_CODE_OAUTH_TOKEN`. It's
+treated as a secret — the API only ever returns a masked hint (last 4 chars),
+never the full value, and it's never committed to the repo. The token is
+long-lived (~1 year); the dashboard shows an **expiry banner** ahead of time so
+you can refresh it (`claude setup-token` again → paste).
+
+> One token is shared across the fleet. That's fine for a personal swarm; if you
+> later need stronger isolation, give agents separate tokens/keys.
 
 ## Running the stack
 
@@ -291,11 +383,12 @@ Agents publish **no host ports**.
 
 ```bash
 docker network create swarm-net 2>/dev/null || true   # shared, external network
-docker build -t agent-swarm/agent:dev images/agent     # the agent image
-
-CLAUDE_CREDENTIALS_FILE=$HOME/.agent-swarm/.credentials.json \
-  docker compose up --build -d        # the dashboard container → http://localhost:8080
+docker compose up --build -d        # the dashboard container → http://localhost:8080
 ```
+
+Then add your Claude token (dashboard **Settings**, or `CLAUDE_CODE_OAUTH_TOKEN`
+in `.env`) and click **Build image** in the UI to build the agent runtime. See
+[Quick start](#quick-start) for the full first-run walkthrough.
 
 Spawned agents are tagged with this stack's compose project (`agent-swarm`), so
 Docker UIs like **Portainer** nest them under the dashboard stack. (Because they
@@ -303,10 +396,11 @@ aren't in `compose.yml`, `docker compose down` treats them as orphans — use th
 dashboard's **Remove**, or `docker compose down --remove-orphans`, to tear the
 fleet down.)
 
-> **Credential path gotcha:** the gateway runs in a container, but the agent
-> bind mount it requests is resolved by the **host** Docker daemon. So
-> `CLAUDE_CREDENTIALS_FILE` must be a **host** path (it is not mounted into the
-> gateway — the gateway only forwards the string to the engine).
+> **Host-path gotcha:** the gateway runs in a container, but the per-agent home
+> disks it bind-mounts are resolved by the **host** Docker daemon. `compose.yml`
+> sets `SWARM_DATA_HOST=${PWD}/.swarm_data` (a host path) and mounts that same
+> tree into the gateway at `/swarmdata`, so both see the same files. Keep those
+> two in sync if you customize them.
 
 ### Host-dev (fast reload)
 
@@ -332,7 +426,7 @@ docker run -d --name agent1 \
   --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
   --cap-add SYS_BOOT --cap-add SYS_ADMIN \
   --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
-  -v "$HOME/.agent-swarm/.credentials.json:/home/agent/.claude/.credentials.json" \
+  -e CLAUDE_CODE_OAUTH_TOKEN="$(claude setup-token)" \
   -p 6080:6080 -p 7681:7681 \
   agent-swarm/agent:dev
 ```
