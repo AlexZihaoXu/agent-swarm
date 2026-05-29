@@ -176,15 +176,28 @@ export function FileExplorer({
     [agentId],
   );
 
+  // Open to Desktop by default (the agent's visible workspace); fall back to the
+  // home root for agents that don't have a Desktop folder.
+  const openDefault = useCallback(() => {
+    setLoading(true);
+    listAgentFiles(agentId, 'Desktop')
+      .then((v) => {
+        setView(v);
+        setCwd(v.path);
+        setLoading(false);
+      })
+      .catch(() => load(''));
+  }, [agentId, load]);
+
   useEffect(() => {
     if (isOpen) {
       setEditing(null);
       setRenaming(null);
       setNewFolder(null);
       setQuery('');
-      load('');
+      openDefault();
     }
-  }, [isOpen, load]);
+  }, [isOpen, openDefault]);
 
   // Reset the filter whenever we change folders.
   useEffect(() => setQuery(''), [cwd]);
