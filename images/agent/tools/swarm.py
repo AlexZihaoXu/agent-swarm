@@ -133,6 +133,47 @@ def send_file(args: dict) -> dict:
     return _ok(f"sent file to {to} → {(r or {}).get('path', '?')}")
 
 
+def list_groups(_args: dict) -> dict:
+    me = _identity()
+    mine = set(me.get("groups") or [])
+    if not mine:
+        return _ok("You're not in any group. Group chat is unavailable until you're added to one.")
+    try:
+        groups = _http("GET", "/api/groups") or []
+    except Exception as e:  # noqa: BLE001
+        return _err(f"could not reach the swarm: {e}")
+    out = [
+        {"id": g.get("id"), "name": g.get("name"), "description": g.get("description")}
+        for g in groups
+        if g.get("id") in mine
+    ]
+    return _ok(out)
+
+
+def send_group(args: dict) -> dict:
+    group = str(args.get("group") or "").strip()
+    text = str(args.get("text") or "").strip()
+    if not group or not text:
+        return _err("'group' (id or name) and 'text' are required")
+    me = _identity()
+    try:
+        _http(
+            "POST",
+            "/api/swarm/group-send",
+            {
+                "fromId": me["id"],
+                "fromName": me["name"] or me["id"] or "agent",
+                "group": group,
+                "text": text,
+            },
+        )
+    except urllib.error.HTTPError as e:
+        return _err(f"HTTP {e.code}: {e.read().decode()[:200]}")
+    except Exception as e:  # noqa: BLE001
+        return _err(str(e))
+    return _ok(f"sent to group {group} (your groupmates will receive it; you won't get a copy)")
+
+
 def manage_agent(args: dict) -> dict:
     to = str(args.get("to") or "").strip()
     action = str(args.get("action") or "").strip().lower()
@@ -196,6 +237,27 @@ TOOLS = [
         },
         ["to", "path"],
         send_file,
+    ),
+    (
+        "swarm_list_groups",
+        "List the groups you belong to (id, name, description). Group chat and "
+        "swarm comms are scoped to these groups.",
+        {},
+        [],
+        list_groups,
+    ),
+    (
+        "swarm_send_group",
+        "Send a message to one of your groups' chat. Every OTHER agent in the group "
+        "receives it (you don't get a copy — you just sent it); the human operator "
+        "sees it in the dashboard too. Messages you receive arrive as "
+        "[group://<name>]. Target the group by id or name.",
+        {
+            "group": {"type": "string", "description": "Group id or name (must be one you're in)"},
+            "text": {"type": "string", "description": "The message to broadcast to the group"},
+        },
+        ["group", "text"],
+        send_group,
     ),
     (
         "swarm_manage_agent",

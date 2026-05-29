@@ -23,11 +23,13 @@ import { LATEST_VERSION, migrations, VERSION_MARKER, type MigrationCtx } from '.
 import { DiscordBridge, sanitizeInbound, testDiscordToken } from './discord-bridge.js';
 import * as integrations from './integrations.js';
 import { CAPABILITIES, getRoles, rolesGrant } from './roles.js';
-import { canCommunicate } from './groups.js';
+import { canCommunicate, listGroups } from './groups.js';
+import { appendGroupMessage } from './group-chats.js';
 import type {
   Agent,
   Capability,
   CreateAgentOptions,
+  GroupMessage,
   IntegrationPatch,
   IntegrationPublic,
   IntegrationType,
@@ -1157,6 +1159,61 @@ export class AgentManager {
       attachments: [],
     });
     return inContainer;
+  }
+
+  /** Group chat: broadcast a message to a group. An agent sender (fromId set)
+   *  must be a member, and the message fans out to every OTHER running member
+   *  (the sender already knows it sent the message — it made the tool call). A
+   *  human sender (no fromId — the dashboard operator) reaches ALL running
+   *  members. Every message is also recorded in the group's log so the dashboard
+   *  can render the running conversation. Recipients see a `[group://<name>]`
+   *  prefix; the body marks whether the sender was a teammate agent or a human. */
+  async sendGroupMessage(opts: {
+    fromId?: string;
+    fromName?: string;
+    group: string;
+    text: string;
+  }): Promise<GroupMessage> {
+    const body = sanitizeInbound(opts.text);
+    if (!body) throw Object.assign(new Error('text required'), { statusCode: 400 });
+    const grp = listGroups().find((g) => g.id === opts.group || g.name === opts.group);
+    if (!grp) throw Object.assign(new Error(`group not found: ${opts.group}`), { statusCode: 404 });
+
+    const isAgent = !!opts.fromId;
+    let senderName: string;
+    if (isAgent) {
+      const mine = this.readIdentity(opts.fromId!)?.groups ?? [];
+      if (!mine.includes(grp.id))
+        throw Object.assign(new Error(`you're not in group ${grp.name}`), { statusCode: 403 });
+      senderName =
+        sanitizeInbound(opts.fromName || this.readIdentity(opts.fromId!)?.name || 'agent').slice(
+          0,
+          64,
+        ) || 'agent';
+    } else {
+      senderName = sanitizeInbound(opts.fromName || 'operator').slice(0, 64) || 'operator';
+    }
+
+    const record = appendGroupMessage(grp.id, {
+      from: senderName,
+      kind: isAgent ? 'agent' : 'human',
+      text: body,
+      ts: Date.now(),
+    });
+
+    const label = grp.name.replace(/[[\]\n]/g, ' ').trim() || grp.id;
+    const line = isAgent
+      ? `**[group://${label}]** ${senderName}: ${body}`
+      : `**[group://${label}]** ${senderName} (human, via dashboard): ${body}`;
+
+    const members = (await this.list()).filter(
+      (a) => (a.groups ?? []).includes(grp.id) && a.status === 'running',
+    );
+    for (const m of members) {
+      if (isAgent && m.id === opts.fromId) continue; // sender doesn't get a copy
+      this.queueDeliver(m.id, { text: line, attachments: [] });
+    }
+    return record;
   }
 
   /** Whether an agent's assigned roles grant a special capability. */

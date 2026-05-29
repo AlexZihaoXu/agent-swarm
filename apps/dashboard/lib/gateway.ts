@@ -79,6 +79,28 @@ export const updateGroup = (id: string, patch: { name?: string; description?: st
 export const deleteGroup = (id: string) =>
   api<{ ok: true }>(`/api/groups/${id}`, { method: 'DELETE' });
 
+// --- Group chat -------------------------------------------------------------
+
+export interface GroupMessage {
+  id: string;
+  group: string;
+  /** Sender display name (agent name, or "operator" for the human). */
+  from: string;
+  kind: 'agent' | 'human';
+  text: string;
+  ts: number;
+}
+/** The running chat log for a group (oldest first). */
+export const listGroupMessages = (id: string) => api<GroupMessage[]>(`/api/groups/${id}/messages`);
+/** Send a message to a group's chat as the human operator (fans out to all
+ *  agents in the group). */
+export const sendGroupMessage = (group: string, text: string) =>
+  api<{ ok: true; message: GroupMessage }>('/api/swarm/group-send', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ group, text }),
+  });
+
 export interface CreateAgentOptions {
   hostname?: string;
   username?: string;

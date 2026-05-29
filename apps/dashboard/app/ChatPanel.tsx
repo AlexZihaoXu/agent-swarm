@@ -61,6 +61,7 @@ const ROUTE_STYLE: Record<string, { label: string; cls: string }> = {
   sys: { label: 'system', cls: 'bg-warning/15 text-warning' },
   ui: { label: 'dashboard', cls: 'bg-surface-tertiary text-muted' },
   peer: { label: 'peer', cls: 'bg-accent/15 text-accent' },
+  group: { label: 'group', cls: 'bg-success/15 text-success' },
 };
 
 /** An inbound, externally-routed message (from a peer agent, Discord, system…),

@@ -6,6 +6,7 @@ import { config } from './config.js';
 import { getSettings, updateSettings, tokenDaysLeft, TOKEN_WARN_DAYS } from './settings.js';
 import { CAPABILITIES, listRoles, createRole, updateRole, deleteRole } from './roles.js';
 import { listGroups, createGroup, updateGroup, deleteGroup } from './groups.js';
+import { listGroupMessages, clearGroupMessages } from './group-chats.js';
 import type { DiscordRules, IntegrationType } from './types.js';
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -44,6 +45,8 @@ const PACKAGE_API = /^\/api\/packages(?:\/([^/]+)(?:\/(download|import))?)?$/;
 // /api/roles, /api/roles/:id  •  /api/groups, /api/groups/:id
 const ROLE_API = /^\/api\/roles(?:\/([^/]+))?$/;
 const GROUP_API = /^\/api\/groups(?:\/([^/]+))?$/;
+// /api/groups/:id/messages — the group's running chat log.
+const GROUP_MSG_API = /^\/api\/groups\/([^/]+)\/messages$/;
 
 /**
  * Handle the REST API. Returns true if the request was an /api/* route (and has
@@ -64,7 +67,7 @@ export async function handleApi(
     if (pathname === '/api/host') return await handleHost(res, manager, method);
     if (pathname === '/api/metrics') return await handleMetrics(res, manager, method);
     if (pathname.startsWith('/api/roles')) return await handleRoles(req, res, manager, method);
-    if (pathname.startsWith('/api/groups')) return await handleGroups(req, res, method);
+    if (pathname.startsWith('/api/groups')) return await handleGroups(req, res, manager, method);
     if (pathname === '/api/usage') {
       if (method !== 'GET') return (sendJson(res, 405, { error: 'method not allowed' }), true);
       return (sendJson(res, 200, await manager.usageSnapshot()), true);
@@ -107,6 +110,18 @@ export async function handleApi(
       const body = await readJson(req);
       const savedPath = await manager.viewAgent(body.fromId ?? '', body.to ?? '');
       return (sendJson(res, 200, { ok: true, path: savedPath }), true);
+    }
+    if (pathname === '/api/swarm/group-send') {
+      if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+      const body = await readJson(req);
+      // fromId set = a peer agent; omitted = the human operator (dashboard).
+      const msg = await manager.sendGroupMessage({
+        fromId: body.fromId || undefined,
+        fromName: body.fromName ?? body.from,
+        group: body.group ?? '',
+        text: body.text ?? '',
+      });
+      return (sendJson(res, 200, { ok: true, message: msg }), true);
     }
     // The capability catalog (for the role editor's permission toggles).
     if (pathname === '/api/capabilities') {
@@ -221,9 +236,17 @@ async function handleRoles(
 async function handleGroups(
   req: IncomingMessage,
   res: ServerResponse,
+  manager: AgentManager,
   method: string,
 ): Promise<boolean> {
   const { pathname } = new URL(req.url ?? '/', 'http://localhost');
+  // The running chat log for a group (the dashboard renders + appends to this).
+  const msgGroupId = GROUP_MSG_API.exec(pathname)?.[1];
+  if (msgGroupId) {
+    if (method === 'GET') return (sendJson(res, 200, listGroupMessages(msgGroupId)), true);
+    sendJson(res, 405, { error: 'method not allowed' });
+    return true;
+  }
   const id = GROUP_API.exec(pathname)?.[1];
   if (!id) {
     if (method === 'GET') return (sendJson(res, 200, listGroups()), true);
@@ -241,7 +264,7 @@ async function handleGroups(
       true
     );
   } else if (method === 'DELETE') {
-    return (deleteGroup(id), sendJson(res, 200, { ok: true }), true);
+    return (deleteGroup(id), clearGroupMessages(id), sendJson(res, 200, { ok: true }), true);
   }
   sendJson(res, 405, { error: 'method not allowed' });
   return true;
@@ -491,6 +514,7 @@ async function readJson(req: IncomingMessage): Promise<{
   description?: string;
   permissions?: string[];
   action?: string;
+  group?: string;
 }> {
   const chunks: Buffer[] = [];
   for await (const c of req) chunks.push(c as Buffer);

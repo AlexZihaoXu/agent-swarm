@@ -3,10 +3,15 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { LuChevronLeft, LuMessageSquare, LuSettings, LuX } from 'react-icons/lu';
-import type { Agent } from '@/lib/gateway';
+import { LuChevronLeft, LuMessageSquare, LuSettings, LuUsers, LuX } from 'react-icons/lu';
+import { listGroups, type Agent, type Group } from '@/lib/gateway';
+import { Identicon } from '@/lib/identicon';
 import { AgentActivity, AgentStatsInline, agentChip, useAgentStats } from './AgentStats';
 import { ChatPanel } from './ChatPanel';
+import { GroupChatPanel } from './GroupChatPanel';
+
+/** What the chat panel is currently showing — a single agent or a group chat. */
+type Selection = { kind: 'agent'; id: string } | { kind: 'group'; id: string };
 
 const DOT: Record<'success' | 'warning' | 'danger' | 'default', string> = {
   success: 'bg-success',
@@ -34,15 +39,22 @@ function AgentRow({
         selected ? 'bg-accent/15' : 'hover:bg-surface'
       }`}
     >
-      <motion.span
-        className={`size-2 shrink-0 rounded-full ${DOT[chip.color]}`}
-        animate={
-          chip.working ? { opacity: [1, 0.3, 1], scale: [1, 1.3, 1] } : { opacity: 1, scale: 1 }
-        }
-        transition={
-          chip.working ? { duration: 1, repeat: Infinity, ease: 'easeInOut' } : { duration: 0.2 }
-        }
-      />
+      <span className="relative shrink-0">
+        <Identicon
+          seed={agent.id}
+          title={agent.username || agent.id}
+          className="size-7 rounded-md"
+        />
+        <motion.span
+          className={`border-surface-secondary absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full border-2 ${DOT[chip.color]}`}
+          animate={
+            chip.working ? { opacity: [1, 0.3, 1], scale: [1, 1.3, 1] } : { opacity: 1, scale: 1 }
+          }
+          transition={
+            chip.working ? { duration: 1, repeat: Infinity, ease: 'easeInOut' } : { duration: 0.2 }
+          }
+        />
+      </span>
       <span className="flex min-w-0 flex-col">
         <span className="flex min-w-0 items-baseline gap-1.5">
           <span className="truncate text-sm font-medium">{agent.username || agent.id}</span>
@@ -51,6 +63,36 @@ function AgentRow({
           </span>
         </span>
         <span className="text-muted truncate font-mono text-[11px]">{agent.id}</span>
+      </span>
+    </button>
+  );
+}
+
+/** A group entry in the left list. */
+function GroupRow({
+  group,
+  selected,
+  onSelect,
+}: {
+  group: Group;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      onClick={onSelect}
+      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors ${
+        selected ? 'bg-accent/15' : 'hover:bg-surface'
+      }`}
+    >
+      <span className="bg-success/15 text-success flex size-7 shrink-0 items-center justify-center rounded-md">
+        <LuUsers className="size-3.5" />
+      </span>
+      <span className="flex min-w-0 flex-col">
+        <span className="truncate text-sm font-medium">{group.name}</span>
+        {group.description && (
+          <span className="text-muted truncate text-[11px]">{group.description}</span>
+        )}
       </span>
     </button>
   );
@@ -80,18 +122,34 @@ export function DashboardChat({ agents }: { agents: Agent[] }) {
   const running = agents.filter((a) => a.status === 'running');
   const ids = running.map((a) => a.id).join(',');
   const [open, setOpen] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  // Mobile is single-pane: show either the agent list or the chat. Desktop
-  // shows both side-by-side regardless of this flag.
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [sel, setSel] = useState<Selection | null>(null);
+  // Mobile is single-pane: show either the list or the chat. Desktop shows both.
   const [showList, setShowList] = useState(false);
 
+  // Load the group list whenever the panel opens (so a newly-created group shows).
   useEffect(() => {
-    const list = ids ? ids.split(',') : [];
-    setSelectedId((cur) => (cur && list.includes(cur) ? cur : (list[0] ?? null)));
-  }, [ids]);
+    if (!open) return;
+    void listGroups()
+      .then(setGroups)
+      .catch(() => {});
+  }, [open]);
+
+  // Keep the selection valid: default to the first agent; drop a stale one.
+  useEffect(() => {
+    const agentIds = ids ? ids.split(',') : [];
+    const groupIds = groups.map((g) => g.id);
+    setSel((cur) => {
+      if (cur?.kind === 'agent' && agentIds.includes(cur.id)) return cur;
+      if (cur?.kind === 'group' && groupIds.includes(cur.id)) return cur;
+      return agentIds[0] ? { kind: 'agent', id: agentIds[0] } : null;
+    });
+  }, [ids, groups]);
 
   if (running.length === 0) return null;
-  const selected = running.find((a) => a.id === selectedId) ?? running[0]!;
+  const selectedAgent =
+    sel?.kind === 'agent' ? (running.find((a) => a.id === sel.id) ?? running[0]!) : null;
+  const selectedGroup = sel?.kind === 'group' ? groups.find((g) => g.id === sel.id) : null;
 
   return (
     <>
@@ -145,30 +203,53 @@ export function DashboardChat({ agents }: { agents: Agent[] }) {
                 }`}
               >
                 <aside className="border-separator bg-surface-secondary flex w-full shrink-0 flex-col border-r sm:w-56">
-                  <div className="flex items-center justify-between px-3 py-3">
-                    <span className="text-muted text-xs font-semibold tracking-wide uppercase">
-                      Agents
-                    </span>
-                    <button
-                      aria-label="Close chat"
-                      className="text-muted hover:text-foreground sm:hidden"
-                      onClick={() => setOpen(false)}
-                    >
-                      <LuX className="size-5" />
-                    </button>
-                  </div>
-                  <div className="min-h-0 flex-1 space-y-1 overflow-auto px-2 pb-2">
-                    {running.map((a) => (
-                      <AgentRow
-                        key={a.id}
-                        agent={a}
-                        selected={a.id === selected.id}
-                        onSelect={() => {
-                          setSelectedId(a.id);
-                          setShowList(false);
-                        }}
-                      />
-                    ))}
+                  <div className="min-h-0 flex-1 overflow-auto px-2 py-2">
+                    <div className="flex items-center justify-between px-1.5 pt-1 pb-2">
+                      <span className="text-muted text-xs font-semibold tracking-wide uppercase">
+                        Agents
+                      </span>
+                      <button
+                        aria-label="Close chat"
+                        className="text-muted hover:text-foreground sm:hidden"
+                        onClick={() => setOpen(false)}
+                      >
+                        <LuX className="size-5" />
+                      </button>
+                    </div>
+                    <div className="space-y-1">
+                      {running.map((a) => (
+                        <AgentRow
+                          key={a.id}
+                          agent={a}
+                          selected={sel?.kind === 'agent' && a.id === sel.id}
+                          onSelect={() => {
+                            setSel({ kind: 'agent', id: a.id });
+                            setShowList(false);
+                          }}
+                        />
+                      ))}
+                    </div>
+
+                    {groups.length > 0 && (
+                      <>
+                        <div className="text-muted px-1.5 pt-4 pb-2 text-xs font-semibold tracking-wide uppercase">
+                          Group chats
+                        </div>
+                        <div className="space-y-1">
+                          {groups.map((g) => (
+                            <GroupRow
+                              key={g.id}
+                              group={g}
+                              selected={sel?.kind === 'group' && g.id === sel.id}
+                              onSelect={() => {
+                                setSel({ kind: 'group', id: g.id });
+                                setShowList(false);
+                              }}
+                            />
+                          ))}
+                        </div>
+                      </>
+                    )}
                   </div>
                   <Link
                     href="/settings"
@@ -179,22 +260,53 @@ export function DashboardChat({ agents }: { agents: Agent[] }) {
                   </Link>
                 </aside>
 
-                {/* Pane 2: the selected agent's chat (conversation area is recessed). */}
+                {/* Pane 2: the selected agent's chat, or the selected group chat. */}
                 <section className="flex w-full shrink-0 flex-col min-w-0 sm:w-auto sm:flex-1">
                   <header className="border-separator flex items-start gap-2 border-b px-4 py-3">
                     <button
-                      aria-label="Back to agents"
+                      aria-label="Back to list"
                       className="text-muted hover:text-foreground mt-0.5 shrink-0 sm:hidden"
                       onClick={() => setShowList(true)}
                     >
                       <LuChevronLeft className="size-5" />
                     </button>
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-semibold">
-                        {selected.username || selected.id}
+                    <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                      {selectedAgent && (
+                        <Identicon
+                          seed={selectedAgent.id}
+                          title={selectedAgent.username || selectedAgent.id}
+                          className="size-9 shrink-0 rounded-lg"
+                        />
+                      )}
+                      {selectedGroup && (
+                        <span className="bg-success/15 text-success flex size-9 shrink-0 items-center justify-center rounded-lg">
+                          <LuUsers className="size-4.5" />
+                        </span>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        {selectedAgent && (
+                          <>
+                            <div className="truncate text-sm font-semibold">
+                              {selectedAgent.username || selectedAgent.id}
+                            </div>
+                            <div className="text-muted truncate font-mono text-xs">
+                              {selectedAgent.id}
+                            </div>
+                            <HeaderStats agent={selectedAgent} />
+                          </>
+                        )}
+                        {selectedGroup && (
+                          <>
+                            <div className="truncate text-sm font-semibold">
+                              {selectedGroup.name}
+                            </div>
+                            <div className="text-muted truncate text-xs">
+                              {selectedGroup.description ||
+                                'Group chat — everyone in the group sees your messages.'}
+                            </div>
+                          </>
+                        )}
                       </div>
-                      <div className="text-muted truncate font-mono text-xs">{selected.id}</div>
-                      <HeaderStats agent={selected} />
                     </div>
                     <button
                       aria-label="Close chat"
@@ -204,7 +316,16 @@ export function DashboardChat({ agents }: { agents: Agent[] }) {
                       <LuX className="size-5" />
                     </button>
                   </header>
-                  <ChatPanel key={selected.id} agentId={selected.id} active={open} />
+                  {selectedAgent && (
+                    <ChatPanel key={selectedAgent.id} agentId={selectedAgent.id} active={open} />
+                  )}
+                  {selectedGroup && (
+                    <GroupChatPanel
+                      key={selectedGroup.id}
+                      groupId={selectedGroup.id}
+                      active={open}
+                    />
+                  )}
                 </section>
               </div>
             </motion.div>

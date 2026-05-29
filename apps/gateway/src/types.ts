@@ -71,6 +71,19 @@ export interface Group {
   createdAt: number;
 }
 
+/** One message in a group chat. `kind` distinguishes a peer agent from the
+ *  human operator chatting via the dashboard. */
+export interface GroupMessage {
+  id: string;
+  /** Group id the message belongs to. */
+  group: string;
+  /** Display name of the sender (agent name, or "operator" for the human). */
+  from: string;
+  kind: 'agent' | 'human';
+  text: string;
+  ts: number;
+}
+
 // --- Integrations ----------------------------------------------------------
 // A per-agent "integration" connects the agent to an outside platform. Discord
 // is the first connector; future ones (slack, telegram, …) reuse this shell and

@@ -38,9 +38,15 @@ It tells you where the message came from and how to reply:
     `discord_send_message({ address: "discord://dm/<userId>", content })`.
   - `[discord://<guild>/<channel>#<messageId>] name: …` — a server channel. Reply to that channel,
     or pass `reply: true` to reply to that specific message.
-- **`[swarm://<agent>] …`** — a message from another agent in your swarm. Reply with
+- **`[swarm://<agent>] …`** — a direct message from another agent in your swarm. Reply with
   `swarm_send({ to: "<agent>", text })` (the name in the prefix is the sender). Use this to
   coordinate, delegate, or share results with peers.
+- **`[group://<group>] <sender>: …`** — a **group chat** message in group `<group>`. Everyone in
+  that group sees it. `<sender>: …` is a teammate **agent**; `<sender> (human, via dashboard): …` is
+  the **human operator** chatting from the dashboard. Reply to the whole group with
+  `swarm_send_group({ group: "<group>", text })` — your groupmates and the operator will see it, and
+  you won't get a copy of your own message. (You won't see your own group messages echoed back; you
+  know you sent them because you made the tool call.)
 - **`[sys://…]`** — a trusted system/runtime event (e.g. a wake-up or warning). Act on it; there is
   nothing to reply to.
 
@@ -98,6 +104,10 @@ if you have a raw channel ID instead.
   terminal as `[swarm://you]`; they reply with their own `swarm_send`.
 - `swarm_send_file(to, path, note?)` — send a file (under your home) to another agent; it lands in
   their `~/.swarm/shared-inbox/` and they're notified with the path.
+- `swarm_list_groups()` — the groups you belong to (id, name, description).
+- `swarm_send_group(group, text)` — broadcast to a group's chat. Every other agent in the group (and
+  the human operator on the dashboard) receives it; you don't get a copy. Messages arrive tagged
+  `[group://<name>]`.
 - `swarm_whoami()` — your own id + name in the swarm.
 - `swarm_manage_agent(to, action)` — start/stop another agent (never remove). **Only** if a role
   grants you the "manage agents" permission, and only for agents **in your group**, else refused (403).

@@ -14,6 +14,7 @@ import {
   type Agent,
   type UpgradeInfo,
 } from '@/lib/gateway';
+import { Identicon } from '@/lib/identicon';
 import { AgentActivity, AgentStatsInline, useAgentStats } from './AgentStats';
 import { AgentSettingsModal } from './AgentSettingsModal';
 import { ConfirmActionDialog } from './ConfirmActionDialog';
@@ -128,7 +129,14 @@ export function AgentCard({
 
         {/* Right column: title, info, then status + live stats. */}
         <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <h3 className="truncate font-semibold">{agent.username || agent.id}</h3>
+          <div className="flex min-w-0 items-center gap-2">
+            <Identicon
+              seed={agent.id}
+              title={agent.username || agent.id}
+              className="size-6 shrink-0 rounded-md"
+            />
+            <h3 className="truncate font-semibold">{agent.username || agent.id}</h3>
+          </div>
           <p className="text-muted truncate font-mono text-xs">{agent.id}</p>
 
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
