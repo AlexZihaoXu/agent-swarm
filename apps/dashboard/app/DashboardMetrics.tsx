@@ -427,8 +427,10 @@ export function DashboardMetrics() {
               title="Memory per agent · 12h"
               data={memData}
               series={series}
-              // Data is in MB; show GB once it's ≥1 GB, else MB.
+              // Data is in MB. Tooltip stays precise (GB ≥1 GB, else MB); the
+              // axis uses whole GB so labels stay short and don't wrap.
               format={(v) => (v >= 1024 ? `${(v / 1024).toFixed(1)} GB` : `${Math.round(v)} MB`)}
+              tickFormat={(v) => `${Math.round(v / 1024)} GB`}
               max={host ? host.memoryMb : undefined}
             />
           </div>
@@ -492,13 +494,17 @@ function ResourceChart({
   data,
   series,
   format,
+  tickFormat,
   max,
 }: {
   title: string;
   data: Record<string, number>[];
   series: { id: string; name: string }[];
-  /** Formats a value for both the Y-axis ticks and the tooltip (adds the unit). */
+  /** Formats a value for the tooltip (adds the unit; may keep precision). */
   format: (v: number) => string;
+  /** Formats a Y-axis tick; falls back to `format`. Used to keep axis labels
+   *  short/whole (e.g. "23 GB") while the tooltip stays precise. */
+  tickFormat?: (v: number) => string;
   /** Fixed Y-axis ceiling (max resources exposed); auto-scales if undefined. */
   max?: number;
 }) {
@@ -526,7 +532,7 @@ function ResourceChart({
                 tick={AXIS}
                 stroke="var(--separator)"
                 domain={max ? [0, max] : [0, 'auto']}
-                tickFormatter={format}
+                tickFormatter={tickFormat ?? format}
                 allowDataOverflow
               />
               <Tooltip
