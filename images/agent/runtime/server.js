@@ -940,8 +940,59 @@ wss.on('connection', (ws, req) => {
   ws.on('close', () => sess.clients.delete(ws));
 });
 
+// Heartbeat: write the current time to disk every 15s so that, after a
+// container shutdown, the next boot can tell how long we were down. A small gap
+// (supervisor-only restart) is ignored; a real downtime gap triggers a resume nudge.
+const HEARTBEAT_FILE = path.join(HOME, '.swarm', 'heartbeat');
+const DOWNTIME_THRESHOLD_MS = 90_000;
+
+function readHeartbeat() {
+  try {
+    const n = parseInt(fs.readFileSync(HEARTBEAT_FILE, 'utf8').trim(), 10);
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
+}
+function writeHeartbeat() {
+  try {
+    fs.mkdirSync(path.dirname(HEARTBEAT_FILE), { recursive: true });
+    fs.writeFileSync(HEARTBEAT_FILE, String(Date.now()));
+  } catch {
+    /* best-effort */
+  }
+}
+
+// If we were shut down (heartbeat gap exceeds the threshold), nudge claude to
+// resume once it's at the prompt. Typed into the session like any other message.
+function maybeNudgeResume() {
+  const prev = readHeartbeat();
+  const now = Date.now();
+  if (!prev || now - prev <= DOWNTIME_THRESHOLD_MS) return;
+  const fmt = (ms) => new Date(ms).toLocaleString();
+  const text =
+    `**[sys://resume]** You were shut down around ${fmt(prev)} and started again at ${fmt(now)}. ` +
+    `Pick up where you left off — check your recent work/tasks and continue.`;
+  // Wait for claude to reach its prompt, then type the nudge + Enter.
+  setTimeout(() => {
+    const sess = sessions.get('claude');
+    if (!sess) return;
+    sess.pty.write(text);
+    setTimeout(() => {
+      try {
+        sess.pty.write('\r');
+      } catch {
+        /* session closed */
+      }
+    }, 200);
+  }, 12_000);
+}
+
 server.listen(PORT, () => {
   console.log(`agent-runtime terminal supervisor listening on :${PORT}`);
+  maybeNudgeResume(); // checks the gap BEFORE we overwrite the heartbeat below
+  writeHeartbeat();
+  setInterval(writeHeartbeat, 15_000);
   try {
     createSession({ name: 'claude', command: claudeBootCommand() }); // always-on, from boot
   } catch (e) {
