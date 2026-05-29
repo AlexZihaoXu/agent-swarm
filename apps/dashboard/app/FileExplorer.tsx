@@ -16,6 +16,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   LuCopy,
   LuDownload,
+  LuEllipsisVertical,
   LuFile,
   LuFileArchive,
   LuFileText,
@@ -458,40 +459,21 @@ export function FileExplorer({
                             <span className="text-muted hidden w-28 shrink-0 text-right text-xs sm:block">
                               {fmtDate(e.mtime)}
                             </span>
-                            <span className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-                              <a
-                                href={
-                                  e.dir
-                                    ? agentFolderZipUrl(agentId, join(cwd, e.name))
-                                    : agentFileDownloadUrl(agentId, join(cwd, e.name))
-                                }
-                                className="text-muted hover:text-foreground rounded p-1"
-                                aria-label={
-                                  e.dir ? `Download ${e.name} as zip` : `Download ${e.name}`
-                                }
-                                title={e.dir ? 'Download as .zip' : 'Download'}
-                              >
-                                {e.dir ? (
-                                  <LuFileArchive className="size-4" />
-                                ) : (
-                                  <LuDownload className="size-4" />
-                                )}
-                              </a>
-                              <button
-                                aria-label={`Rename ${e.name}`}
-                                className="text-muted hover:text-foreground rounded p-1"
-                                onClick={() => startRename(e.name)}
-                              >
-                                <LuPencil className="size-4" />
-                              </button>
-                              <button
-                                aria-label={`Delete ${e.name}`}
-                                className="text-muted hover:text-danger rounded p-1"
-                                onClick={() => removeEntry(e)}
-                              >
-                                <LuTrash2 className="size-4" />
-                              </button>
-                            </span>
+                            {/* Per-row actions menu. The ⋮ button is always shown
+                                on touch (no hover / no right-click) and revealed on
+                                hover for pointer devices; right-click opens it too. */}
+                            <button
+                              aria-label={`Actions for ${e.name}`}
+                              title="Actions"
+                              className="text-muted hover:text-foreground shrink-0 rounded p-1 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100"
+                              onClick={(ev) => {
+                                ev.stopPropagation();
+                                const r = ev.currentTarget.getBoundingClientRect();
+                                setMenu({ x: r.right, y: r.bottom, entry: e });
+                              }}
+                            >
+                              <LuEllipsisVertical className="size-4" />
+                            </button>
                           </li>
                         ))}
                       </ul>

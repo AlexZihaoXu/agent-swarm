@@ -6,6 +6,7 @@ import {
   LuCircleArrowUp,
   LuCirclePlay,
   LuCircleStop,
+  LuEllipsisVertical,
   LuFolderOpen,
   LuMonitor,
   LuPackage,
@@ -147,6 +148,18 @@ export function AgentCard({
               className="size-6 shrink-0 rounded-md"
             />
             <h3 className="truncate font-semibold">{agent.username || agent.id}</h3>
+            {/* Tap target for the actions menu — on touch there's no right-click. */}
+            <button
+              aria-label={`Actions for ${agent.username || agent.id}`}
+              title="Actions"
+              className="text-muted hover:text-foreground hover:bg-surface-secondary ml-auto shrink-0 rounded p-1"
+              onClick={(e) => {
+                const r = e.currentTarget.getBoundingClientRect();
+                setMenuPos({ x: r.right, y: r.bottom });
+              }}
+            >
+              <LuEllipsisVertical className="size-4" />
+            </button>
           </div>
           <p className="text-muted truncate font-mono text-xs">{agent.id}</p>
 
