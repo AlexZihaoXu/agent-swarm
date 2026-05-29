@@ -36,6 +36,9 @@ export interface Agent {
   /** Per-agent CLAUDE_AUTOCOMPACT_PCT_OVERRIDE (1–100). null/omitted = the
    *  claude default (~83%). Applied by the supervisor on (re)launch. */
   autoCompactPct?: number | null;
+  /** Configured model override (ANTHROPIC_MODEL: alias or full id); null = the
+   *  claude default. Applied by the supervisor on (re)launch. */
+  model?: string | null;
 }
 
 // --- Integrations ----------------------------------------------------------

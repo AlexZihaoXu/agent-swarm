@@ -57,6 +57,8 @@ function settingsEnv() {
     const pct = id && id.autoCompactPct;
     if (typeof pct === 'number' && pct >= 1 && pct <= 100)
       env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = String(Math.round(pct));
+    if (id && typeof id.model === 'string' && id.model.trim())
+      env.ANTHROPIC_MODEL = id.model.trim();
   } catch {
     /* no identity / setting unset — use defaults */
   }

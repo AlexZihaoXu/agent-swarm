@@ -11,6 +11,15 @@ import { IntegrationsPanel } from './IntegrationsPanel';
  *  ~83% claude default, so it's a meaningful change). */
 const DEFAULT_PCT = 80;
 
+/** Model choices → ANTHROPIC_MODEL value ('' = claude's default). Aliases stay
+ *  current across model releases, so they're preferred over pinned ids. */
+const MODEL_OPTIONS: { label: string; value: string }[] = [
+  { label: 'Default', value: '' },
+  { label: 'Opus', value: 'opus' },
+  { label: 'Sonnet', value: 'sonnet' },
+  { label: 'Haiku', value: 'haiku' },
+];
+
 /**
  * Per-agent settings, in two tabs:
  *  - General: display name (rename, live) + auto-compact threshold
@@ -36,6 +45,7 @@ export function AgentSettingsModal({
   const [name, setName] = useState('');
   const [override, setOverride] = useState(false);
   const [pct, setPct] = useState(DEFAULT_PCT);
+  const [model, setModel] = useState(''); // '' = claude default
   const [busy, setBusy] = useState(false);
   const [phase, setPhase] = useState<'form' | 'restart'>('form');
   const [tab, setTab] = useState('general');
@@ -54,6 +64,7 @@ export function AgentSettingsModal({
         const has = typeof a.autoCompactPct === 'number';
         setOverride(has);
         setPct(has ? a.autoCompactPct! : DEFAULT_PCT);
+        setModel(a.model ?? '');
       })
       .catch(() => {});
     return () => {
@@ -64,19 +75,27 @@ export function AgentSettingsModal({
   const origPct = typeof agent?.autoCompactPct === 'number' ? agent.autoCompactPct : null;
   const nextPct = override ? Math.round(pct) : null;
   const pctChanged = nextPct !== origPct;
+  const origModel = agent?.model ?? '';
+  const modelChanged = model !== origModel;
+  // Both the threshold and the model are read by claude at launch, so a change
+  // only takes effect on the next (re)start.
+  const needsRestart = pctChanged || modelChanged;
   const running = agent?.status === 'running';
 
   const save = async () => {
     if (!name.trim()) return;
     setBusy(true);
     try {
-      await updateAgent(agentId, { username: name.trim(), autoCompactPct: nextPct });
+      await updateAgent(agentId, {
+        username: name.trim(),
+        autoCompactPct: nextPct,
+        model: model || null,
+      });
       onChanged?.();
-      if (pctChanged && running) {
+      if (needsRestart && running) {
         setPhase('restart');
       } else {
-        if (pctChanged)
-          toast.warning('Saved — the new threshold applies next time the agent starts.');
+        if (needsRestart) toast.warning('Saved — the change applies next time the agent starts.');
         onOpenChange(false);
       }
     } catch (e) {
@@ -156,6 +175,27 @@ export function AgentSettingsModal({
                         </Button>
                       </div>
 
+                      <div className="space-y-1.5">
+                        <Label className="text-sm">Model</Label>
+                        <div className="flex flex-wrap gap-1.5">
+                          {MODEL_OPTIONS.map((opt) => (
+                            <Button
+                              key={opt.value}
+                              type="button"
+                              size="sm"
+                              variant={model === opt.value ? 'primary' : 'tertiary'}
+                              onPress={() => setModel(opt.value)}
+                            >
+                              {opt.label}
+                            </Button>
+                          ))}
+                        </div>
+                        <p className="text-muted text-xs">
+                          The model this agent&apos;s <code>claude</code> runs.
+                          &ldquo;Default&rdquo; uses claude&apos;s own default.
+                        </p>
+                      </div>
+
                       <div className="space-y-3">
                         <Switch isSelected={override} onChange={setOverride}>
                           <Switch.Control>
@@ -193,9 +233,10 @@ export function AgentSettingsModal({
                           </Slider>
                         )}
 
-                        {running && pctChanged && (
+                        {running && needsRestart && (
                           <p className="text-warning text-xs">
-                            Changing the threshold requires restarting the agent to take effect.
+                            Changing the model or threshold requires restarting the agent to take
+                            effect.
                           </p>
                         )}
                       </div>
@@ -234,7 +275,7 @@ export function AgentSettingsModal({
               <>
                 <Modal.Body>
                   <p className="text-muted text-sm">
-                    The auto-compact threshold changed. The agent must restart (stop → start) for{' '}
+                    The model/threshold changed. The agent must restart (stop → start) for{' '}
                     <code>claude</code> to pick it up. The transcript is preserved and resumes via{' '}
                     <code>--continue</code>.
                   </p>

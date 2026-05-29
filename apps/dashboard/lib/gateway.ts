@@ -15,6 +15,8 @@ export interface Agent {
   timezone?: string;
   /** Per-agent CLAUDE_AUTOCOMPACT_PCT_OVERRIDE (1–100); null = claude default. */
   autoCompactPct?: number | null;
+  /** Configured model override (ANTHROPIC_MODEL); null = claude default. */
+  model?: string | null;
 }
 
 export interface CreateAgentOptions {
@@ -291,7 +293,7 @@ export const getAgent = (id: string) => api<Agent>(`/api/agents/${id}`);
  *  Live for the name; the auto-compact % applies on the next stop→start. */
 export const updateAgent = (
   id: string,
-  patch: { username?: string; autoCompactPct?: number | null },
+  patch: { username?: string; autoCompactPct?: number | null; model?: string | null },
 ) =>
   api<Agent>(`/api/agents/${id}`, {
     method: 'PATCH',

@@ -156,9 +156,11 @@ async function handleAgents(
       return (await manager.remove(id), sendJson(res, 200, { ok: true }), true);
     if (method === 'PATCH') {
       const body = await readJson(req);
-      const patch: { username?: string; autoCompactPct?: number | null } = {};
+      const patch: { username?: string; autoCompactPct?: number | null; model?: string | null } =
+        {};
       if (body.username !== undefined) patch.username = body.username;
       if (body.autoCompactPct !== undefined) patch.autoCompactPct = body.autoCompactPct;
+      if (body.model !== undefined) patch.model = body.model;
       return (sendJson(res, 200, await manager.patchAgent(id, patch)), true);
     }
   } else if (action === 'upgrade') {
@@ -338,6 +340,7 @@ async function readJson(req: IncomingMessage): Promise<{
   memoryMb?: number;
   timezone?: string;
   autoCompactPct?: number | null;
+  model?: string | null;
   type?: IntegrationType;
   credentials?: { botToken?: string };
   rules?: Partial<DiscordRules>;

@@ -57,6 +57,9 @@ interface AgentIdentity {
   createdAt: number;
   /** CLAUDE_AUTOCOMPACT_PCT_OVERRIDE (1–100); null = use the claude default. */
   autoCompactPct?: number | null;
+  /** ANTHROPIC_MODEL the agent's claude runs (alias like "opus"/"sonnet"/"haiku"
+   *  or a full model id); null/empty = the claude default. */
+  model?: string | null;
 }
 
 /** Per-million-token USD pricing (mirrors the agent runtime's modelRates).
@@ -147,6 +150,7 @@ export class AgentManager {
       createdAt: cur?.createdAt ?? Date.now(),
       autoCompactPct:
         patch.autoCompactPct !== undefined ? patch.autoCompactPct : (cur?.autoCompactPct ?? null),
+      model: patch.model !== undefined ? patch.model : (cur?.model ?? null),
     };
     mkdirSync(dirname(this.identityFile(id)), { recursive: true });
     writeFileSync(this.identityFile(id), JSON.stringify(next, null, 2));
@@ -167,7 +171,7 @@ export class AgentManager {
    *  (i.e. on the next stop→start). */
   async patchAgent(
     id: string,
-    patch: { username?: string; autoCompactPct?: number | null },
+    patch: { username?: string; autoCompactPct?: number | null; model?: string | null },
   ): Promise<Agent> {
     if (!existsSync(this.agentDataDir(id)))
       throw Object.assign(new Error('agent not found'), { statusCode: 404 });
@@ -184,6 +188,10 @@ export class AgentManager {
           statusCode: 400,
         });
       idPatch.autoCompactPct = v === null ? null : Math.round(v);
+    }
+    if (patch.model !== undefined) {
+      const m = patch.model?.trim();
+      idPatch.model = m ? m : null; // empty/whitespace → clear back to default
     }
     this.writeIdentity(id, idPatch);
     return this.toAgent(await this.docker.getContainer(this.containerName(id)).inspect());
@@ -531,6 +539,7 @@ export class AgentManager {
         memoryMb: c.Labels?.[MEMORY_LABEL] ? Number(c.Labels[MEMORY_LABEL]) : undefined,
         timezone: c.Labels?.[TZ_LABEL],
         autoCompactPct: this.readIdentity(id)?.autoCompactPct ?? null,
+        model: this.readIdentity(id)?.model ?? null,
       };
     });
   }
@@ -1080,6 +1089,7 @@ export class AgentManager {
       memoryMb: labels[MEMORY_LABEL] ? Number(labels[MEMORY_LABEL]) : undefined,
       timezone: labels[TZ_LABEL],
       autoCompactPct: this.readIdentity(id)?.autoCompactPct ?? null,
+      model: this.readIdentity(id)?.model ?? null,
     };
   }
 }
