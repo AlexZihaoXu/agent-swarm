@@ -8,6 +8,7 @@ import {
   Input,
   Label,
   Modal,
+  Separator,
   TextArea,
   TextField,
   toast,
@@ -499,7 +500,7 @@ export function FileExplorer({
                       }}
                     />
                     {menu && (
-                      <Dropdown.Popover>
+                      <Dropdown.Popover placement="bottom end" className="min-w-48">
                         <Dropdown.Menu onAction={(key) => onMenuAction(String(key), menu.entry)}>
                           <Dropdown.Section>
                             <Header>{menu.entry.dir ? 'Folder' : 'File'}</Header>
@@ -551,6 +552,7 @@ export function FileExplorer({
                               </div>
                             </Dropdown.Item>
                           </Dropdown.Section>
+                          <Separator />
                           <Dropdown.Section>
                             <Header>Danger zone</Header>
                             <Dropdown.Item id="delete" textValue="Delete" variant="danger">

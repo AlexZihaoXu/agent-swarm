@@ -1,6 +1,6 @@
 'use client';
 
-import { Button, Card, Dropdown, Header, Label, Modal } from '@heroui/react';
+import { Button, Card, Dropdown, Header, Label, Modal, Separator } from '@heroui/react';
 import Link from 'next/link';
 import {
   LuCircleArrowUp,
@@ -193,7 +193,7 @@ export function AgentCard({
             pointerEvents: 'none',
           }}
         />
-        <Dropdown.Popover>
+        <Dropdown.Popover placement="bottom end" className="min-w-44">
           <Dropdown.Menu onAction={(key) => onAction(String(key))}>
             <Dropdown.Section>
               <Dropdown.Item id="open" textValue="Open">
@@ -246,6 +246,7 @@ export function AgentCard({
                 <Label>Package…</Label>
               </Dropdown.Item>
             </Dropdown.Section>
+            <Separator />
             <Dropdown.Section>
               <Header>Danger zone</Header>
               <Dropdown.Item id="remove" textValue="Remove" variant="danger">
