@@ -429,6 +429,57 @@ export function DashboardMetrics() {
   );
 }
 
+/** Compact tooltip for the per-agent resource charts. Hides series that are zero
+ *  at the hovered time (idle/long-gone agents otherwise pad it with "0 MB" rows),
+ *  dedupes by name, sorts by value, and caps the list so it never grows tall
+ *  enough to clip out of the short chart. */
+function ResourceTooltip({
+  active,
+  payload,
+  label,
+  unit,
+}: {
+  active?: boolean;
+  payload?: { name?: string | number; value?: number; color?: string }[];
+  label?: number;
+  unit: string;
+}) {
+  if (!active || !payload?.length) return null;
+  const seen = new Set<string>();
+  const rows = payload
+    .map((p) => ({
+      name: String(p.name ?? ''),
+      value: Math.round(Number(p.value) || 0),
+      color: p.color,
+    }))
+    .filter((r) => r.value > 0 && !seen.has(r.name) && seen.add(r.name))
+    .sort((a, b) => b.value - a.value);
+  if (rows.length === 0) return null;
+  const MAX = 6;
+  const shown = rows.slice(0, MAX);
+  return (
+    <div style={TOOLTIP} className="px-2.5 py-1.5">
+      <div className="text-muted mb-0.5 text-xs">{fmtClock(Number(label))}</div>
+      {shown.map((r) => (
+        <div key={r.name} className="flex items-center gap-2 text-xs leading-5">
+          <span
+            className="inline-block h-2 w-2 shrink-0 rounded-full"
+            style={{ background: r.color }}
+          />
+          <span className="min-w-0 flex-1 truncate">{r.name}</span>
+          <span className="tabular-nums font-medium">
+            {r.value}
+            {unit}
+          </span>
+        </div>
+      ))}
+      {rows.length > MAX && (
+        <div className="text-muted mt-0.5 text-[11px]">+{rows.length - MAX} more</div>
+      )}
+    </div>
+  );
+}
+
 /** A per-agent line chart over the 12h window (CPU% or memory MB). */
 function ResourceChart({
   title,
@@ -471,10 +522,9 @@ function ResourceChart({
                 allowDataOverflow
               />
               <Tooltip
-                contentStyle={TOOLTIP}
-                labelStyle={{ color: 'var(--muted)' }}
-                labelFormatter={(t) => fmtClock(Number(t))}
-                formatter={(v, n) => [`${Math.round(Number(v) || 0)}${unit}`, n]}
+                allowEscapeViewBox={{ x: false, y: true }}
+                wrapperStyle={{ zIndex: 50 }}
+                content={<ResourceTooltip unit={unit} />}
               />
               {series.map((s, i) => (
                 <Line

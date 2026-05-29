@@ -963,16 +963,40 @@ function writeHeartbeat() {
   }
 }
 
-// If we were shut down (heartbeat gap exceeds the threshold), nudge claude to
-// resume once it's at the prompt. Typed into the session like any other message.
+// One-shot marker the gateway drops just before a *deliberate* restart
+// (recreate / operator start). Lets us tell an operator-driven bounce apart from
+// an unexpected shutdown — the former is worth announcing even when it's quick
+// (gap < the heartbeat threshold), the latter only when downtime was real.
+const RESTART_MARKER = path.join(HOME, '.swarm', 'restart');
+
+// On boot, surface to claude (once it's at the prompt) why it just restarted:
+//  - a gateway-marked deliberate restart → always notify, any duration; or
+//  - an unexpected shutdown whose heartbeat gap exceeds the threshold.
+// A small gap with no marker (a supervisor-only restart) stays silent.
 function maybeNudgeResume() {
   const prev = readHeartbeat();
   const now = Date.now();
-  if (!prev || now - prev <= DOWNTIME_THRESHOLD_MS) return;
   const fmt = (ms) => new Date(ms).toLocaleString();
-  const text =
-    `**[sys://resume]** You were shut down around ${fmt(prev)} and started again at ${fmt(now)}. ` +
-    `Pick up where you left off — check your recent work/tasks and continue.`;
+  let deliberate = false;
+  try {
+    fs.statSync(RESTART_MARKER);
+    deliberate = true;
+    fs.rmSync(RESTART_MARKER, { force: true }); // consume it — fire once
+  } catch {
+    /* no marker */
+  }
+  let text = null;
+  if (deliberate) {
+    text =
+      `**[sys://restart]** You were just restarted by the operator and are back online as of ${fmt(now)}. ` +
+      `Pick up where you left off — check your recent work/tasks and continue. If you were mid-task or ` +
+      `in a conversation, briefly let people know you're back.`;
+  } else if (prev && now - prev > DOWNTIME_THRESHOLD_MS) {
+    text =
+      `**[sys://resume]** You were shut down around ${fmt(prev)} and started again at ${fmt(now)}. ` +
+      `Pick up where you left off — check your recent work/tasks and continue.`;
+  }
+  if (!text) return;
   // Wait for claude to reach its prompt, then type the nudge + Enter.
   setTimeout(() => {
     const sess = sessions.get('claude');

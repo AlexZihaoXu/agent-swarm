@@ -334,6 +334,23 @@ export class AgentManager {
     }
   }
 
+  /** Drop a one-shot marker on the agent's disk so its runtime, on the next boot,
+   *  emits a `[sys://restart]` notice. This marks a *deliberate* operator restart
+   *  (recreate / start) — worth announcing even when the bounce is quick — as
+   *  distinct from the runtime's own heartbeat-gap resume nudge, which only fires
+   *  after real unexpected downtime. The runtime consumes (deletes) the marker. */
+  private markDeliberateRestart(id: string): void {
+    const dir = join(this.agentDataDir(id), '.swarm');
+    const file = join(dir, 'restart');
+    try {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(file, String(Date.now()), { mode: 0o644 });
+      chownSync(file, 1000, 1000); // readable by the agent-user supervisor (uid 1000)
+    } catch {
+      /* best-effort — a missing notice is not worth failing the restart over */
+    }
+  }
+
   /** Backfill the swarm token onto every existing agent's disk (gateway boot), so
    *  agents created before the login feature can still reach the gateway. */
   writeSwarmTokenAll(): void {
@@ -577,14 +594,28 @@ export class AgentManager {
     }
     // Graphs show the last 12h; the full history (up to 7d) stays on disk.
     const graphCutoff = Date.now() - 12 * 3_600_000;
+    const points = this.usageHistory.filter((p) => p.t >= graphCutoff);
+    // Build the line series from ids that actually have data in the window, and
+    // collapse same-named ids into one line. An agent deleted then recreated
+    // under the same display name leaves two ids in usageNames; without this the
+    // chart drew (and the tooltip listed) "atlas" twice. When a name has several
+    // ids we keep the most-recently-active one. Ids with no data in the window
+    // (long-gone agents) are dropped entirely.
+    const lastActive = new Map<string, number>(); // id → newest t with usage > 0
+    for (const p of points)
+      for (const id of this.usageNames.keys())
+        if ((p.cpu[id] ?? 0) > 0 || (p.mem[id] ?? 0) > 0) lastActive.set(id, p.t);
+    const byName = new Map<string, { id: string; name: string }>();
+    for (const [id, t] of lastActive) {
+      const name = this.usageNames.get(id) ?? id;
+      const cur = byName.get(name);
+      if (!cur || t > (lastActive.get(cur.id) ?? 0)) byName.set(name, { id, name });
+    }
     return {
       rateLimits: result,
       agents,
       buckets,
-      usage: {
-        series: [...this.usageNames.entries()].map(([id, name]) => ({ id, name })),
-        points: this.usageHistory.filter((p) => p.t >= graphCutoff),
-      },
+      usage: { series: [...byName.values()], points },
     };
   }
   private lastRateLimits: {
@@ -1070,6 +1101,7 @@ export class AgentManager {
     this.writeAuthToken(id);
     this.writeSwarmToken(id);
     this.writeRolesDoc(id);
+    this.markDeliberateRestart(id); // → [sys://restart] notice once the new container boots
     return this.spawnContainer(id, name, labels, cpus, memoryMb, timezone);
   }
 
@@ -1107,6 +1139,7 @@ export class AgentManager {
     this.writeAuthToken(id);
     this.writeSwarmToken(id);
     this.writeRolesDoc(id);
+    this.markDeliberateRestart(id); // → [sys://restart] notice once it boots
     await this.docker.getContainer(this.containerName(id)).start();
     // Reconnect any `active` integrations once the terminal is reachable.
     void this.reconnectIntegrations(id);
