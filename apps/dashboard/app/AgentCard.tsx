@@ -32,18 +32,24 @@ function PreviewImage({ agentId }: { agentId: string }) {
   }, []);
   return (
     <>
+      {/* Always mounted + opacity-faded so the first frame eases in (and refreshed
+          frames don't flicker) rather than snapping from "connecting…". */}
       <img
         src={`${screenshotUrl(agentId)}?t=${ts}`}
         alt=""
         onLoad={() => setOk(true)}
         onError={() => setOk(false)}
-        className={ok ? 'h-full w-full object-contain' : 'hidden'}
+        className={`h-full w-full object-contain transition-opacity duration-500 ease-out ${
+          ok ? 'opacity-100' : 'opacity-0'
+        }`}
       />
-      {!ok && (
-        <span className="text-muted absolute inset-0 flex items-center justify-center text-xs">
-          connecting…
-        </span>
-      )}
+      <span
+        className={`text-muted absolute inset-0 flex items-center justify-center text-xs transition-opacity duration-300 ${
+          ok ? 'pointer-events-none opacity-0' : 'opacity-100'
+        }`}
+      >
+        connecting…
+      </span>
     </>
   );
 }
