@@ -296,8 +296,16 @@ export class AgentManager {
     const file = join(dir, 'auth');
     try {
       mkdirSync(dir, { recursive: true });
-      if (token) writeFileSync(file, token, { mode: 0o600 });
-      else rmSync(file, { force: true }); // no token configured → ensure none stale
+      if (token) {
+        writeFileSync(file, token, { mode: 0o600 });
+        // The terminal supervisor runs as the agent user (uid 1000); the gateway
+        // writes as root. Without this chown the 0600 file is unreadable by the
+        // supervisor on Linux (macOS bind-mounts don't enforce it) → the token
+        // never reaches claude and it shows "Not logged in".
+        chownSync(file, 1000, 1000);
+      } else {
+        rmSync(file, { force: true }); // no token configured → ensure none stale
+      }
     } catch {
       /* best-effort */
     }
