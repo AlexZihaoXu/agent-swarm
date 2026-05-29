@@ -30,11 +30,13 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 
 # Browser, per arch: Google Chrome on amd64 (no official arm64 build),
 # Chromium (.deb, no snap) from the xtradeb PPA on arm64.
-# TARGETARCH is populated automatically by BuildKit (amd64 / arm64). Declared
-# here (not earlier) so the heavy desktop/node layers above stay cached.
-ARG TARGETARCH
+# Arch is detected with `dpkg --print-architecture` (amd64 / arm64) so the build
+# works on ANY builder — the BuildKit-only TARGETARCH auto-arg is NOT set under
+# the classic builder, which is how the gateway builds this image. Placed here
+# (not earlier) so the heavy desktop/node layers above stay cached.
 RUN set -eux; \
-    if [ "${TARGETARCH}" = "amd64" ]; then \
+    ARCH="$(dpkg --print-architecture)"; \
+    if [ "$ARCH" = "amd64" ]; then \
       install -d -m 0755 /etc/apt/keyrings; \
       curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
         | gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg; \
@@ -60,8 +62,9 @@ RUN set -eux; \
 #       software WebGL/GL via SwiftShader (no GPU in the container)
 # Also suppress the TigerVNC clipboard-config window (-iconic -> -nowin).
 RUN set -eux; \
+    ARCH="$(dpkg --print-architecture)"; \
     FLAGS="--no-sandbox --test-type --password-store=basic --no-first-run --no-default-browser-check --use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader"; \
-    if [ "${TARGETARCH}" = "amd64" ]; then \
+    if [ "$ARCH" = "amd64" ]; then \
       DESKTOP=/usr/share/applications/google-chrome.desktop; BIN=google-chrome-stable; \
     else \
       DESKTOP=/usr/share/applications/chromium.desktop; BIN=chromium; \
@@ -72,10 +75,11 @@ RUN set -eux; \
 # VS Code (official Microsoft apt repo — ships amd64 + arm64) and common CLI
 # tools. VS Code is Electron, so it needs --no-sandbox in a container too.
 RUN set -eux; \
+    ARCH="$(dpkg --print-architecture)"; \
     install -d -m 0755 /etc/apt/keyrings; \
     curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
       | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg; \
-    echo "deb [arch=${TARGETARCH} signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/code stable main" \
+    echo "deb [arch=$ARCH signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/code stable main" \
       > /etc/apt/sources.list.d/vscode.list; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
@@ -99,7 +103,8 @@ RUN curl -LsSf https://astral.sh/uv/install.sh \
 # Pin the browser (+ Files, Terminal) to the GNOME dock as default favorites,
 # baked as a system dconf default so it applies to fresh agent sessions.
 RUN set -eux; \
-    if [ "${TARGETARCH}" = "amd64" ]; then BROWSER=google-chrome.desktop; else BROWSER=chromium.desktop; fi; \
+    ARCH="$(dpkg --print-architecture)"; \
+    if [ "$ARCH" = "amd64" ]; then BROWSER=google-chrome.desktop; else BROWSER=chromium.desktop; fi; \
     mkdir -p /etc/dconf/profile /etc/dconf/db/local.d; \
     printf 'user-db:user\nsystem-db:local\n' > /etc/dconf/profile/user; \
     printf "[org/gnome/shell]\nfavorite-apps=['%s', 'code.desktop', 'org.gnome.Nautilus.desktop', 'org.gnome.Terminal.desktop']\n" \
