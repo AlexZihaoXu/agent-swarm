@@ -180,7 +180,11 @@ function ContextCircle({
   compact?: boolean;
 }) {
   const [v] = useLerp(used);
-  const lim = limit ?? contextLimit(model);
+  let lim = limit ?? contextLimit(model);
+  // Sonnet/Opus 4.x run the 1M-token extended window, but Claude Code's
+  // statusline reports the 200k base tier — which pegs the gauge at 100% once a
+  // session passes 200k. Use the true 1M ceiling for those models.
+  if (lim && lim < 1_000_000 && /(sonnet|opus)\s*4/i.test(model ?? '')) lim = 1_000_000;
   const title = `context window usage — ${fmtContext(used, lim)}`;
   if (used <= 0) {
     return (

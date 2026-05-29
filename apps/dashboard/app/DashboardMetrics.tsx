@@ -420,14 +420,15 @@ export function DashboardMetrics() {
               title="CPU per agent · 12h"
               data={cpuData}
               series={series}
-              unit="%"
+              format={(v) => `${Math.round(v)}%`}
               max={host ? host.cpus * 100 : undefined}
             />
             <ResourceChart
               title="Memory per agent · 12h"
               data={memData}
               series={series}
-              unit=" MB"
+              // Data is in MB; show GB once it's ≥1 GB, else MB.
+              format={(v) => (v >= 1024 ? `${(v / 1024).toFixed(1)} GB` : `${Math.round(v)} MB`)}
               max={host ? host.memoryMb : undefined}
             />
           </div>
@@ -445,12 +446,12 @@ function ResourceTooltip({
   active,
   payload,
   label,
-  unit,
+  format,
 }: {
   active?: boolean;
   payload?: { name?: string | number; value?: number; color?: string }[];
   label?: number;
-  unit: string;
+  format: (v: number) => string;
 }) {
   if (!active || !payload?.length) return null;
   const seen = new Set<string>();
@@ -475,10 +476,7 @@ function ResourceTooltip({
             style={{ background: r.color }}
           />
           <span className="min-w-0 flex-1 truncate">{r.name}</span>
-          <span className="tabular-nums font-medium">
-            {r.value}
-            {unit}
-          </span>
+          <span className="tabular-nums font-medium">{format(r.value)}</span>
         </div>
       ))}
       {rows.length > MAX && (
@@ -493,13 +491,14 @@ function ResourceChart({
   title,
   data,
   series,
-  unit,
+  format,
   max,
 }: {
   title: string;
   data: Record<string, number>[];
   series: { id: string; name: string }[];
-  unit: string;
+  /** Formats a value for both the Y-axis ticks and the tooltip (adds the unit). */
+  format: (v: number) => string;
   /** Fixed Y-axis ceiling (max resources exposed); auto-scales if undefined. */
   max?: number;
 }) {
@@ -523,16 +522,17 @@ function ResourceChart({
                 stroke="var(--separator)"
               />
               <YAxis
-                width={44}
+                width={52}
                 tick={AXIS}
                 stroke="var(--separator)"
                 domain={max ? [0, max] : [0, 'auto']}
+                tickFormatter={format}
                 allowDataOverflow
               />
               <Tooltip
                 allowEscapeViewBox={{ x: false, y: true }}
                 wrapperStyle={{ zIndex: 50 }}
-                content={<ResourceTooltip unit={unit} />}
+                content={<ResourceTooltip format={format} />}
               />
               {series.map((s, i) => (
                 <Line
