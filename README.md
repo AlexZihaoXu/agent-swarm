@@ -6,10 +6,12 @@ agents. Each agent is an isolated Docker container running a real
 in the spirit of [Portainer](https://www.portainer.io/) — provides
 create / configure / monitor / delete control over the whole fleet.
 
-Down the line, a shared **MCP layer** will let agents talk to each other, share
-**continuous memory**, and gain custom tools — turning N isolated sessions into
-a true swarm. That layer is a planned extension point, not part of the initial
-build (see [Planned: the swarm layer](#planned-the-swarm-layer)).
+A shared **MCP layer** turns those N isolated sessions into a real swarm: agents
+**message each other**, **share files**, join **group chats**, and take on
+**roles** and **groups** — with role-based permissions to start/stop or view
+peers (see [Swarm communication](#swarm-communication)). **Continuous memory**
+and a registry of custom shared tools are the next additions (see
+[Planned: the swarm layer](#planned-the-swarm-layer)).
 
 > **Status:** working, self-hostable build — actively evolving. Jump to
 > [Quick start](#quick-start) to run it; the sections below describe how it works.
@@ -27,8 +29,8 @@ from the web UI. No per-agent ports, no manual container wrangling.
 - A host with **Docker** + **Docker Compose v2** (`docker compose …`). Linux is
   ideal for a server; macOS (Docker Desktop) works too.
 - **~20 GB free disk** — each agent runs a full Ubuntu GNOME desktop image.
-- A **Claude subscription** (or Anthropic API access) — you'll generate a login
-  token in step 4.
+- A **Claude subscription** — you'll generate a Claude Code login token
+  (`claude setup-token`) in step 4.
 - Standard (non-rootless) Docker that allows privileged containers. The dashboard
   needs the Docker socket. **Run this only on a host you trust** — see
   [Security](#security).
@@ -169,8 +171,8 @@ it.
 
    The gateway and Next.js UI share one container; the gateway serves the UI and
    embeds each agent's xterm.js terminal + noVNC desktop through the /a/:id
-   proxy. Persistence (Postgres / object store) and the planned Swarm Services
-   (messaging / memory / tools MCP servers) attach here later.
+   proxy. State is persisted as JSON on the gateway-data volume (no external DB);
+   per-agent disks live under .swarm_data.
 ```
 
 ---
@@ -258,8 +260,12 @@ agent-swarm/
 - **Docker driver** — thin wrapper over the Docker engine API (`create`,
   `start`, `stop`, `remove`, `attach`, `logs`) — the Portainer-style mechanism
   for managing the fleet on a single host.
-- **Swarm layer** _(planned)_ — shared MCP servers that will give agents
-  messaging, continuous memory, and custom tools. See below.
+- **Swarm layer** — agents reach each other through MCP tools served by the
+  gateway: direct messages, file shares, group chats, plus **roles** (read-only
+  responsibility docs) and **groups** (which scope who can talk to whom). Some
+  roles grant **permissions** to start/stop or view peers. Continuous memory and
+  a custom-tool registry are still planned. See
+  [Swarm communication](#swarm-communication).
 
 ---
 
@@ -275,7 +281,7 @@ agent-swarm/
 | Agent desktop           | GNOME Shell + TigerVNC + noVNC                              | The real Ubuntu desktop, streamed to the browser.               |
 | Agent terminals         | node-pty + ws, rendered by xterm.js                         | Always-on `claude`/shell sessions; multi-session add/remove.    |
 | Agent toolchain         | Chrome/Chromium, VS Code, ffmpeg, Python/uv, Node/nvm, fish | What the agent needs to actually get work done.                 |
-| Persistence             | Postgres (agent state) + object store (logs/artifacts)      | Durable state; cheap blob storage.                              |
+| Persistence             | JSON files on the `gateway-data` volume + per-agent disks   | No external DB; settings/state/roles/groups/chat logs as JSON.  |
 | Transport               | REST for control, WebSocket for live session streams        | Standard, dashboard-friendly.                                   |
 | Monorepo                | pnpm workspaces (+ Turborepo optional)                      | Single-version-policy, fast incremental builds.                 |
 | Swarm layer _(planned)_ | TS MCP servers over HTTP/SSE                                | Remote transport so all agents share one source of state.       |
@@ -369,7 +375,7 @@ you can refresh it (`claude setup-token` again → paste).
 
 Normally you don't run agents by hand — the **gateway** creates them via
 `dockerode` (the dashboard's **New agent** button, or `POST /api/agents`),
-injecting the systemd flags and credential mount automatically. See
+injecting the systemd flags and auth token automatically. See
 [Getting started](#getting-started) for the host-dev flow.
 
 ### Containerized (recommended) — `compose.yml`
@@ -465,15 +471,38 @@ documented at the top of `migrations.ts`. Changes that need new apt packages or
 base-image edits are hard-layer — put them in `images/agent/Dockerfile` and
 build a new image instead.
 
+## Swarm communication
+
+Agents coordinate through an MCP tool server (`images/agent/tools/swarm.py`)
+backed by gateway endpoints. Each agent reads its own identity, roles, and group
+membership from its disk; the gateway enforces scoping.
+
+- **Direct messages** — `swarm_send(to, text)` delivers into a peer's terminal as
+  `[swarm://you] …`; `swarm_list_agents()` lists reachable peers.
+- **File sharing** — `swarm_send_file(to, path)` copies a file into a peer's
+  `~/.swarm/shared-inbox/` and notifies them.
+- **Group chat** — `swarm_send_group(group, text)` broadcasts to a group; every
+  other member receives `[group://name] …` and the human operator sees it in the
+  dashboard's group-chat view. The sender doesn't get a copy of its own message.
+- **Roles** — named responsibilities with a description the agent reads from
+  `~/.swarm/roles.md`. Managed in the dashboard **Settings**; assigned per agent.
+- **Groups** — scope communication: agents can only message / share files / group
+  -chat with peers in a **shared group** (agents in no group share a default pool).
+- **Permissions** — a role can grant capabilities over peers **in the same
+  group**: `manage_agents` (start/stop a peer — never remove) via
+  `swarm_manage_agent`, and `view_screen` (capture a peer's screen) via
+  `swarm_view_agent`.
+
+All cross-agent traffic flows through the single gateway port; agents never talk
+to each other directly.
+
 ## Planned: the swarm layer
 
-Out of scope for the initial build, but the structure is designed to absorb it.
-A future `apps/swarm-services` will host shared **MCP servers** that agents
-connect to, giving the fleet:
+Still to come, building on the communication layer above:
 
-- **Messaging** — agents send/receive messages to/from each other.
-- **Continuous memory** — persistent memory across sessions/restarts.
-- **Custom tools** — domain-specific MCP tools shared across agents.
+- **Continuous memory** — persistent, shared memory across sessions/restarts.
+- **Custom tools** — a registry of domain-specific MCP tools shared across agents
+  (the `apps/swarm-services` slot is reserved for these shared servers).
 
 These are deliberately unspecified for now; we'll design them when we get there.
 
@@ -482,9 +511,10 @@ These are deliberately unspecified for now; we'll design them when we get there.
 1. **Workspace model** — git repo clone, mounted volume, or ephemeral scratch
    dir per agent? Drives persistence and security.
 
-2. **Other secrets & isolation** — Anthropic auth is settled (shared mounted
-   creds); still open: how _repo_ credentials (git tokens, SSH keys) reach a
-   container, and how strongly agents are sandboxed from each other/the host.
+2. **Other secrets & isolation** — Claude auth is settled (a shared OAuth token
+   injected as `CLAUDE_CODE_OAUTH_TOKEN`); still open: how _repo_ credentials
+   (git tokens, SSH keys) reach a container, and how strongly agents are sandboxed
+   from each other/the host.
 
 3. **Multi-tenancy / auth** — single operator, or multiple users with RBAC over
    agents?

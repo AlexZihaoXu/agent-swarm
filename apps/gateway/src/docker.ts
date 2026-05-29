@@ -228,7 +228,8 @@ export class AgentManager {
     }
     if (Array.isArray(patch.roles)) idPatch.roles = patch.roles;
     if (Array.isArray(patch.groups)) idPatch.groups = patch.groups;
-    if (patch.avatarSeed !== undefined) idPatch.avatarSeed = patch.avatarSeed.trim() || undefined;
+    // Empty string explicitly resets the avatar to the default (id-seeded).
+    if (patch.avatarSeed !== undefined) idPatch.avatarSeed = patch.avatarSeed.trim() || id;
     const prevModel = this.readIdentity(id)?.model ?? null;
     const prevRoles = JSON.stringify(this.readIdentity(id)?.roles ?? []);
     this.writeIdentity(id, idPatch);
@@ -897,6 +898,7 @@ export class AgentManager {
       model: model ?? null,
       roles: Array.isArray(opts.roles) ? opts.roles : [],
       groups: Array.isArray(opts.groups) ? opts.groups : [],
+      avatarSeed: opts.avatarSeed?.trim() || undefined,
     });
     this.writeAuthToken(id);
     this.writeRolesDoc(id);
@@ -1212,7 +1214,9 @@ export class AgentManager {
       ts: Date.now(),
     });
 
-    const label = grp.name.replace(/[[\]\n]/g, ' ').trim() || grp.id;
+    // Run the group name through the same sanitizer as every other injected
+    // token so a group name can't forge a routing prefix in the peers' terminals.
+    const label = sanitizeInbound(grp.name).slice(0, 64) || grp.id;
     const line = isAgent
       ? `**[group://${label}]** ${senderName}: ${flat}`
       : `**[group://${label}]** ${senderName} (human, via dashboard): ${flat}`;

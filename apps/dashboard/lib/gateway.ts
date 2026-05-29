@@ -119,6 +119,8 @@ export interface CreateAgentOptions {
   /** Role + group ids to assign at creation. */
   roles?: string[];
   groups?: string[];
+  /** Initial identicon avatar seed; omit to default to the agent id. */
+  avatarSeed?: string;
 }
 
 /** Model choices shared by the create + settings UIs ('' = claude's default).

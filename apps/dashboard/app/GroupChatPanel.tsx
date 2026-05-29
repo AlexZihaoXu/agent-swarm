@@ -47,10 +47,21 @@ export function GroupChatPanel({
   };
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  // Only auto-scroll on new messages if the user is already near the bottom, so
+  // polling doesn't yank them away while they're reading history.
+  const atBottomRef = useRef(true);
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (el) atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
 
   // Reset when switching groups so the previous group's log doesn't flash.
-  useEffect(() => setMessages([]), [groupId]);
+  useEffect(() => {
+    setMessages([]);
+    atBottomRef.current = true;
+  }, [groupId]);
 
   useEffect(() => {
     if (!active) return;
@@ -68,17 +79,22 @@ export function GroupChatPanel({
   }, [groupId, active]);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (atBottomRef.current) endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages.length]);
 
   const send = async () => {
     const t = text.trim();
     if (!t || busy) return;
     setBusy(true);
+    atBottomRef.current = true; // sending implies we want to see our own message
     try {
-      await sendGroupMessage(groupId, t);
+      const res = await sendGroupMessage(groupId, t);
       setText('');
-      setMessages(await listGroupMessages(groupId));
+      // Optimistically show our own message; the next poll reconciles by id (no
+      // dup), which avoids racing a full-list refetch against the poll.
+      const sent = res?.message;
+      if (sent)
+        setMessages((prev) => (prev.some((m) => m.id === sent.id) ? prev : [...prev, sent]));
     } catch (e) {
       toast.warning(e instanceof Error ? e.message : 'Failed to send.');
     } finally {
@@ -88,7 +104,11 @@ export function GroupChatPanel({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
+      <div
+        ref={scrollRef}
+        onScroll={onScroll}
+        className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4"
+      >
         {messages.length === 0 ? (
           <p className="text-muted mt-8 text-center text-sm">
             No messages yet — say hi to the group.

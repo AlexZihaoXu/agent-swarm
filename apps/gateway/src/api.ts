@@ -66,8 +66,10 @@ export async function handleApi(
     if (pathname === '/api/settings') return await handleSettings(req, res, manager, method);
     if (pathname === '/api/host') return await handleHost(res, manager, method);
     if (pathname === '/api/metrics') return await handleMetrics(res, manager, method);
-    if (pathname.startsWith('/api/roles')) return await handleRoles(req, res, manager, method);
-    if (pathname.startsWith('/api/groups')) return await handleGroups(req, res, manager, method);
+    if (pathname === '/api/roles' || pathname.startsWith('/api/roles/'))
+      return await handleRoles(req, res, manager, method);
+    if (pathname === '/api/groups' || pathname.startsWith('/api/groups/'))
+      return await handleGroups(req, res, manager, method);
     if (pathname === '/api/usage') {
       if (method !== 'GET') return (sendJson(res, 405, { error: 'method not allowed' }), true);
       return (sendJson(res, 200, await manager.usageSnapshot()), true);
@@ -294,6 +296,7 @@ async function handleAgents(
         model: body.model ?? undefined,
         roles: body.roles,
         groups: body.groups,
+        avatarSeed: body.avatarSeed,
       });
       return (sendJson(res, 201, created), true);
     }

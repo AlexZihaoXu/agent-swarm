@@ -19,7 +19,8 @@ networks:
     external: true
 
 volumes:
-  # Persists runtime settings (e.g. the selected credentials path) across restarts.
+  # Persists control-plane state across restarts: the Claude OAuth token, plus
+  # roles/groups/group-chat logs and cpu/mem history (all JSON under /data).
   gateway-data:
 
 services:

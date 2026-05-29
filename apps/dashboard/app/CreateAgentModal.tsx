@@ -3,8 +3,17 @@
 import { Button, Input, Label, Modal, Slider, Tabs, TextField, toast } from '@heroui/react';
 import { useState } from 'react';
 import { LuChevronRight, LuDices } from 'react-icons/lu';
-import { createAgent, getHostInfo, MODEL_OPTIONS } from '@/lib/gateway';
+import {
+  createAgent,
+  getHostInfo,
+  listGroups,
+  listRoles,
+  MODEL_OPTIONS,
+  type Role,
+} from '@/lib/gateway';
 import { randomName } from '@/lib/names';
+import { Identicon, randomSeed } from '@/lib/identicon';
+import { RegistrySelect } from './RolesGroups';
 
 const ALL_TAKEN = 'All names are in use — type one manually.';
 const DEFAULT_CPUS = 2;
@@ -91,6 +100,11 @@ export function CreateAgentModal({
   const [maxMemGb, setMaxMemGb] = useState(16);
   const [timezone, setTimezone] = useState('');
   const [model, setModel] = useState(''); // '' = claude default
+  const [roles, setRoles] = useState<string[]>([]);
+  const [groups, setGroups] = useState<string[]>([]);
+  const [allRoles, setAllRoles] = useState<Role[]>([]);
+  const [allGroups, setAllGroups] = useState<Role[]>([]);
+  const [avatarSeed, setAvatarSeed] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -110,8 +124,17 @@ export function CreateAgentModal({
     setMemGb(DEFAULT_MEM_GB);
     setTimezone(systemTimezone());
     setModel('');
+    setRoles([]);
+    setGroups([]);
+    setAvatarSeed(randomSeed());
     setError(null);
     setOpen(true);
+    void listRoles()
+      .then(setAllRoles)
+      .catch(() => {});
+    void listGroups()
+      .then(setAllGroups)
+      .catch(() => {});
     // Cap the sliders at the host's real hardware (and pull the defaults down
     // if the machine has less than 2 cores / 4 GB).
     getHostInfo()
@@ -137,6 +160,9 @@ export function CreateAgentModal({
         memoryMb: memGb > 0 ? Math.round(memGb * 1024) : undefined,
         timezone: timezone.trim() || undefined,
         model: model || undefined,
+        roles,
+        groups,
+        avatarSeed: avatarSeed || undefined,
       });
       setOpen(false);
       onCreated();
@@ -169,6 +195,18 @@ export function CreateAgentModal({
                 }}
               >
                 <div className="flex items-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAvatarSeed(randomSeed())}
+                    title="Shuffle avatar"
+                    aria-label="Shuffle avatar"
+                    className="focus-visible:ring-accent shrink-0 rounded-lg focus-visible:ring-2 focus-visible:outline-none"
+                  >
+                    <Identicon
+                      seed={avatarSeed || hostname || name}
+                      className="size-10 rounded-lg"
+                    />
+                  </button>
                   <TextField
                     className="flex-1"
                     name="name"
@@ -247,6 +285,20 @@ export function CreateAgentModal({
                       <Label>Timezone</Label>
                       <Input placeholder="e.g. America/Toronto" />
                     </TextField>
+                    <RegistrySelect
+                      label="Roles"
+                      hint="No roles defined yet — create them in Settings."
+                      options={allRoles}
+                      value={roles}
+                      onChange={setRoles}
+                    />
+                    <RegistrySelect
+                      label="Groups"
+                      hint="No groups defined yet — create them in Settings."
+                      options={allGroups}
+                      value={groups}
+                      onChange={setGroups}
+                    />
                   </div>
                 )}
 

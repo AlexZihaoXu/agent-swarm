@@ -136,14 +136,14 @@ export function RegistryCard({
               </div>
               <button
                 aria-label={`Edit ${r.name}`}
-                className="text-muted hover:text-foreground shrink-0"
+                className="text-muted hover:text-foreground focus-visible:ring-accent shrink-0 rounded focus-visible:ring-2 focus-visible:outline-none"
                 onClick={() => startEdit(r)}
               >
                 <LuPencil className="size-4" />
               </button>
               <button
                 aria-label={`Delete ${r.name}`}
-                className="text-muted hover:text-danger shrink-0"
+                className="text-muted hover:text-danger focus-visible:ring-accent shrink-0 rounded focus-visible:ring-2 focus-visible:outline-none"
                 onClick={() => void run(() => onDelete(r.id))}
               >
                 <LuTrash2 className="size-4" />
@@ -236,7 +236,7 @@ export function RegistrySelect({
                 type="button"
                 title={o.description}
                 onClick={() => toggle(o.id)}
-                className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                className={`focus-visible:ring-accent rounded-full border px-2.5 py-1 text-xs transition-colors focus-visible:ring-2 focus-visible:outline-none ${
                   on
                     ? 'border-accent bg-accent/15 text-accent'
                     : 'border-separator text-muted hover:text-foreground'
