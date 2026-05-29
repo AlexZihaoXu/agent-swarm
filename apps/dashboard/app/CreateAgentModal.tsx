@@ -3,7 +3,7 @@
 import { Button, Input, Label, Modal, Slider, TextField, toast } from '@heroui/react';
 import { useState } from 'react';
 import { LuChevronRight, LuDices } from 'react-icons/lu';
-import { createAgent, getHostInfo } from '@/lib/gateway';
+import { createAgent, getHostInfo, MODEL_OPTIONS } from '@/lib/gateway';
 import { randomName } from '@/lib/names';
 
 const ALL_TAKEN = 'All names are in use — type one manually.';
@@ -90,6 +90,7 @@ export function CreateAgentModal({
   const [maxCpus, setMaxCpus] = useState(8);
   const [maxMemGb, setMaxMemGb] = useState(16);
   const [timezone, setTimezone] = useState('');
+  const [model, setModel] = useState(''); // '' = claude default
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -108,6 +109,7 @@ export function CreateAgentModal({
     setCpus(DEFAULT_CPUS);
     setMemGb(DEFAULT_MEM_GB);
     setTimezone(systemTimezone());
+    setModel('');
     setError(null);
     setOpen(true);
     // Cap the sliders at the host's real hardware (and pull the defaults down
@@ -134,6 +136,7 @@ export function CreateAgentModal({
         cpus: cpus > 0 ? cpus : undefined,
         memoryMb: memGb > 0 ? Math.round(memGb * 1024) : undefined,
         timezone: timezone.trim() || undefined,
+        model: model || undefined,
       });
       setOpen(false);
       onCreated();
@@ -191,6 +194,23 @@ export function CreateAgentModal({
                   <Label>Hostname</Label>
                   <Input placeholder="workspace-A3F9K2" />
                 </TextField>
+
+                <div className="space-y-1.5">
+                  <Label className="text-sm">Model</Label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {MODEL_OPTIONS.map((opt) => (
+                      <Button
+                        key={opt.value}
+                        type="button"
+                        size="sm"
+                        variant={model === opt.value ? 'primary' : 'tertiary'}
+                        onPress={() => setModel(opt.value)}
+                      >
+                        {opt.label}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
 
                 <button
                   type="button"

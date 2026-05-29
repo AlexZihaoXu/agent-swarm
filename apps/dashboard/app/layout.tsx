@@ -20,7 +20,7 @@ const serif = Newsreader({
 
 export const metadata: Metadata = {
   title: 'Agent Swarm',
-  description: 'Dashboard for managing a fleet of autonomous coding agents.',
+  description: 'Dashboard for managing a swarm of autonomous agents.',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -190,6 +190,35 @@ function toolDetail(input) {
   return s.length > 140 ? s.slice(0, 140) + '…' : s;
 }
 
+// Strip ANSI SGR escape sequences (e.g. the [1m…[22m in slash-command output).
+function stripAnsi(s) {
+  // eslint-disable-next-line no-control-regex
+  return String(s).replace(/\[[0-9;]*m/g, '');
+}
+
+// Slash commands (e.g. an injected `/model opus`) are recorded by Claude Code as
+// user messages wrapped in <command-name>/<command-args>/<local-command-stdout>/
+// <local-command-caveat> tags. Rendered raw they're noise — turn them into a
+// clean command badge + its output, and drop the internal caveat/message lines.
+// Returns an items[] (possibly empty = skip), or null when not a command message.
+function parseCommandMessage(text) {
+  const t = stripAnsi(text);
+  if (/<local-command-caveat>/.test(t)) return []; // internal instruction — hide
+  const nameM = t.match(/<command-name>([\s\S]*?)<\/command-name>/);
+  if (nameM) {
+    const name = nameM[1].trim();
+    const argsM = t.match(/<command-args>([\s\S]*?)<\/command-args>/);
+    const args = argsM ? argsM[1].trim() : '';
+    return [{ kind: 'tool', name: name.startsWith('/') ? name : `/${name}`, detail: args }];
+  }
+  const outM = t.match(/<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/);
+  if (outM) {
+    const inner = outM[1].trim();
+    return inner ? [{ kind: 'text', text: inner }] : [];
+  }
+  return null;
+}
+
 // Normalized conversation for the dashboard chat view: user/assistant turns,
 // each with text and tool-call items (tool results & thinking are omitted).
 function readTranscript() {
@@ -236,7 +265,11 @@ function readTranscript() {
     const content = o.message.content;
     const items = [];
     if (typeof content === 'string') {
-      if (content.trim()) items.push({ kind: 'text', text: content });
+      if (content.trim()) {
+        const cmd = parseCommandMessage(content);
+        if (cmd) items.push(...cmd);
+        else items.push({ kind: 'text', text: content });
+      }
     } else if (Array.isArray(content)) {
       for (const b of content) {
         if (b.type === 'text' && b.text) items.push({ kind: 'text', text: b.text });

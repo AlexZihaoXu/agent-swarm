@@ -193,8 +193,19 @@ export class AgentManager {
       const m = patch.model?.trim();
       idPatch.model = m ? m : null; // empty/whitespace → clear back to default
     }
+    const prevModel = this.readIdentity(id)?.model ?? null;
     this.writeIdentity(id, idPatch);
-    return this.toAgent(await this.docker.getContainer(this.containerName(id)).inspect());
+    const info = await this.docker.getContainer(this.containerName(id)).inspect();
+
+    // Switch the model LIVE by typing `/model <x>` into the running claude
+    // session — env (ANTHROPIC_MODEL) only takes effect on a fresh boot, and a
+    // `--continue` resume keeps the prior session's model, so a restart wouldn't
+    // reliably switch it. (The identity write above still persists the choice
+    // for the next fresh boot / recreate.)
+    if (patch.model !== undefined && idPatch.model !== prevModel && info.State.Running) {
+      void this.injectToTerminal(id, `/model ${idPatch.model || 'default'}`).catch(() => {});
+    }
+    return this.toAgent(info);
   }
 
   /**
@@ -457,6 +468,7 @@ export class AgentManager {
         ? Math.min(Math.round(opts.memoryMb), hw.memoryMb || Math.round(opts.memoryMb))
         : undefined;
     const timezone = opts.timezone?.trim() || undefined;
+    const model = opts.model?.trim() || undefined;
     const name = this.containerName(id);
     const portMode = this.cfg.mode === 'ports';
 
@@ -475,7 +487,7 @@ export class AgentManager {
     // it. Write the identity + auth token afterwards so the agent can read its
     // own name/id and authenticate (CLAUDE_CODE_OAUTH_TOKEN).
     await this.seedAgentDisk(id);
-    this.writeIdentity(id, { name: username, timezone: timezone ?? null });
+    this.writeIdentity(id, { name: username, timezone: timezone ?? null, model: model ?? null });
     this.writeAuthToken(id);
 
     const container = await this.docker.createContainer({

@@ -28,7 +28,18 @@ export interface CreateAgentOptions {
   memoryMb?: number;
   /** IANA timezone, e.g. "America/New_York". */
   timezone?: string;
+  /** Initial model override (ANTHROPIC_MODEL alias/id); omit for default. */
+  model?: string;
 }
+
+/** Model choices shared by the create + settings UIs ('' = claude's default).
+ *  Aliases stay current across model releases, so they're preferred over ids. */
+export const MODEL_OPTIONS: { label: string; value: string }[] = [
+  { label: 'Default', value: '' },
+  { label: 'Opus', value: 'opus' },
+  { label: 'Sonnet', value: 'sonnet' },
+  { label: 'Haiku', value: 'haiku' },
+];
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${GATEWAY_BASE}${path}`, init);
@@ -51,6 +62,10 @@ export interface Settings {
   tokenHint: string | null;
   /** Whether the token came from the CLAUDE_CODE_OAUTH_TOKEN env (vs set in UI). */
   fromEnv: boolean;
+  /** Days until the token's assumed ~1y expiry; null if unknown. */
+  daysLeft: number | null;
+  /** Warn (banner) when daysLeft is at or below this. */
+  warnDays: number;
 }
 
 export interface ImageStatus {

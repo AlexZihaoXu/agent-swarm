@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { basename } from 'node:path';
 import type { AgentManager } from './docker.js';
 import { config } from './config.js';
-import { getSettings, updateSettings } from './settings.js';
+import { getSettings, updateSettings, tokenDaysLeft, TOKEN_WARN_DAYS } from './settings.js';
 import type { DiscordRules, IntegrationType } from './types.js';
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -147,6 +147,7 @@ async function handleAgents(
         cpus: body.cpus,
         memoryMb: body.memoryMb,
         timezone: body.timezone,
+        model: body.model ?? undefined,
       });
       return (sendJson(res, 201, created), true);
     }
@@ -258,6 +259,9 @@ async function handleSettings(
         hasToken: !!oauthToken,
         tokenHint: oauthToken ? oauthToken.slice(-4) : null,
         fromEnv: !!config.oauthToken,
+        // Days until the token's assumed ~1y expiry (null if unknown).
+        daysLeft: tokenDaysLeft(),
+        warnDays: TOKEN_WARN_DAYS,
       }),
       true
     );

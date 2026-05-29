@@ -13,6 +13,7 @@ import { DashboardMetrics } from './DashboardMetrics';
 import { ImageBanner } from './ImageBanner';
 import { PackagesModal } from './PackagesModal';
 import { ThemeSwitch } from './ThemeSwitch';
+import { TokenExpiryBanner } from './TokenExpiryBanner';
 
 export default function HomePage() {
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -50,7 +51,7 @@ export default function HomePage() {
       <header className="mb-8 flex flex-wrap items-center justify-between gap-x-3 gap-y-3">
         <div>
           <h1 className="text-2xl font-semibold">Agent Swarm</h1>
-          <p className="text-muted text-sm">Fleet of autonomous coding agents</p>
+          <p className="text-muted text-sm">A swarm of autonomous agents for any task</p>
         </div>
         <div className="flex items-center gap-2 sm:gap-3">
           <ThemeSwitch />
@@ -78,6 +79,8 @@ export default function HomePage() {
           />
         </div>
       </header>
+
+      <TokenExpiryBanner withLink />
 
       <PackagesModal
         isOpen={packagesOpen}

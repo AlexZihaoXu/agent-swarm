@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { LuChevronLeft } from 'react-icons/lu';
 import { getSettings, updateSettings, type Settings } from '@/lib/gateway';
+import { TokenExpiryBanner } from '@/app/TokenExpiryBanner';
 
 type Status = { kind: 'ok' | 'warn' | 'err'; msg: string } | null;
 
@@ -61,6 +62,8 @@ export default function SettingsPage() {
         </Link>
         <h1 className="text-2xl font-semibold">Settings</h1>
       </header>
+
+      <TokenExpiryBanner />
 
       <Card>
         <Card.Header>

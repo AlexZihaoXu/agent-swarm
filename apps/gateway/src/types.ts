@@ -129,4 +129,7 @@ export interface CreateAgentOptions {
   memoryMb?: number;
   /** IANA timezone, e.g. "America/New_York". Omit to inherit the image default (UTC). */
   timezone?: string;
+  /** Initial model override (ANTHROPIC_MODEL: alias/full id). Applied at first
+   *  boot (a fresh session, so the env takes effect). Omit for the default. */
+  model?: string;
 }

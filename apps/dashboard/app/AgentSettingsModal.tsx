@@ -3,22 +3,20 @@
 import { Button, Input, Label, Modal, Slider, Switch, Tabs, TextField, toast } from '@heroui/react';
 import { useEffect, useState } from 'react';
 import { LuDices } from 'react-icons/lu';
-import { getAgent, startAgent, stopAgent, updateAgent, type Agent } from '@/lib/gateway';
+import {
+  getAgent,
+  startAgent,
+  stopAgent,
+  updateAgent,
+  MODEL_OPTIONS,
+  type Agent,
+} from '@/lib/gateway';
 import { randomName } from '@/lib/names';
 import { IntegrationsPanel } from './IntegrationsPanel';
 
 /** Slider default when first enabling the override (a touch earlier than the
  *  ~83% claude default, so it's a meaningful change). */
 const DEFAULT_PCT = 80;
-
-/** Model choices → ANTHROPIC_MODEL value ('' = claude's default). Aliases stay
- *  current across model releases, so they're preferred over pinned ids. */
-const MODEL_OPTIONS: { label: string; value: string }[] = [
-  { label: 'Default', value: '' },
-  { label: 'Opus', value: 'opus' },
-  { label: 'Sonnet', value: 'sonnet' },
-  { label: 'Haiku', value: 'haiku' },
-];
 
 /**
  * Per-agent settings, in two tabs:
@@ -77,9 +75,9 @@ export function AgentSettingsModal({
   const pctChanged = nextPct !== origPct;
   const origModel = agent?.model ?? '';
   const modelChanged = model !== origModel;
-  // Both the threshold and the model are read by claude at launch, so a change
-  // only takes effect on the next (re)start.
-  const needsRestart = pctChanged || modelChanged;
+  // The threshold is read by claude only at launch, so it needs a restart. The
+  // model switches LIVE (the gateway types `/model …` into the session), so it
+  // does not — only the threshold drives the restart prompt.
   const running = agent?.status === 'running';
 
   const save = async () => {
@@ -92,10 +90,15 @@ export function AgentSettingsModal({
         model: model || null,
       });
       onChanged?.();
-      if (needsRestart && running) {
+      if (modelChanged && running) {
+        const label = (MODEL_OPTIONS.find((o) => o.value === model)?.label ?? model) || 'default';
+        toast.warning(`Switching model to ${label}…`);
+      }
+      if (pctChanged && running) {
         setPhase('restart');
       } else {
-        if (needsRestart) toast.warning('Saved — the change applies next time the agent starts.');
+        if (pctChanged)
+          toast.warning('Saved — the new threshold applies next time the agent starts.');
         onOpenChange(false);
       }
     } catch (e) {
@@ -191,7 +194,7 @@ export function AgentSettingsModal({
                           ))}
                         </div>
                         <p className="text-muted text-xs">
-                          The model this agent&apos;s <code>claude</code> runs.
+                          The model this agent&apos;s <code>claude</code> runs — switches live.
                           &ldquo;Default&rdquo; uses claude&apos;s own default.
                         </p>
                       </div>
@@ -233,10 +236,9 @@ export function AgentSettingsModal({
                           </Slider>
                         )}
 
-                        {running && needsRestart && (
+                        {running && pctChanged && (
                           <p className="text-warning text-xs">
-                            Changing the model or threshold requires restarting the agent to take
-                            effect.
+                            Changing the threshold requires restarting the agent to take effect.
                           </p>
                         )}
                       </div>
@@ -275,7 +277,7 @@ export function AgentSettingsModal({
               <>
                 <Modal.Body>
                   <p className="text-muted text-sm">
-                    The model/threshold changed. The agent must restart (stop → start) for{' '}
+                    The auto-compact threshold changed. The agent must restart (stop → start) for{' '}
                     <code>claude</code> to pick it up. The transcript is preserved and resumes via{' '}
                     <code>--continue</code>.
                   </p>

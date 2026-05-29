@@ -135,7 +135,7 @@ export function DashboardMetrics() {
 
   return (
     <Card className="mb-6">
-      <Card.Content className="space-y-5">
+      <Card.Content className="space-y-3">
         {/* Rate-limit rings + 24h totals */}
         <div className="flex flex-wrap items-center gap-x-8 gap-y-4">
           {m.rateLimits ? (
@@ -176,7 +176,7 @@ export function DashboardMetrics() {
             <div className="text-muted mb-2 text-xs font-semibold tracking-wide uppercase">
               Tokens per agent · 24h
             </div>
-            <div className="h-56 w-full">
+            <div className="h-40 w-full">
               {perAgent.length === 0 ? (
                 <p className="text-muted pt-8 text-center text-sm">No activity.</p>
               ) : (
@@ -216,7 +216,7 @@ export function DashboardMetrics() {
             <div className="text-muted mb-2 text-xs font-semibold tracking-wide uppercase">
               Total tokens &amp; cost · 24h
             </div>
-            <div className="h-56 w-full">
+            <div className="h-40 w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart data={overTime} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--separator)" vertical={false} />
