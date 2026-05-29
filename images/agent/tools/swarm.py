@@ -25,6 +25,19 @@ GATEWAY = os.environ.get("SWARM_GATEWAY", "http://dashboard:8080").rstrip("/")
 IDENTITY_FILE = os.environ.get(
     "SWARM_IDENTITY", os.path.expanduser("~/.swarm/identity.json")
 )
+# Shared token the gateway writes to our disk, presented so our machine-to-machine
+# calls pass the operator-login gate. Read fresh each call (it can rotate).
+TOKEN_FILE = os.environ.get(
+    "SWARM_TOKEN_FILE", os.path.expanduser("~/.swarm/gateway-token")
+)
+
+
+def _token() -> str:
+    try:
+        with open(TOKEN_FILE) as f:
+            return f.read().strip()
+    except Exception:
+        return ""
 
 
 def _identity() -> dict:
@@ -49,12 +62,11 @@ def _shares_group(mine: list, theirs: list) -> bool:
 
 def _http(method: str, path: str, body: dict | None = None):
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(
-        GATEWAY + path,
-        data=data,
-        method=method,
-        headers={"content-type": "application/json"},
-    )
+    headers = {"content-type": "application/json"}
+    token = _token()
+    if token:
+        headers["x-swarm-token"] = token
+    req = urllib.request.Request(GATEWAY + path, data=data, method=method, headers=headers)
     with urllib.request.urlopen(req, timeout=15) as r:
         raw = r.read().decode()
     return json.loads(raw) if raw else None

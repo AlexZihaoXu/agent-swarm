@@ -57,7 +57,15 @@ docker compose up --build -d
 The control plane (gateway + UI) comes up as a single container on port **8080**.
 Open **`http://<your-server>:8080`**.
 
-### 4. Add your Claude token
+### 4. Create your login
+
+On first open the dashboard prompts you to **create an operator login** — a
+username and password, Portainer-style. It's stored as a salted scrypt hash,
+never plaintext. After that, the dashboard, API, and every agent
+terminal/desktop require sign-in. Change the password or sign out from
+**Settings**.
+
+### 5. Add your Claude token
 
 Generate a token on any machine that has [Claude Code](https://claude.com/claude-code):
 
@@ -65,11 +73,10 @@ Generate a token on any machine that has [Claude Code](https://claude.com/claude
 claude setup-token        # prints an sk-ant-oat… token
 ```
 
-Open the dashboard → **Settings** → paste the token → **Save**. (Or set
-`CLAUDE_CODE_OAUTH_TOKEN` in a `.env` file before step 3 — see
-[`.env.example`](.env.example).)
+Open **Settings** → paste the token → **Save**. (Or set `CLAUDE_CODE_OAUTH_TOKEN`
+in a `.env` file before step 3 — see [`.env.example`](.env.example).)
 
-### 5. Build the agent image + create your first agent
+### 6. Build the agent image + create your first agent
 
 In the dashboard:
 
@@ -101,19 +108,25 @@ docker compose down --remove-orphans  # also tear down spawned agents
 
 ### Remote access
 
-The dashboard binds `:8080` with no built-in auth, so don't expose it directly to
-the internet. For a remote mini-server, reach it over your LAN, an **SSH tunnel**
-(`ssh -L 8080:localhost:8080 user@server`), a VPN (e.g. Tailscale), or put it
-behind a reverse proxy that adds TLS + authentication.
+`:8080` is gated by the operator login (set in step 4), but it serves plain HTTP
+with no TLS. For a remote mini-server, reach it over your LAN, an **SSH tunnel**
+(`ssh -L 8080:localhost:8080 user@server`), or a VPN (e.g. Tailscale); if you do
+expose it, put it behind a reverse proxy that adds **HTTPS** so the password and
+session cookie aren't sent in clear text.
 
 ### Security
 
-The dashboard mounts the host's **Docker socket** and spawns agents with
-**privileged flags** (`SYS_ADMIN`/`SYS_BOOT`, unconfined seccomp/apparmor) —
-required for systemd + GNOME inside a container, but it means an agent is **not
-strongly isolated** from the host. Treat the whole stack as trusted-host
-software: run it on a machine you own, don't expose `:8080` publicly, and only
-hand agents work you're comfortable running with that level of access.
+- **Login** — the dashboard, API, and agent terminal/desktop streams require an
+  operator sign-in (salted scrypt password hash; HttpOnly session cookie). Agents'
+  own gateway calls authenticate with a separate shared token written to their
+  disk, so enabling login doesn't break the swarm.
+- **Host access** — the dashboard mounts the host's **Docker socket** and spawns
+  agents with **privileged flags** (`SYS_ADMIN`/`SYS_BOOT`, unconfined
+  seccomp/apparmor) — required for systemd + GNOME inside a container, but it means
+  an agent is **not strongly isolated** from the host. Treat the whole stack as
+  trusted-host software: run it on a machine you own, prefer not to expose `:8080`
+  publicly (or only behind HTTPS), and only hand agents work you're comfortable
+  running with that level of access.
 
 ---
 

@@ -19,6 +19,7 @@ import type Docker from 'dockerode';
 import tar from 'tar-fs';
 import { config as defaultConfig, type Config } from './config.js';
 import { getSettings } from './settings.js';
+import { swarmToken } from './auth.js';
 import { LATEST_VERSION, migrations, VERSION_MARKER, type MigrationCtx } from './migrations.js';
 import { DiscordBridge, sanitizeInbound, testDiscordToken } from './discord-bridge.js';
 import * as integrations from './integrations.js';
@@ -299,6 +300,33 @@ export class AgentManager {
       else rmSync(file, { force: true }); // no token configured → ensure none stale
     } catch {
       /* best-effort */
+    }
+  }
+
+  /** Write the shared swarm token to the agent's disk at `.swarm/gateway-token`
+   *  so swarm.py can authenticate its calls to the gateway (which is gated by the
+   *  operator login). Called on create + every start; also backfilled to all
+   *  existing agents on gateway boot so running agents keep working. */
+  private writeSwarmToken(id: string): void {
+    const dir = join(this.agentDataDir(id), '.swarm');
+    const file = join(dir, 'gateway-token');
+    try {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(file, swarmToken(), { mode: 0o600 });
+      chownSync(file, 1000, 1000);
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  /** Backfill the swarm token onto every existing agent's disk (gateway boot), so
+   *  agents created before the login feature can still reach the gateway. */
+  writeSwarmTokenAll(): void {
+    try {
+      const base = join(this.cfg.swarmDataMount, 'agents');
+      for (const id of readdirSync(base)) this.writeSwarmToken(id);
+    } catch {
+      /* no agents dir yet */
     }
   }
 
@@ -901,6 +929,7 @@ export class AgentManager {
       avatarSeed: opts.avatarSeed?.trim() || undefined,
     });
     this.writeAuthToken(id);
+    this.writeSwarmToken(id);
     this.writeRolesDoc(id);
 
     const container = await this.docker.createContainer({
@@ -976,6 +1005,7 @@ export class AgentManager {
     // Refresh the auth token + roles doc onto the disk so a restart picks up any
     // change (e.g. an edited role description).
     this.writeAuthToken(id);
+    this.writeSwarmToken(id);
     this.writeRolesDoc(id);
     await this.docker.getContainer(this.containerName(id)).start();
     // Reconnect any `active` integrations once the terminal is reachable.

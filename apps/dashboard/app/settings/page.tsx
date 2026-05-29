@@ -1,13 +1,15 @@
 'use client';
 
-import { Button, buttonVariants, Card, Input, Label, TextField } from '@heroui/react';
+import { Button, buttonVariants, Card, Input, Label, TextField, toast } from '@heroui/react';
 import { motion } from 'framer-motion';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { LuChevronLeft } from 'react-icons/lu';
+import { LuChevronLeft, LuLogOut } from 'react-icons/lu';
 import {
   getSettings,
   updateSettings,
+  changePassword,
+  logout,
   listRoles,
   createRole,
   updateRole,
@@ -31,6 +33,32 @@ export default function SettingsPage() {
   const [status, setStatus] = useState<Status>(null);
   const [busy, setBusy] = useState(false);
   const [capabilities, setCapabilities] = useState<CapabilityInfo[]>([]);
+  const [curPw, setCurPw] = useState('');
+  const [newPw, setNewPw] = useState('');
+  const [pwBusy, setPwBusy] = useState(false);
+
+  const doLogout = async () => {
+    try {
+      await logout();
+    } finally {
+      window.location.href = '/login';
+    }
+  };
+
+  const savePassword = async () => {
+    if (newPw.length < 8) return toast.warning('New password must be at least 8 characters.');
+    setPwBusy(true);
+    try {
+      await changePassword(curPw, newPw);
+      setCurPw('');
+      setNewPw('');
+      toast.success('Password updated.');
+    } catch (e) {
+      toast.warning(e instanceof Error ? e.message : 'Failed to update password.');
+    } finally {
+      setPwBusy(false);
+    }
+  };
 
   const load = () =>
     getSettings()
@@ -150,6 +178,42 @@ export default function SettingsPage() {
           onUpdate={updateGroup}
           onDelete={deleteGroup}
         />
+      </div>
+
+      <div className="mt-6">
+        <Card>
+          <Card.Header>
+            <Card.Title>Account</Card.Title>
+            <Card.Description>
+              Your operator login for this dashboard. Change the password or sign out.
+            </Card.Description>
+          </Card.Header>
+          <Card.Content className="mt-2 flex flex-col gap-3">
+            <TextField value={curPw} onChange={setCurPw}>
+              <Label>Current password</Label>
+              <Input type="password" autoComplete="current-password" placeholder="••••••••" />
+            </TextField>
+            <TextField value={newPw} onChange={setNewPw}>
+              <Label>New password</Label>
+              <Input
+                type="password"
+                autoComplete="new-password"
+                placeholder="at least 8 characters"
+              />
+            </TextField>
+          </Card.Content>
+          <Card.Footer className="mt-4 flex items-center justify-between">
+            <Button
+              onPress={() => void savePassword()}
+              isDisabled={pwBusy || !curPw || newPw.length < 8}
+            >
+              {pwBusy ? 'Updating…' : 'Update password'}
+            </Button>
+            <Button variant="tertiary" className="gap-1.5" onPress={() => void doLogout()}>
+              <LuLogOut className="size-4" /> Sign out
+            </Button>
+          </Card.Footer>
+        </Card>
       </div>
     </motion.main>
   );

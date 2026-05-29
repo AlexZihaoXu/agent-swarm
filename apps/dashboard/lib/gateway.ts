@@ -135,6 +135,17 @@ export const MODEL_OPTIONS: { label: string; value: string }[] = [
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${GATEWAY_BASE}${path}`, init);
   if (!res.ok) {
+    // A 401 on a normal route means the session expired/absent → bounce to login.
+    // (The /api/auth/* routes surface their own 401s — e.g. a wrong password.)
+    if (
+      res.status === 401 &&
+      !path.startsWith('/api/auth/') &&
+      typeof window !== 'undefined' &&
+      window.location.pathname !== '/login'
+    ) {
+      window.location.href = '/login';
+      throw new Error('unauthorized');
+    }
     // Prefer the gateway's {error} message; fall back to the status line.
     const msg = await res
       .clone()
@@ -164,6 +175,30 @@ export interface ImageStatus {
   present: boolean;
   building: boolean;
 }
+
+// --- Auth (operator login) --------------------------------------------------
+
+export interface AuthStatus {
+  /** Whether an operator login has been created (false → first-run setup). */
+  configured: boolean;
+  /** Whether the current request carries a valid session. */
+  authed: boolean;
+}
+const authPost = (path: string, body: Record<string, string>) =>
+  api<{ ok: true }>(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+export const getAuthStatus = () => api<AuthStatus>('/api/auth/status');
+/** First-run: create the operator login (also logs in). */
+export const setupLogin = (username: string, password: string) =>
+  authPost('/api/auth/setup', { username, password });
+export const login = (username: string, password: string) =>
+  authPost('/api/auth/login', { username, password });
+export const logout = () => authPost('/api/auth/logout', {});
+export const changePassword = (currentPassword: string, newPassword: string) =>
+  authPost('/api/auth/password', { currentPassword, newPassword });
 
 export const getSettings = () => api<Settings>('/api/settings');
 /** Set/clear the Claude OAuth token (`claude setup-token`). Empty clears it back

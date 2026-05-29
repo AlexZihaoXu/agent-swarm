@@ -2,6 +2,14 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { config } from './config.js';
 
+/** Operator login credentials. The password is stored only as a scrypt hash +
+ *  salt — never in plaintext, never returned over the API. */
+export interface AuthCreds {
+  username: string;
+  salt: string;
+  hash: string;
+}
+
 /** Runtime-adjustable settings, persisted to config.settingsFile as JSON. */
 export interface Settings {
   /** Claude Code OAuth token (`claude setup-token`) injected into each agent as
@@ -10,6 +18,14 @@ export interface Settings {
   /** Epoch ms when the current token was saved via the dashboard. Used to warn
    *  before its ~1-year expiry. Undefined for env-provided tokens. */
   tokenSetAt?: number;
+  /** Operator login (set on first-run). Absent until configured. */
+  auth?: AuthCreds;
+  /** Random secret used to sign session cookies; generated at first setup so
+   *  sessions survive gateway restarts. */
+  sessionSecret?: string;
+  /** Random shared token agents present (x-swarm-token) so their machine-to-
+   *  machine calls to /api/swarm/* pass the operator-login gate. */
+  swarmSecret?: string;
 }
 
 /** Assumed validity of a `claude setup-token` token, and how early to warn. */
@@ -30,6 +46,9 @@ export function getSettings(): Settings {
     cache = {
       oauthToken: parsed.oauthToken?.trim() || config.oauthToken,
       tokenSetAt: typeof parsed.tokenSetAt === 'number' ? parsed.tokenSetAt : undefined,
+      auth: parsed.auth,
+      sessionSecret: parsed.sessionSecret,
+      swarmSecret: parsed.swarmSecret,
     };
   } catch {
     cache = defaults();
@@ -46,6 +65,9 @@ export function updateSettings(patch: Partial<Settings>): Settings {
     // Stamp the set time for the expiry reminder (cleared when no token).
     next.tokenSetAt = token ? Date.now() : undefined;
   }
+  if (patch.auth !== undefined) next.auth = patch.auth;
+  if (patch.sessionSecret !== undefined) next.sessionSecret = patch.sessionSecret;
+  if (patch.swarmSecret !== undefined) next.swarmSecret = patch.swarmSecret;
   mkdirSync(dirname(config.settingsFile), { recursive: true });
   writeFileSync(config.settingsFile, JSON.stringify(next, null, 2));
   cache = next;

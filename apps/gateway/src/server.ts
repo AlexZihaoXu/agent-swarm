@@ -4,7 +4,20 @@ import { config } from './config.js';
 import { AgentManager } from './docker.js';
 import { parseAgentPath } from './router.js';
 import { applyCors, handleApi } from './api.js';
+import { isAuthed, validSwarmToken } from './auth.js';
 import { proxyHttp, proxyToUpstream, relayWs } from './proxy.js';
+
+/** Paths reachable without a session: the login page + its assets, the auth API,
+ *  and CORS preflights. Everything else (dashboard, API, agent proxy) is gated. */
+function isPublicPath(pathname: string): boolean {
+  return (
+    pathname === '/login' ||
+    pathname.startsWith('/api/auth/') ||
+    pathname.startsWith('/_next/') ||
+    pathname.startsWith('/__next') || // Next dev internals
+    pathname === '/favicon.ico'
+  );
+}
 
 const dashboard = new URL(config.dashboardUpstream);
 const dashboardHost = dashboard.hostname;
@@ -16,6 +29,22 @@ const manager = new AgentManager(docker);
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
   try {
+    // 0. Auth gate. Preflights pass (no cookie/side effects); everything else
+    //    that isn't public needs either a valid operator session (browser) or a
+    //    valid swarm token (agents' machine-to-machine /api/swarm/* calls).
+    //    API/agent routes get 401; page requests redirect to the login screen.
+    const passes = isAuthed(req.headers.cookie) || validSwarmToken(req.headers['x-swarm-token']);
+    if (req.method !== 'OPTIONS' && !isPublicPath(url.pathname) && !passes) {
+      if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/a/')) {
+        res.writeHead(401, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'unauthorized' }));
+      } else {
+        res.writeHead(302, { location: '/login' });
+        res.end();
+      }
+      return;
+    }
+
     // 1. Lifecycle API.
     if (url.pathname.startsWith('/api/')) {
       if (applyCors(req, res)) return;
@@ -53,6 +82,12 @@ server.on('upgrade', async (req, socket, head) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const route = parseAgentPath(url.pathname);
     if (route) {
+      // Agent terminal/desktop streams are sensitive — require a valid session
+      // (browsers send the cookie on the upgrade request).
+      if (!isAuthed(req.headers.cookie)) {
+        socket.destroy();
+        return;
+      }
       const target = await manager.resolveTarget(route.id, route.service);
       relayWs(req, socket, head, target.host, target.port, route.rest + url.search);
       return;
@@ -69,6 +104,9 @@ server.listen(config.port, () => {
     `gateway on :${config.port} — mode=${config.mode}, network=${config.networkName}, ` +
       `dashboard=${config.dashboardUpstream}`,
   );
+  // Backfill the swarm token onto every agent disk so agents (incl. ones created
+  // before login was enabled) can authenticate their gateway calls.
+  manager.writeSwarmTokenAll();
   // Bridge connections live in memory, so reconnect active integrations for
   // already-running agents after a gateway (re)start.
   void manager.reconnectAllIntegrations();

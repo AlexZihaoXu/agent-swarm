@@ -4,6 +4,16 @@ import { basename } from 'node:path';
 import type { AgentManager } from './docker.js';
 import { config } from './config.js';
 import { getSettings, updateSettings, tokenDaysLeft, TOKEN_WARN_DAYS } from './settings.js';
+import {
+  isConfigured,
+  isAuthed,
+  setupCredentials,
+  verifyPassword,
+  changePassword,
+  issueToken,
+  sessionCookie,
+  clearCookie,
+} from './auth.js';
 import { CAPABILITIES, listRoles, createRole, updateRole, deleteRole } from './roles.js';
 import { listGroups, createGroup, updateGroup, deleteGroup } from './groups.js';
 import { listGroupMessages, clearGroupMessages } from './group-chats.js';
@@ -62,6 +72,7 @@ export async function handleApi(
   const method = req.method ?? 'GET';
 
   try {
+    if (pathname.startsWith('/api/auth/')) return await handleAuth(req, res, method);
     if (pathname === '/api/fs') return await handleFs(req, res, manager, method);
     if (pathname === '/api/settings') return await handleSettings(req, res, manager, method);
     if (pathname === '/api/host') return await handleHost(res, manager, method);
@@ -140,6 +151,56 @@ export async function handleApi(
   } catch (err) {
     sendJson(res, errStatus(err), { error: err instanceof Error ? err.message : String(err) });
   }
+  return true;
+}
+
+// /api/auth/(status|setup|login|logout|password) — operator login. These are the
+// only API routes reachable without a session (the gate in server.ts allows them).
+async function handleAuth(
+  req: IncomingMessage,
+  res: ServerResponse,
+  method: string,
+): Promise<boolean> {
+  const { pathname } = new URL(req.url ?? '/', 'http://localhost');
+  const authed = isAuthed(req.headers.cookie);
+
+  if (pathname === '/api/auth/status') {
+    if (method !== 'GET') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+    return (sendJson(res, 200, { configured: isConfigured(), authed }), true);
+  }
+  if (pathname === '/api/auth/setup') {
+    if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+    if (isConfigured()) return (sendJson(res, 409, { error: 'already configured' }), true);
+    const body = await readJson(req);
+    setupCredentials(body.username ?? '', body.password ?? '');
+    res.setHeader('set-cookie', sessionCookie(issueToken((body.username ?? '').trim())));
+    return (sendJson(res, 200, { ok: true }), true);
+  }
+  if (pathname === '/api/auth/login') {
+    if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+    const body = await readJson(req);
+    if (!verifyPassword(body.username ?? '', body.password ?? ''))
+      return (sendJson(res, 401, { error: 'invalid username or password' }), true);
+    res.setHeader('set-cookie', sessionCookie(issueToken((body.username ?? '').trim())));
+    return (sendJson(res, 200, { ok: true }), true);
+  }
+  if (pathname === '/api/auth/logout') {
+    if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+    res.setHeader('set-cookie', clearCookie());
+    return (sendJson(res, 200, { ok: true }), true);
+  }
+  if (pathname === '/api/auth/password') {
+    if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+    if (!authed) return (sendJson(res, 401, { error: 'unauthorized' }), true);
+    const body = await readJson(req);
+    changePassword(body.currentPassword ?? '', body.newPassword ?? '');
+    // The change rotates the session secret (invalidating other sessions); mint a
+    // fresh cookie so the operator who changed it stays logged in.
+    const username = getSettings().auth?.username ?? '';
+    res.setHeader('set-cookie', sessionCookie(issueToken(username)));
+    return (sendJson(res, 200, { ok: true }), true);
+  }
+  sendJson(res, 404, { error: 'unknown endpoint' });
   return true;
 }
 
@@ -521,6 +582,9 @@ async function readJson(req: IncomingMessage): Promise<{
   action?: string;
   group?: string;
   avatarSeed?: string;
+  password?: string;
+  currentPassword?: string;
+  newPassword?: string;
 }> {
   const chunks: Buffer[] = [];
   for await (const c of req) chunks.push(c as Buffer);
