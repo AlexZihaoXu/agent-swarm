@@ -1,6 +1,6 @@
 'use client';
 
-import { Button, buttonVariants, Card } from '@heroui/react';
+import { Button, buttonVariants, Card, Spinner } from '@heroui/react';
 import { AnimatePresence, motion } from 'framer-motion';
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
@@ -17,6 +17,7 @@ import { TokenExpiryBanner } from './TokenExpiryBanner';
 
 export default function HomePage() {
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [imagePresent, setImagePresent] = useState<boolean | null>(null);
   const [packagesOpen, setPackagesOpen] = useState(false);
@@ -27,6 +28,8 @@ export default function HomePage() {
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoaded(true);
     }
   }, []);
 
@@ -50,8 +53,8 @@ export default function HomePage() {
     <main className="mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-10">
       <header className="mb-8 flex flex-wrap items-center justify-between gap-x-3 gap-y-3">
         <div>
-          <h1 className="text-2xl font-semibold">Swarm Control</h1>
-          <p className="text-muted text-sm">A swarm of autonomous agents for any task</p>
+          <h1 className="text-2xl font-semibold">Dashboard</h1>
+          <p className="text-muted text-sm">Monitor and manage your agent swarm</p>
         </div>
         <div className="flex items-center gap-2 sm:gap-3">
           <ThemeSwitch />
@@ -116,30 +119,58 @@ export default function HomePage() {
 
       <DashboardMetrics />
 
-      {agents.length === 0 && !error ? (
-        <p className="text-muted text-sm">No agents yet. Create one to get started.</p>
-      ) : (
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-          <AnimatePresence mode="popLayout">
-            {agents.map((a) => (
-              <motion.div
-                key={a.id}
-                layout
-                initial={{ opacity: 0, scale: 0.96 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.96 }}
-                transition={{ duration: 0.2, ease: 'easeOut' }}
-              >
-                <AgentCard
-                  agent={a}
-                  onChanged={() => void refresh()}
-                  taken={agents.map((x) => x.username || x.id)}
-                />
-              </motion.div>
-            ))}
-          </AnimatePresence>
-        </div>
-      )}
+      <AnimatePresence mode="wait">
+        {!loaded ? (
+          <motion.div
+            key="loading"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="flex justify-center py-12"
+          >
+            <Spinner />
+          </motion.div>
+        ) : agents.length === 0 && !error ? (
+          <motion.p
+            key="empty"
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2, ease: 'easeOut' }}
+            className="text-muted text-sm"
+          >
+            No agents yet. Create one to get started.
+          </motion.p>
+        ) : (
+          <motion.div
+            key="grid"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.2, ease: 'easeOut' }}
+            className="grid grid-cols-1 gap-4 xl:grid-cols-2"
+          >
+            <AnimatePresence mode="popLayout">
+              {agents.map((a) => (
+                <motion.div
+                  key={a.id}
+                  layout
+                  initial={{ opacity: 0, scale: 0.96 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.96 }}
+                  transition={{ duration: 0.2, ease: 'easeOut' }}
+                >
+                  <AgentCard
+                    agent={a}
+                    onChanged={() => void refresh()}
+                    taken={agents.map((x) => x.username || x.id)}
+                  />
+                </motion.div>
+              ))}
+            </AnimatePresence>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <DashboardChat agents={agents} />
     </main>

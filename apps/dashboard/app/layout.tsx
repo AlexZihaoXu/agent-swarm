@@ -19,7 +19,7 @@ const serif = Newsreader({
 });
 
 export const metadata: Metadata = {
-  title: 'Swarm Control',
+  title: 'Dashboard — Agent Swarm',
   description: 'Dashboard for managing a swarm of autonomous agents.',
 };
 

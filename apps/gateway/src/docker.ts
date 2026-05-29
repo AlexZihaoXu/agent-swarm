@@ -47,6 +47,8 @@ const MEMORY_LABEL = 'swarm.memoryMb';
 const TZ_LABEL = 'swarm.timezone';
 /** Hostname-safe id: alphanumerics + hyphens, 1–31 chars. */
 const VALID_ID = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,30}$/;
+/** How long the persisted cpu/mem resource history is kept (7 days). */
+const USAGE_RETAIN_MS = 7 * 24 * 3_600_000;
 
 /** The agent's self-identity, written to its disk so it (and its MCP tools)
  *  can read its own name/id within the swarm. */
@@ -433,19 +435,24 @@ export class AgentManager {
         prev.fiveHour.resetsAt !== rateLimits.fiveHour.resetsAt ||
         prev.sevenDay.usedPercent !== rateLimits.sevenDay.usedPercent ||
         prev.sevenDay.resetsAt !== rateLimits.sevenDay.resetsAt;
-      if (changed) this.lastRateLimitsChangedAt = Date.now();
+      if (changed) {
+        this.lastRateLimitsChangedAt = Date.now();
+        this.saveState(); // persist the fresh rate-limit values
+      }
       result = { ...rateLimits, updatedAt: this.lastRateLimitsChangedAt };
       this.lastRateLimits = result;
     } else {
       result = this.lastRateLimits;
     }
+    // Graphs show the last 12h; the full history (up to 7d) stays on disk.
+    const graphCutoff = Date.now() - 12 * 3_600_000;
     return {
       rateLimits: result,
       agents,
       buckets,
       usage: {
         series: [...this.usageNames.entries()].map(([id, name]) => ({ id, name })),
-        points: this.usageHistory,
+        points: this.usageHistory.filter((p) => p.t >= graphCutoff),
       },
     };
   }
@@ -554,9 +561,10 @@ export class AgentManager {
         this.usageNames.set(a.id, a.name);
       }
       this.usageHistory.push({ t, cpu, mem });
-      const cutoff = t - 12 * 3_600_000;
+      const cutoff = t - USAGE_RETAIN_MS;
       while (this.usageHistory.length && this.usageHistory[0]!.t < cutoff)
         this.usageHistory.shift();
+      this.saveState();
     } catch {
       /* sampling is best-effort */
     }
@@ -565,6 +573,7 @@ export class AgentManager {
   /** Begin periodic resource sampling (idempotent). Called once at startup. */
   startUsageSampling(): void {
     if (this.samplingTimer) return;
+    this.loadState();
     void this.sampleUsage();
     this.samplingTimer = setInterval(() => void this.sampleUsage(), 60_000);
     // Disk watch: prune transient inboxes + warn the agent when its home > 1GB.
@@ -573,6 +582,55 @@ export class AgentManager {
   }
   private samplingTimer: ReturnType<typeof setInterval> | null = null;
   private diskTimer: ReturnType<typeof setInterval> | null = null;
+
+  /** Restore persisted runtime state (resource history + cached rate limits) so
+   *  the dashboard's graphs/rings survive a gateway restart. Trims to retention. */
+  private loadState(): void {
+    try {
+      const s = JSON.parse(readFileSync(this.cfg.stateFile, 'utf8')) as {
+        usage?: {
+          names?: Record<string, string>;
+          points?: { t: number; cpu: Record<string, number>; mem: Record<string, number> }[];
+        };
+        rateLimits?: {
+          fiveHour: { usedPercent: number; resetsAt: number };
+          sevenDay: { usedPercent: number; resetsAt: number };
+          updatedAt: number;
+        } | null;
+        rateLimitsChangedAt?: number;
+      };
+      const cutoff = Date.now() - USAGE_RETAIN_MS;
+      this.usageHistory = (s.usage?.points ?? []).filter((p) => p && p.t >= cutoff);
+      for (const [id, name] of Object.entries(s.usage?.names ?? {})) this.usageNames.set(id, name);
+      if (s.rateLimits) this.lastRateLimits = s.rateLimits;
+      if (typeof s.rateLimitsChangedAt === 'number')
+        this.lastRateLimitsChangedAt = s.rateLimitsChangedAt;
+    } catch {
+      /* no prior state — start fresh */
+    }
+  }
+
+  /** Persist runtime state (debounced to ~10s; writes are small JSON). */
+  private saveState(): void {
+    if (this.saveTimer) return;
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      try {
+        mkdirSync(dirname(this.cfg.stateFile), { recursive: true });
+        writeFileSync(
+          this.cfg.stateFile,
+          JSON.stringify({
+            usage: { names: Object.fromEntries(this.usageNames), points: this.usageHistory },
+            rateLimits: this.lastRateLimits,
+            rateLimitsChangedAt: this.lastRateLimitsChangedAt,
+          }),
+        );
+      } catch {
+        /* best-effort */
+      }
+    }, 10_000);
+  }
+  private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly diskWarnedAt = new Map<string, number>();
 
   /** Total bytes of a directory via `du` (null if it can't be measured). */

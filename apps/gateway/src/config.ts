@@ -1,5 +1,5 @@
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /**
@@ -15,6 +15,12 @@ function num(value: string | undefined, fallback: number): number {
   const n = value ? Number(value) : NaN;
   return Number.isFinite(n) ? n : fallback;
 }
+
+/** Where persisted gateway state lives. In the container SETTINGS_FILE points at
+ *  the gateway-data volume (/data); the state file sits beside it so both
+ *  survive a restart. */
+const settingsFile =
+  process.env.SETTINGS_FILE ?? join(homedir(), '.agent-swarm', 'gateway-settings.json');
 
 export const config = {
   /** Single published port — the only door into the whole swarm. */
@@ -46,8 +52,11 @@ export const config = {
    * settings API / dashboard. A long-lived token — no rotation/sync needed. */
   oauthToken: process.env.CLAUDE_CODE_OAUTH_TOKEN ?? '',
   /** Where runtime settings are persisted. */
-  settingsFile:
-    process.env.SETTINGS_FILE ?? join(homedir(), '.agent-swarm', 'gateway-settings.json'),
+  settingsFile,
+  /** Persisted gateway runtime state (resource history, cached rate limits) so
+   *  the dashboard restores its graphs after a restart. Beside the settings file
+   *  (i.e. in the gateway-data volume). */
+  stateFile: process.env.GATEWAY_STATE_FILE ?? join(dirname(settingsFile), 'gateway-state.json'),
   /**
    * Persistent agent disks. Each agent's home is bind-mounted from
    * `${swarmDataHost}/agents/<id>` on the HOST (the daemon resolves this), and
