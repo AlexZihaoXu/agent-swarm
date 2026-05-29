@@ -111,6 +111,15 @@ local paths are appended as `[attachment saved — read to view: /home/agent/.sw
 **Read those paths** to actually see the images/files. For attachments you find via
 `discord_read_messages` (history), use `discord_download_attachment(url)` then read the returned path.
 
+**Need a decision or input? Ask in chat — don't use the interactive options prompt.** When you need
+the operator to choose something or fill in a gap, **send a normal message** (over Discord with
+`discord_send_message`, to your group with `swarm_send_group`, or in this terminal if they're typing
+here), lay out the question and any choices as plain text, and act on their reply. **Avoid the
+built-in interactive multiple-choice / "ask the user" prompt** (the `AskUserQuestion`-style options
+selector) as your way to ask: it blocks your session waiting for someone to click an answer, and
+usually no one is watching the TUI live. The dashboard _can_ answer those selectors, but a plain chat
+question is more reliable for async work and keeps the conversation in one place.
+
 ## Discord tools (the `discord` MCP)
 
 - `discord_send_message(address, content, reply?)` — send a message or reply.
