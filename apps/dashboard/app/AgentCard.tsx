@@ -19,8 +19,9 @@ import { AgentActivity, AgentStatsInline, useAgentStats } from './AgentStats';
 import { AgentSettingsModal } from './AgentSettingsModal';
 import { ConfirmActionDialog } from './ConfirmActionDialog';
 import { PackageModal } from './PackageModal';
+import { FileExplorer } from './FileExplorer';
 
-type Dialog = 'stop' | 'remove' | 'upgrade' | 'package' | 'settings' | null;
+type Dialog = 'stop' | 'remove' | 'upgrade' | 'package' | 'settings' | 'files' | null;
 
 /** Low-res desktop thumbnail that refreshes every few seconds (cheap, unlike a
  *  live VNC stream per card). Keeps retrying if a frame fails to load. */
@@ -190,6 +191,9 @@ export function AgentCard({
                 </Label>
               </Dropdown.Item>
             ) : null}
+            <Dropdown.Item id="files" textValue="Files">
+              <Label>Files…</Label>
+            </Dropdown.Item>
             <Dropdown.Item id="settings" textValue="Settings">
               <Label>Settings…</Label>
             </Dropdown.Item>
@@ -244,6 +248,13 @@ export function AgentCard({
         onOpenChange={(o) => !o && setDialog(null)}
         onChanged={onChanged}
         taken={taken}
+      />
+
+      <FileExplorer
+        agentId={agent.id}
+        agentName={agent.username || agent.id}
+        isOpen={dialog === 'files'}
+        onOpenChange={(o) => !o && setDialog(null)}
       />
 
       <Modal>

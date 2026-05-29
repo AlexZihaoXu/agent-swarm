@@ -448,6 +448,56 @@ export const removeAgent = (id: string) => api(`/api/agents/${id}`, { method: 'D
 /** Fetch a single agent (incl. its editable per-agent settings). */
 export const getAgent = (id: string) => api<Agent>(`/api/agents/${id}`);
 
+// --- Agent file explorer ----------------------------------------------------
+
+export interface FileEntry {
+  name: string;
+  dir: boolean;
+  size: number;
+  /** Modified time, epoch ms. */
+  mtime: number;
+}
+export interface DirView {
+  /** Path relative to the agent home ('' = home root). */
+  path: string;
+  entries: FileEntry[];
+}
+const filesBase = (id: string) => `/api/agents/${id}/files`;
+export const listAgentFiles = (id: string, path: string) =>
+  api<DirView>(`${filesBase(id)}?op=list&path=${encodeURIComponent(path)}`);
+export const readAgentFile = (id: string, path: string) =>
+  api<{ content: string }>(`${filesBase(id)}?op=read&path=${encodeURIComponent(path)}`);
+const filesPost = (id: string, op: string, body: Record<string, string>) =>
+  api<{ ok: true }>(`${filesBase(id)}?op=${op}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+export const writeAgentFile = (id: string, path: string, content: string) =>
+  filesPost(id, 'write', { path, content });
+export const mkdirAgentFile = (id: string, path: string) => filesPost(id, 'mkdir', { path });
+export const renameAgentFile = (id: string, from: string, to: string) =>
+  filesPost(id, 'rename', { from, to });
+export const deleteAgentFile = (id: string, path: string) => filesPost(id, 'delete', { path });
+/** Direct URL for downloading a file (same-origin → the session cookie is sent). */
+export const agentFileDownloadUrl = (id: string, path: string) =>
+  `${GATEWAY_BASE}${filesBase(id)}?op=download&path=${encodeURIComponent(path)}`;
+/** Upload a File into `dir` (raw body; filename in the query). */
+export async function uploadAgentFile(id: string, dir: string, file: File): Promise<void> {
+  const res = await fetch(
+    `${GATEWAY_BASE}${filesBase(id)}?op=upload&path=${encodeURIComponent(dir)}&name=${encodeURIComponent(file.name)}`,
+    { method: 'POST', body: file },
+  );
+  if (!res.ok) {
+    const msg = await res
+      .clone()
+      .json()
+      .then((b: { error?: string }) => b.error)
+      .catch(() => undefined);
+    throw new Error(msg ?? `upload failed (${res.status})`);
+  }
+}
+
 /** Patch an agent's editable settings (display name and/or auto-compact %).
  *  Live for the name; the auto-compact % applies on the next stop→start. */
 export const updateAgent = (

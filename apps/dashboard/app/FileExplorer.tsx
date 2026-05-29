@@ -1,0 +1,491 @@
+'use client';
+
+import { Button, Input, Label, Modal, TextArea, TextField, toast } from '@heroui/react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  LuDownload,
+  LuFile,
+  LuFileText,
+  LuFolder,
+  LuFolderPlus,
+  LuHouse,
+  LuPencil,
+  LuTrash2,
+  LuUpload,
+} from 'react-icons/lu';
+import {
+  agentFileDownloadUrl,
+  deleteAgentFile,
+  listAgentFiles,
+  mkdirAgentFile,
+  readAgentFile,
+  renameAgentFile,
+  uploadAgentFile,
+  writeAgentFile,
+  type DirView,
+  type FileEntry,
+} from '@/lib/gateway';
+
+/** Extensions we open in the built-in text editor; everything else downloads. */
+const TEXT_EXT = new Set([
+  'txt',
+  'md',
+  'markdown',
+  'json',
+  'jsonc',
+  'js',
+  'mjs',
+  'cjs',
+  'ts',
+  'tsx',
+  'jsx',
+  'py',
+  'sh',
+  'bash',
+  'fish',
+  'zsh',
+  'csv',
+  'tsv',
+  'log',
+  'yaml',
+  'yml',
+  'toml',
+  'ini',
+  'conf',
+  'cfg',
+  'env',
+  'html',
+  'htm',
+  'css',
+  'scss',
+  'xml',
+  'svg',
+  'sql',
+  'c',
+  'h',
+  'cpp',
+  'hpp',
+  'cc',
+  'go',
+  'rs',
+  'rb',
+  'java',
+  'php',
+  'lua',
+  'gitignore',
+  'dockerfile',
+  'makefile',
+  'text',
+]);
+const NAMELESS_TEXT = new Set([
+  'dockerfile',
+  'makefile',
+  'readme',
+  'license',
+  '.gitignore',
+  '.env',
+]);
+function isText(name: string): boolean {
+  const lower = name.toLowerCase();
+  if (NAMELESS_TEXT.has(lower)) return true;
+  const dot = lower.lastIndexOf('.');
+  return dot >= 0 && TEXT_EXT.has(lower.slice(dot + 1));
+}
+
+function fmtSize(n: number): string {
+  if (n >= 1 << 30) return `${(n / (1 << 30)).toFixed(1)} GB`;
+  if (n >= 1 << 20) return `${(n / (1 << 20)).toFixed(1)} MB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${n} B`;
+}
+function fmtDate(ms: number): string {
+  try {
+    return new Date(ms).toLocaleString([], {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  } catch {
+    return '';
+  }
+}
+function join(dir: string, name: string): string {
+  return dir ? `${dir}/${name}` : name;
+}
+
+/**
+ * Per-agent file explorer (Finder-style): browse the agent's home, upload /
+ * download, make folders, rename, delete, and edit text files inline.
+ */
+export function FileExplorer({
+  agentId,
+  agentName,
+  isOpen,
+  onOpenChange,
+}: {
+  agentId: string;
+  agentName: string;
+  isOpen: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const [cwd, setCwd] = useState('');
+  const [view, setView] = useState<DirView | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState<{ path: string; content: string; dirty: boolean } | null>(
+    null,
+  );
+  const [renaming, setRenaming] = useState<string | null>(null); // entry name being renamed
+  const [renameValue, setRenameValue] = useState('');
+  const [newFolder, setNewFolder] = useState<string | null>(null); // null = not creating
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  const load = useCallback(
+    (path: string) => {
+      setLoading(true);
+      listAgentFiles(agentId, path)
+        .then((v) => {
+          setView(v);
+          setCwd(v.path);
+        })
+        .catch((e) => toast.warning(e instanceof Error ? e.message : 'Failed to list folder.'))
+        .finally(() => setLoading(false));
+    },
+    [agentId],
+  );
+
+  useEffect(() => {
+    if (isOpen) {
+      setEditing(null);
+      setRenaming(null);
+      setNewFolder(null);
+      load('');
+    }
+  }, [isOpen, load]);
+
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    try {
+      await fn();
+      load(cwd);
+    } catch (e) {
+      toast.warning(e instanceof Error ? e.message : 'Action failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const openEntry = (e: FileEntry) => {
+    if (e.dir) return load(join(cwd, e.name));
+    if (isText(e.name)) {
+      const path = join(cwd, e.name);
+      readAgentFile(agentId, path)
+        .then(({ content }) => setEditing({ path, content, dirty: false }))
+        .catch((err) => toast.warning(err instanceof Error ? err.message : 'Failed to open file.'));
+    } else {
+      window.location.href = agentFileDownloadUrl(agentId, join(cwd, e.name));
+    }
+  };
+
+  const onUpload = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setBusy(true);
+    try {
+      for (const f of Array.from(files)) await uploadAgentFile(agentId, cwd, f);
+      toast.success(`Uploaded ${files.length} file${files.length > 1 ? 's' : ''}.`);
+      load(cwd);
+    } catch (e) {
+      toast.warning(e instanceof Error ? e.message : 'Upload failed.');
+    } finally {
+      setBusy(false);
+      if (fileInput.current) fileInput.current.value = '';
+    }
+  };
+
+  const segments = cwd ? cwd.split('/') : [];
+
+  return (
+    <Modal>
+      <Modal.Backdrop isOpen={isOpen} onOpenChange={(o) => !o && onOpenChange(false)}>
+        <Modal.Container placement="center">
+          <Modal.Dialog className="sm:max-w-[760px]">
+            <Modal.CloseTrigger />
+            <Modal.Header>
+              <Modal.Heading>Files — {agentName}</Modal.Heading>
+            </Modal.Header>
+            <Modal.Body className="flex h-[70vh] flex-col gap-3 overflow-hidden">
+              {editing ? (
+                <EditorPane
+                  agentId={agentId}
+                  editing={editing}
+                  setEditing={setEditing}
+                  onClose={() => setEditing(null)}
+                />
+              ) : (
+                <>
+                  {/* Toolbar: breadcrumb + actions */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="text-muted flex min-w-0 flex-1 flex-wrap items-center gap-1 text-sm">
+                      <button
+                        className="hover:text-foreground flex items-center gap-1 rounded px-1.5 py-0.5"
+                        onClick={() => load('')}
+                      >
+                        <LuHouse className="size-4" /> home
+                      </button>
+                      {segments.map((seg, i) => (
+                        <span key={i} className="flex items-center gap-1">
+                          <span className="text-muted/50">/</span>
+                          <button
+                            className="hover:text-foreground max-w-[10rem] truncate rounded px-1 py-0.5"
+                            onClick={() => load(segments.slice(0, i + 1).join('/'))}
+                          >
+                            {seg}
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      className="gap-1.5"
+                      isDisabled={busy}
+                      onPress={() => fileInput.current?.click()}
+                    >
+                      <LuUpload className="size-4" /> Upload
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="tertiary"
+                      className="gap-1.5"
+                      isDisabled={busy}
+                      onPress={() => setNewFolder('')}
+                    >
+                      <LuFolderPlus className="size-4" /> New folder
+                    </Button>
+                    <input
+                      ref={fileInput}
+                      type="file"
+                      multiple
+                      className="hidden"
+                      onChange={(e) => void onUpload(e.target.files)}
+                    />
+                  </div>
+
+                  {newFolder !== null && (
+                    <div className="border-separator flex items-center gap-2 rounded-lg border border-dashed p-2">
+                      <LuFolder className="text-muted size-4 shrink-0" />
+                      <Input
+                        autoFocus
+                        placeholder="folder name"
+                        value={newFolder}
+                        onChange={(e) => setNewFolder(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && newFolder.trim()) {
+                            void run(() => mkdirAgentFile(agentId, join(cwd, newFolder.trim())));
+                            setNewFolder(null);
+                          } else if (e.key === 'Escape') setNewFolder(null);
+                        }}
+                      />
+                      <Button
+                        size="sm"
+                        isDisabled={busy || !newFolder.trim()}
+                        onPress={() => {
+                          void run(() => mkdirAgentFile(agentId, join(cwd, newFolder.trim())));
+                          setNewFolder(null);
+                        }}
+                      >
+                        Create
+                      </Button>
+                      <Button size="sm" variant="tertiary" onPress={() => setNewFolder(null)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  )}
+
+                  {/* Listing */}
+                  <div className="border-separator min-h-0 flex-1 overflow-y-auto rounded-lg border">
+                    {loading ? (
+                      <p className="text-muted p-6 text-center text-sm">Loading…</p>
+                    ) : view && view.entries.length === 0 ? (
+                      <p className="text-muted p-6 text-center text-sm">Empty folder.</p>
+                    ) : (
+                      <ul className="divide-separator divide-y">
+                        {view?.entries.map((e) => (
+                          <li
+                            key={e.name}
+                            className="hover:bg-surface-secondary/50 group flex items-center gap-3 px-3 py-2"
+                          >
+                            <span className="text-muted shrink-0">
+                              {e.dir ? (
+                                <LuFolder className="size-4 text-accent" />
+                              ) : isText(e.name) ? (
+                                <LuFileText className="size-4" />
+                              ) : (
+                                <LuFile className="size-4" />
+                              )}
+                            </span>
+                            {renaming === e.name ? (
+                              <Input
+                                autoFocus
+                                className="flex-1"
+                                value={renameValue}
+                                onChange={(ev) => setRenameValue(ev.target.value)}
+                                onKeyDown={(ev) => {
+                                  if (
+                                    ev.key === 'Enter' &&
+                                    renameValue.trim() &&
+                                    renameValue !== e.name
+                                  ) {
+                                    void run(() =>
+                                      renameAgentFile(
+                                        agentId,
+                                        join(cwd, e.name),
+                                        join(cwd, renameValue.trim()),
+                                      ),
+                                    );
+                                    setRenaming(null);
+                                  } else if (ev.key === 'Escape') setRenaming(null);
+                                }}
+                                onBlur={() => setRenaming(null)}
+                              />
+                            ) : (
+                              <button
+                                className="min-w-0 flex-1 truncate text-left text-sm hover:underline"
+                                onClick={() => openEntry(e)}
+                                title={e.name}
+                              >
+                                {e.name}
+                              </button>
+                            )}
+                            <span className="text-muted hidden w-20 shrink-0 text-right text-xs tabular-nums sm:block">
+                              {e.dir ? '—' : fmtSize(e.size)}
+                            </span>
+                            <span className="text-muted hidden w-28 shrink-0 text-right text-xs sm:block">
+                              {fmtDate(e.mtime)}
+                            </span>
+                            <span className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                              {!e.dir && (
+                                <a
+                                  href={agentFileDownloadUrl(agentId, join(cwd, e.name))}
+                                  className="text-muted hover:text-foreground rounded p-1"
+                                  aria-label={`Download ${e.name}`}
+                                >
+                                  <LuDownload className="size-4" />
+                                </a>
+                              )}
+                              <button
+                                aria-label={`Rename ${e.name}`}
+                                className="text-muted hover:text-foreground rounded p-1"
+                                onClick={() => {
+                                  setRenaming(e.name);
+                                  setRenameValue(e.name);
+                                }}
+                              >
+                                <LuPencil className="size-4" />
+                              </button>
+                              <button
+                                aria-label={`Delete ${e.name}`}
+                                className="text-muted hover:text-danger rounded p-1"
+                                onClick={() => {
+                                  if (
+                                    confirm(
+                                      `Delete "${e.name}"${e.dir ? ' and its contents' : ''}?`,
+                                    )
+                                  )
+                                    void run(() => deleteAgentFile(agentId, join(cwd, e.name)));
+                                }}
+                              >
+                                <LuTrash2 className="size-4" />
+                              </button>
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </>
+              )}
+            </Modal.Body>
+            {!editing && (
+              <Modal.Footer>
+                <Button slot="close" variant="tertiary">
+                  Close
+                </Button>
+              </Modal.Footer>
+            )}
+          </Modal.Dialog>
+        </Modal.Container>
+      </Modal.Backdrop>
+    </Modal>
+  );
+}
+
+/** Inline text editor for a single file. */
+function EditorPane({
+  agentId,
+  editing,
+  setEditing,
+  onClose,
+}: {
+  agentId: string;
+  editing: { path: string; content: string; dirty: boolean };
+  setEditing: (e: { path: string; content: string; dirty: boolean } | null) => void;
+  onClose: () => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const name = editing.path.split('/').pop() ?? editing.path;
+  const save = async () => {
+    setSaving(true);
+    try {
+      await writeAgentFile(agentId, editing.path, editing.content);
+      setEditing({ ...editing, dirty: false });
+      toast.success('Saved.');
+    } catch (e) {
+      toast.warning(e instanceof Error ? e.message : 'Save failed.');
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-sm">
+          <LuFileText className="text-muted size-4" />
+          <span className="font-mono">{name}</span>
+          {editing.dirty && <span className="text-warning text-xs">• unsaved</span>}
+        </div>
+        <div className="flex items-center gap-2">
+          <a
+            href={agentFileDownloadUrl(agentId, editing.path)}
+            className="text-muted hover:text-foreground rounded p-1"
+            aria-label="Download"
+          >
+            <LuDownload className="size-4" />
+          </a>
+          <Button size="sm" isDisabled={saving || !editing.dirty} onPress={() => void save()}>
+            {saving ? 'Saving…' : 'Save'}
+          </Button>
+          <Button
+            size="sm"
+            variant="tertiary"
+            onPress={() => {
+              if (!editing.dirty || confirm('Discard unsaved changes?')) onClose();
+            }}
+          >
+            Back
+          </Button>
+        </div>
+      </div>
+      <TextField
+        className="flex min-h-0 flex-1"
+        value={editing.content}
+        onChange={(v) => setEditing({ ...editing, content: v, dirty: true })}
+        aria-label={`Edit ${name}`}
+      >
+        <Label className="sr-only">{name}</Label>
+        <TextArea className="h-full min-h-0 flex-1 resize-none font-mono text-xs leading-relaxed" />
+      </TextField>
+    </div>
+  );
+}

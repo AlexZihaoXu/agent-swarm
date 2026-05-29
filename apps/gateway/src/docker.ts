@@ -143,6 +143,13 @@ export class AgentManager {
   private agentDataDir(id: string): string {
     return join(this.cfg.swarmDataMount, 'agents', id);
   }
+  /** The agent's home root as the gateway sees it (404 if the agent's disk is
+   *  absent) — the root the file-explorer API confines all operations to. */
+  agentHome(id: string): string {
+    const dir = this.agentDataDir(id);
+    if (!existsSync(dir)) throw Object.assign(new Error('agent not found'), { statusCode: 404 });
+    return dir;
+  }
   /** Where built packages (.7z) are stored (gateway-local view). */
   private packagesDir(): string {
     return join(this.cfg.swarmDataMount, 'packages');

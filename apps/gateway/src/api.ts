@@ -17,6 +17,17 @@ import {
 import { CAPABILITIES, listRoles, createRole, updateRole, deleteRole } from './roles.js';
 import { listGroups, createGroup, updateGroup, deleteGroup } from './groups.js';
 import { listGroupMessages, clearGroupMessages } from './group-chats.js';
+import {
+  listDir,
+  readText,
+  writeText,
+  makeDir,
+  move as moveFile,
+  remove as removeFile,
+  fileForDownload,
+  writeUpload,
+  MAX_UPLOAD_BYTES,
+} from './files.js';
 import type { DiscordRules, IntegrationType } from './types.js';
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -47,6 +58,8 @@ export function applyCors(req: IncomingMessage, res: ServerResponse): boolean {
 
 // /api/agents, /api/agents/:id, /api/agents/:id/(start|stop|upgrade|paths|package)
 const AGENT_API = /^\/api\/agents(?:\/([^/]+)(?:\/(start|stop|upgrade|paths|package))?)?$/;
+// /api/agents/:id/files — the per-agent file explorer (op via ?op=…).
+const AGENT_FILES_API = /^\/api\/agents\/([^/]+)\/files$/;
 // /api/agents/:id/integrations[/:type[/(test|apply|disable)]]
 const INTEGRATION_API =
   /^\/api\/agents\/([^/]+)\/integrations(?:\/([^/]+)(?:\/(test|apply|disable))?)?$/;
@@ -151,6 +164,7 @@ export async function handleApi(
     if (pathname === '/api/image/build') return await handleImageBuild(res, manager, method);
     if (pathname.startsWith('/api/packages'))
       return await handlePackages(req, res, manager, method);
+    if (AGENT_FILES_API.test(pathname)) return await handleAgentFiles(req, res, manager, method);
     if (INTEGRATION_API.test(pathname)) return await handleIntegrations(req, res, manager, method);
     if (pathname.startsWith('/api/agents')) return await handleAgents(req, res, manager, method);
     sendJson(res, 404, { error: 'unknown endpoint' });
@@ -207,6 +221,73 @@ async function handleAuth(
     return (sendJson(res, 200, { ok: true }), true);
   }
   sendJson(res, 404, { error: 'unknown endpoint' });
+  return true;
+}
+
+// /api/agents/:id/files?op=… — per-agent file explorer (operator-only; gated).
+// ops: list/read/download (GET), upload/write/mkdir/rename/delete (POST).
+async function handleAgentFiles(
+  req: IncomingMessage,
+  res: ServerResponse,
+  manager: AgentManager,
+  method: string,
+): Promise<boolean> {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const id = AGENT_FILES_API.exec(url.pathname)?.[1];
+  if (!id) return (sendJson(res, 404, { error: 'unknown endpoint' }), true);
+  const root = manager.agentHome(id); // throws 404 if the agent disk is absent
+  const op = url.searchParams.get('op') ?? '';
+  const qpath = url.searchParams.get('path') ?? '';
+
+  if (method === 'GET') {
+    if (op === 'list') return (sendJson(res, 200, listDir(root, qpath)), true);
+    if (op === 'read') return (sendJson(res, 200, { content: readText(root, qpath) }), true);
+    if (op === 'download') {
+      const { name, stream } = fileForDownload(root, qpath);
+      res.writeHead(200, {
+        'content-type': 'application/octet-stream',
+        'content-disposition': `attachment; filename="${name.replace(/["\\]/g, '_')}"`,
+      });
+      stream.pipe(res);
+      stream.on('error', () => res.destroyed || res.end());
+      return true;
+    }
+    return (sendJson(res, 400, { error: 'unknown op' }), true);
+  }
+
+  if (method === 'POST') {
+    if (op === 'upload') {
+      const chunks: Buffer[] = [];
+      let size = 0;
+      for await (const c of req) {
+        size += (c as Buffer).length;
+        if (size > MAX_UPLOAD_BYTES) return (sendJson(res, 413, { error: 'file too large' }), true);
+        chunks.push(c as Buffer);
+      }
+      const name = url.searchParams.get('name') ?? 'upload';
+      const saved = writeUpload(root, qpath, name, Buffer.concat(chunks));
+      return (sendJson(res, 200, { ok: true, name: saved }), true);
+    }
+    const body = await readJson(req);
+    if (op === 'write')
+      return (
+        writeText(root, body.path ?? '', body.content ?? ''),
+        sendJson(res, 200, { ok: true }),
+        true
+      );
+    if (op === 'mkdir')
+      return (makeDir(root, body.path ?? ''), sendJson(res, 200, { ok: true }), true);
+    if (op === 'rename')
+      return (
+        moveFile(root, body.from ?? '', body.to ?? ''),
+        sendJson(res, 200, { ok: true }),
+        true
+      );
+    if (op === 'delete')
+      return (removeFile(root, body.path ?? ''), sendJson(res, 200, { ok: true }), true);
+    return (sendJson(res, 400, { error: 'unknown op' }), true);
+  }
+  sendJson(res, 405, { error: 'method not allowed' });
   return true;
 }
 
@@ -588,6 +669,7 @@ async function readJson(req: IncomingMessage): Promise<{
   action?: string;
   group?: string;
   avatarSeed?: string;
+  content?: string;
   password?: string;
   currentPassword?: string;
   newPassword?: string;
