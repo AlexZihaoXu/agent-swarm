@@ -4,36 +4,39 @@ import { Button, buttonVariants, Card, Input, Label, TextField } from '@heroui/r
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { LuChevronLeft } from 'react-icons/lu';
-import { getSettings, updateSettings } from '@/lib/gateway';
-import { FilePickerModal } from './FilePickerModal';
+import { getSettings, updateSettings, type Settings } from '@/lib/gateway';
 
 type Status = { kind: 'ok' | 'warn' | 'err'; msg: string } | null;
 
 export default function SettingsPage() {
-  const [path, setPath] = useState('');
-  const [fallback, setFallback] = useState('');
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [token, setToken] = useState('');
   const [status, setStatus] = useState<Status>(null);
   const [busy, setBusy] = useState(false);
-  const [picking, setPicking] = useState(false);
+
+  const load = () =>
+    getSettings()
+      .then(setSettings)
+      .catch(() => {});
 
   useEffect(() => {
-    void getSettings()
-      .then((s) => {
-        setPath(s.credentialsFile);
-        setFallback(s.default);
-      })
-      .catch(() => {});
+    void load();
   }, []);
 
   const save = async () => {
     setBusy(true);
     setStatus(null);
     try {
-      const r = await updateSettings(path);
+      const r = await updateSettings(token.trim());
+      setToken('');
+      await load();
       setStatus(
-        r.validated === null
-          ? { kind: 'warn', msg: 'Saved — could not verify the path on the host.' }
-          : { kind: 'ok', msg: 'Saved and verified on the host.' },
+        r.hasToken
+          ? {
+              kind: 'ok',
+              msg: 'Saved. New agents will use this token; restart existing agents to apply.',
+            }
+          : { kind: 'warn', msg: 'Token cleared.' },
       );
     } catch (e) {
       setStatus({ kind: 'err', msg: e instanceof Error ? e.message : String(e) });
@@ -61,41 +64,37 @@ export default function SettingsPage() {
 
       <Card>
         <Card.Header>
-          <Card.Title>Claude credentials</Card.Title>
+          <Card.Title>Claude authentication</Card.Title>
           <Card.Description>
-            Host path to the <span className="font-mono">.credentials.json</span> the gateway mounts
-            into each new agent. Resolved by the host Docker daemon, so it must be a path on the
-            machine running Docker.
+            Agents authenticate with a Claude Code OAuth token, billed to your subscription.
+            Generate one on the host with <span className="font-mono">claude setup-token</span> and
+            paste it here. It&apos;s injected into each agent as{' '}
+            <span className="font-mono">CLAUDE_CODE_OAUTH_TOKEN</span>.
           </Card.Description>
         </Card.Header>
         <Card.Content className="mt-2 flex flex-col gap-3">
-          <div className="flex items-end gap-2">
-            <TextField value={path} onChange={setPath} name="credentialsFile" className="flex-1">
-              <Label>Credentials file path</Label>
-              <Input placeholder={fallback || '/home/you/.agent-swarm/.credentials.json'} />
-            </TextField>
-            <Button variant="secondary" onPress={() => setPicking(true)}>
-              Browse…
-            </Button>
+          <div className="text-muted text-sm">
+            Current:{' '}
+            {settings?.hasToken ? (
+              <span className="text-foreground font-mono">•••• {settings.tokenHint}</span>
+            ) : (
+              <span className="text-warning">not configured</span>
+            )}
+            {settings?.hasToken && settings.fromEnv && (
+              <span className="text-muted/70"> (from environment)</span>
+            )}
           </div>
-          <FilePickerModal
-            isOpen={picking}
-            onOpenChange={setPicking}
-            startPath={(path || fallback).replace(/\/[^/]*$/, '') || undefined}
-            onPick={(p) => {
-              setPath(p);
-              setStatus(null);
-            }}
-          />
-          {fallback && (
-            <p className="text-muted text-xs">
-              Default: <span className="font-mono">{fallback}</span>
-            </p>
-          )}
+          <TextField value={token} onChange={setToken} name="oauthToken">
+            <Label>OAuth token</Label>
+            <Input type="password" placeholder="sk-ant-oat01-…" autoComplete="off" />
+          </TextField>
+          <p className="text-muted text-xs">
+            Leave blank and save to clear the stored token (falls back to the environment).
+          </p>
           {status && <p className={`text-sm ${statusColor}`}>{status.msg}</p>}
         </Card.Content>
         <Card.Footer className="mt-4">
-          <Button onPress={() => void save()} isDisabled={busy || !path.trim()}>
+          <Button onPress={() => void save()} isDisabled={busy}>
             {busy ? 'Saving…' : 'Save'}
           </Button>
         </Card.Footer>

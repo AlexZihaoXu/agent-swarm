@@ -4,21 +4,23 @@ import { config } from './config.js';
 
 /** Runtime-adjustable settings, persisted to config.settingsFile as JSON. */
 export interface Settings {
-  /** Host path to the Claude credentials file mounted into new agents. */
-  credentialsFile: string;
+  /** Claude Code OAuth token (`claude setup-token`) injected into each agent as
+   *  CLAUDE_CODE_OAUTH_TOKEN. A secret — masked when surfaced over the API. */
+  oauthToken: string;
 }
 
 let cache: Settings | null = null;
 
 function defaults(): Settings {
-  return { credentialsFile: config.credentialsFile };
+  return { oauthToken: config.oauthToken };
 }
 
 export function getSettings(): Settings {
   if (cache) return cache;
   try {
     const parsed = JSON.parse(readFileSync(config.settingsFile, 'utf8')) as Partial<Settings>;
-    cache = { credentialsFile: parsed.credentialsFile?.trim() || config.credentialsFile };
+    // Fall back to the env-provided token until the operator sets one.
+    cache = { oauthToken: parsed.oauthToken?.trim() || config.oauthToken };
   } catch {
     cache = defaults();
   }
@@ -27,8 +29,9 @@ export function getSettings(): Settings {
 
 export function updateSettings(patch: Partial<Settings>): Settings {
   const next: Settings = { ...getSettings() };
-  if (typeof patch.credentialsFile === 'string' && patch.credentialsFile.trim()) {
-    next.credentialsFile = patch.credentialsFile.trim();
+  if (typeof patch.oauthToken === 'string') {
+    // Empty clears back to the env default; a value overrides it.
+    next.oauthToken = patch.oauthToken.trim() || config.oauthToken;
   }
   mkdirSync(dirname(config.settingsFile), { recursive: true });
   writeFileSync(config.settingsFile, JSON.stringify(next, null, 2));

@@ -195,26 +195,18 @@ export class AgentManager {
    * preserves ownership/permissions). An empty bind mount would otherwise
    * shadow the image's prepared home and break the agent.
    */
-  private async seedAgentDisk(id: string, credentialsFile: string): Promise<void> {
+  private async seedAgentDisk(id: string): Promise<void> {
     const local = this.agentDataDir(id);
     mkdirSync(local, { recursive: true });
     if (readdirSync(local).length > 0) return; // existing disk — reuse as-is
-    // Seed the home skeleton AND drop in the credentials. We copy credentials in
-    // (rather than bind-mounting the file into the home) because Docker Desktop
-    // can't nest a file bind inside a bind-mounted dir; the agent then maintains
-    // its own ~/.claude/.credentials.json on its persistent disk thereafter.
+    // Seed the image's `/home/agent` skeleton into the (empty) bind mount via a
+    // one-shot helper (cp -a preserves ownership/permissions). Auth is handled
+    // separately by writeAuthToken (CLAUDE_CODE_OAUTH_TOKEN), not a creds file.
     const helper = await this.docker.createContainer({
       Image: this.cfg.agentImage,
       Entrypoint: ['sh', '-c'],
-      Cmd: [
-        'cp -a /home/agent/. /seed/ 2>/dev/null || true; ' +
-          'mkdir -p /seed/.claude; ' +
-          'cp /seed-cred /seed/.claude/.credentials.json 2>/dev/null || true; ' +
-          'chown -R 1000:1000 /seed/.claude 2>/dev/null || true',
-      ],
-      HostConfig: {
-        Binds: [`${this.agentHostDir(id)}:/seed`, `${credentialsFile}:/seed-cred:ro`],
-      },
+      Cmd: ['cp -a /home/agent/. /seed/ 2>/dev/null || true'],
+      HostConfig: { Binds: [`${this.agentHostDir(id)}:/seed`] },
     });
     try {
       await helper.start();
@@ -224,31 +216,21 @@ export class AgentManager {
     }
   }
 
-  /**
-   * Copy the CURRENT host credentials file into an agent's disk (best-effort),
-   * via a one-shot helper that binds the host file. Run before every (re)start
-   * so the agent boots with fresh credentials: OAuth tokens rotate, and the
-   * copy seeded at create time would otherwise go stale → 401 "run /login".
-   */
-  private async pushCredentials(id: string): Promise<void> {
-    const credentialsFile = getSettings().credentialsFile;
-    const helper = await this.docker.createContainer({
-      Image: this.cfg.agentImage,
-      Entrypoint: ['sh', '-c'],
-      Cmd: [
-        'mkdir -p /seed/.claude; ' +
-          'cp /seed-cred /seed/.claude/.credentials.json 2>/dev/null && ' +
-          'chown 1000:1000 /seed/.claude/.credentials.json 2>/dev/null || true',
-      ],
-      HostConfig: {
-        Binds: [`${this.agentHostDir(id)}:/seed`, `${credentialsFile}:/seed-cred:ro`],
-      },
-    });
+  /** Write the operator's Claude OAuth token to the agent's disk at
+   *  `.swarm/auth`; the supervisor injects it as CLAUDE_CODE_OAUTH_TOKEN when it
+   *  (re)launches claude (see runtime/server.js settingsEnv). The gateway has the
+   *  agent data dir mounted, so it writes directly — no helper container. Called
+   *  on create + every start so a rotated token applies on the next restart. */
+  private writeAuthToken(id: string): void {
+    const token = getSettings().oauthToken;
+    const dir = join(this.agentDataDir(id), '.swarm');
+    const file = join(dir, 'auth');
     try {
-      await helper.start();
-      await helper.wait();
-    } finally {
-      await helper.remove({ force: true }).catch(() => {});
+      mkdirSync(dir, { recursive: true });
+      if (token) writeFileSync(file, token, { mode: 0o600 });
+      else rmSync(file, { force: true }); // no token configured → ensure none stale
+    } catch {
+      /* best-effort */
     }
   }
 
@@ -469,8 +451,6 @@ export class AgentManager {
     const timezone = opts.timezone?.trim() || undefined;
     const name = this.containerName(id);
     const portMode = this.cfg.mode === 'ports';
-    // The credentials path is operator-selectable at runtime (settings).
-    const credentialsFile = getSettings().credentialsFile;
 
     // Tag with the stack's compose project so Docker UIs (Portainer) nest the
     // agent under the dashboard, plus our own marker for management.
@@ -483,11 +463,12 @@ export class AgentManager {
     if (memoryMb) labels[MEMORY_LABEL] = String(memoryMb);
     if (timezone) labels[TZ_LABEL] = timezone;
 
-    // Persistent disk: seed the home skeleton + credentials (first time only),
-    // then bind-mount it. Write the identity afterwards so the agent can read
-    // its own name/id (the agent-timezone service + whoami MCP tool use it).
-    await this.seedAgentDisk(id, credentialsFile);
+    // Persistent disk: seed the home skeleton (first time only), then bind-mount
+    // it. Write the identity + auth token afterwards so the agent can read its
+    // own name/id and authenticate (CLAUDE_CODE_OAUTH_TOKEN).
+    await this.seedAgentDisk(id);
     this.writeIdentity(id, { name: username, timezone: timezone ?? null });
+    this.writeAuthToken(id);
 
     const container = await this.docker.createContainer({
       name,
@@ -555,8 +536,8 @@ export class AgentManager {
   }
 
   async start(id: string): Promise<void> {
-    // Refresh credentials into the disk first so a restart reloads them.
-    await this.pushCredentials(id).catch(() => {});
+    // Refresh the auth token onto the disk so a restart picks up any change.
+    this.writeAuthToken(id);
     await this.docker.getContainer(this.containerName(id)).start();
     // Reconnect any `active` integrations once the terminal is reachable.
     void this.reconnectIntegrations(id);
@@ -993,32 +974,6 @@ export class AgentManager {
         )
         .sort((a, b) => Number(b.dir) - Number(a.dir) || a.name.localeCompare(b.name));
       return { path, parent: path === '/' ? null : dirname(path), entries };
-    } finally {
-      if (container) await container.remove({ force: true }).catch(() => {});
-    }
-  }
-
-  /**
-   * Check whether a host path points at an existing regular file, by mounting
-   * its parent directory read-only into a throwaway probe container (Docker
-   * Desktop resolves bind sources under shared dirs like /Users). Returns null
-   * if the check itself couldn't run (advisory, never blocks saving).
-   */
-  async validateHostFile(path: string): Promise<boolean | null> {
-    if (!path || !path.startsWith('/')) return false;
-    let container;
-    try {
-      await this.ensureImage(this.cfg.probeImage);
-      container = await this.docker.createContainer({
-        Image: this.cfg.probeImage,
-        Cmd: ['test', '-f', `/probe/${basename(path)}`],
-        HostConfig: { Binds: [`${dirname(path)}:/probe:ro`] },
-      });
-      await container.start();
-      const { StatusCode } = await container.wait();
-      return StatusCode === 0;
-    } catch {
-      return null;
     } finally {
       if (container) await container.remove({ force: true }).catch(() => {});
     }

@@ -40,11 +40,12 @@ export const config = {
   probeImage: process.env.PROBE_IMAGE ?? 'busybox',
   /** Container name = `${agentNamePrefix}${id}`; the id is what the URL carries. */
   agentNamePrefix: 'swarm-agent-',
-  /** Default host credentials file bind-mounted into each agent (overridable at
-   * runtime via the settings API / dashboard). */
-  credentialsFile:
-    process.env.CLAUDE_CREDENTIALS_FILE ?? join(homedir(), '.agent-swarm', '.credentials.json'),
-  /** Where runtime settings (e.g. the selected credentials path) are persisted. */
+  /** Claude Code OAuth token (`claude setup-token`) injected into each agent as
+   * CLAUDE_CODE_OAUTH_TOKEN so it authenticates against the operator's
+   * subscription. Bootstrapped from the env; overridable at runtime via the
+   * settings API / dashboard. A long-lived token — no rotation/sync needed. */
+  oauthToken: process.env.CLAUDE_CODE_OAUTH_TOKEN ?? '',
+  /** Where runtime settings are persisted. */
   settingsFile:
     process.env.SETTINGS_FILE ?? join(homedir(), '.agent-swarm', 'gateway-settings.json'),
   /**

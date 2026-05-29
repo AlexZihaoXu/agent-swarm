@@ -43,8 +43,12 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export interface Settings {
-  credentialsFile: string;
-  default: string;
+  /** Whether a Claude OAuth token is configured (the value is never returned). */
+  hasToken: boolean;
+  /** Last 4 chars of the token, for a "••••1a2b" display. */
+  tokenHint: string | null;
+  /** Whether the token came from the CLAUDE_CODE_OAUTH_TOKEN env (vs set in UI). */
+  fromEnv: boolean;
 }
 
 export interface ImageStatus {
@@ -54,11 +58,13 @@ export interface ImageStatus {
 }
 
 export const getSettings = () => api<Settings>('/api/settings');
-export const updateSettings = (credentialsFile: string) =>
-  api<Settings & { validated: boolean | null }>('/api/settings', {
+/** Set/clear the Claude OAuth token (`claude setup-token`). Empty clears it back
+ *  to the env default. */
+export const updateSettings = (oauthToken: string) =>
+  api<{ hasToken: boolean }>('/api/settings', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ credentialsFile }),
+    body: JSON.stringify({ oauthToken }),
   });
 
 export const getImageStatus = () => api<ImageStatus>('/api/image');

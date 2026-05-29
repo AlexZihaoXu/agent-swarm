@@ -1,6 +1,6 @@
 import { createReadStream, createWriteStream } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { basename, dirname } from 'node:path';
+import { basename } from 'node:path';
 import type { AgentManager } from './docker.js';
 import { config } from './config.js';
 import { getSettings, updateSettings } from './settings.js';
@@ -237,8 +237,7 @@ async function handleFs(
 ): Promise<boolean> {
   if (method !== 'GET') return (sendJson(res, 405, { error: 'method not allowed' }), true);
   const url = new URL(req.url ?? '/', 'http://localhost');
-  // Default to the directory of the currently-selected credentials file.
-  const path = url.searchParams.get('path') || dirname(getSettings().credentialsFile);
+  const path = url.searchParams.get('path') || process.env.HOME || '/';
   sendJson(res, 200, await manager.listHostDir(path));
   return true;
 }
@@ -250,18 +249,24 @@ async function handleSettings(
   method: string,
 ): Promise<boolean> {
   if (method === 'GET') {
-    return (sendJson(res, 200, { ...getSettings(), default: config.credentialsFile }), true);
+    // The token is a secret: surface presence + a last-4 hint, never the value.
+    const { oauthToken } = getSettings();
+    return (
+      sendJson(res, 200, {
+        hasToken: !!oauthToken,
+        tokenHint: oauthToken ? oauthToken.slice(-4) : null,
+        fromEnv: !!config.oauthToken,
+      }),
+      true
+    );
   }
   if (method === 'PUT') {
     const body = await readJson(req);
-    // Validate the host path before committing it (advisory: null = unverified).
-    let valid: boolean | null = null;
-    if (body.credentialsFile) valid = await manager.validateHostFile(body.credentialsFile);
-    if (valid === false) {
-      return (sendJson(res, 400, { error: `no file found at "${body.credentialsFile}"` }), true);
+    if (typeof body.oauthToken !== 'string') {
+      return (sendJson(res, 400, { error: 'oauthToken (string) required' }), true);
     }
-    const next = updateSettings({ credentialsFile: body.credentialsFile });
-    return (sendJson(res, 200, { ...next, validated: valid }), true);
+    const next = updateSettings({ oauthToken: body.oauthToken });
+    return (sendJson(res, 200, { hasToken: !!next.oauthToken }), true);
   }
   sendJson(res, 405, { error: 'method not allowed' });
   return true;
@@ -327,7 +332,7 @@ async function handleImageBuild(
 async function readJson(req: IncomingMessage): Promise<{
   hostname?: string;
   username?: string;
-  credentialsFile?: string;
+  oauthToken?: string;
   paths?: string[];
   cpus?: number;
   memoryMb?: number;

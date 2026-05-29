@@ -38,20 +38,29 @@ let counter = 0;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Per-agent settings the gateway writes into the identity file. Read fresh on
-// each (re)spawn so a stop→start picks up changes without a container recreate.
-// `autoCompactPct` maps to CLAUDE_AUTOCOMPACT_PCT_OVERRIDE (the % of the context
-// window at which claude auto-compacts); unset = the claude default.
+const AUTH_FILE = path.join(HOME, '.swarm', 'auth');
+
+// Per-agent env the gateway provisions on disk, read fresh on each (re)spawn so
+// a stop→start picks up changes without a container recreate:
+//   - `.swarm/auth`            → CLAUDE_CODE_OAUTH_TOKEN (subscription auth)
+//   - identity.autoCompactPct  → CLAUDE_AUTOCOMPACT_PCT_OVERRIDE (auto-compact %)
 function settingsEnv() {
+  const env = {};
+  try {
+    const token = fs.readFileSync(AUTH_FILE, 'utf8').trim();
+    if (token) env.CLAUDE_CODE_OAUTH_TOKEN = token;
+  } catch {
+    /* no token provisioned */
+  }
   try {
     const id = JSON.parse(fs.readFileSync(IDENTITY_FILE, 'utf8'));
     const pct = id && id.autoCompactPct;
     if (typeof pct === 'number' && pct >= 1 && pct <= 100)
-      return { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: String(Math.round(pct)) };
+      env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = String(Math.round(pct));
   } catch {
     /* no identity / setting unset — use defaults */
   }
-  return {};
+  return env;
 }
 
 // --- Claude session stats -------------------------------------------------
