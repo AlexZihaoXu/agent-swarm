@@ -179,6 +179,18 @@ export const migrations: Migration[] = [
       await ctx.exec('chown -R agent:agent /opt/agent-runtime; systemctl restart agent-terminals');
     },
   },
+  {
+    version: 15,
+    name: 'guide: explain mention-only delivery from unwatched channels',
+    apply: async (ctx) => {
+      // Refresh the operator guide so existing agents learn that an @mention
+      // from a channel they don't watch arrives as a lone message (no context),
+      // and that they should discord_read_messages before replying.
+      await ctx.putFile('agent-claude.md', '/home/agent/CLAUDE.md');
+      // Restart the claude session so it re-reads CLAUDE.md (transcript persists).
+      await ctx.exec('chown agent:agent /home/agent/CLAUDE.md; systemctl restart agent-terminals');
+    },
+  },
 ];
 
 /** Highest migration version (the version a fully up-to-date agent is at). */
