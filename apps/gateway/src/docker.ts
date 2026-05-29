@@ -579,9 +579,48 @@ export class AgentManager {
     // Disk watch: prune transient inboxes + warn the agent when its home > 1GB.
     this.diskTimer = setInterval(() => void this.checkDisks(), 5 * 60_000);
     void this.checkDisks();
+    // Memory watchdog: warn at 80%/90% of the cap with hysteresis (reads the
+    // live per-agent usage the stats streams already provide — cheap).
+    this.memTimer = setInterval(() => this.checkMemory(), 10_000);
   }
   private samplingTimer: ReturnType<typeof setInterval> | null = null;
   private diskTimer: ReturnType<typeof setInterval> | null = null;
+  private memTimer: ReturnType<typeof setInterval> | null = null;
+  /** Per-agent memory-warning latches for hysteresis (avoid repeat warnings). */
+  private readonly memState = new Map<string, { warned80: boolean; warned90: boolean }>();
+
+  /** Memory watchdog with hysteresis: warn once at ≥80% (re-arm after dropping
+   *  below 70%) and once at ≥90% (re-arm after dropping below 80%). */
+  private checkMemory(): void {
+    for (const [id, u] of this.usage) {
+      if (!u.memLimit) continue;
+      const pct = (u.memUsed / u.memLimit) * 100;
+      const st = this.memState.get(id) ?? { warned80: false, warned90: false };
+      if (pct < 70) st.warned80 = false; // re-arm 80 warning
+      if (pct < 80) st.warned90 = false; // re-arm 90 warning
+      const usedGb = (u.memUsed / 1024 ** 3).toFixed(2);
+      const capGb = (u.memLimit / 1024 ** 3).toFixed(2);
+      if (pct >= 90 && !st.warned90) {
+        st.warned90 = true;
+        st.warned80 = true; // crossed 80 too — don't also fire the 80 warning
+        this.queueDeliver(id, {
+          text:
+            `**[sys://mem]** Critical: memory at ${Math.round(pct)}% (${usedGb} / ${capGb} GB). ` +
+            `Free memory NOW — you risk being OOM-killed.`,
+          attachments: [],
+        });
+      } else if (pct >= 80 && !st.warned80) {
+        st.warned80 = true;
+        this.queueDeliver(id, {
+          text:
+            `**[sys://mem]** Memory at ${Math.round(pct)}% (${usedGb} / ${capGb} GB). ` +
+            `Free up memory — close heavy processes before you hit the cap.`,
+          attachments: [],
+        });
+      }
+      this.memState.set(id, st);
+    }
+  }
 
   /** Restore persisted runtime state (resource history + cached rate limits) so
    *  the dashboard's graphs/rings survive a gateway restart. Trims to retention. */

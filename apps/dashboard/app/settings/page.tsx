@@ -1,6 +1,7 @@
 'use client';
 
 import { Button, buttonVariants, Card, Input, Label, TextField } from '@heroui/react';
+import { motion } from 'framer-motion';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { LuChevronLeft } from 'react-icons/lu';
@@ -54,7 +55,12 @@ export default function SettingsPage() {
         : 'text-success';
 
   return (
-    <main className="mx-auto max-w-2xl px-6 py-10">
+    <motion.main
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+      className="mx-auto max-w-2xl px-6 py-10"
+    >
       <header className="mb-8 flex items-center gap-3">
         <Link href="/" className={`${buttonVariants({ variant: 'tertiary', size: 'sm' })} gap-1.5`}>
           <LuChevronLeft className="size-4" />
@@ -102,6 +108,6 @@ export default function SettingsPage() {
           </Button>
         </Card.Footer>
       </Card>
-    </main>
+    </motion.main>
   );
 }
