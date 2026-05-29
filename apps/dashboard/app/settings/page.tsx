@@ -24,6 +24,7 @@ import {
 } from '@/lib/gateway';
 import { TokenExpiryBanner } from '@/app/TokenExpiryBanner';
 import { RegistryCard } from '@/app/RolesGroups';
+import { PasswordField } from '@/app/PasswordField';
 
 type Status = { kind: 'ok' | 'warn' | 'err'; msg: string } | null;
 
@@ -189,18 +190,19 @@ export default function SettingsPage() {
             </Card.Description>
           </Card.Header>
           <Card.Content className="mt-2 flex flex-col gap-3">
-            <TextField value={curPw} onChange={setCurPw}>
-              <Label>Current password</Label>
-              <Input type="password" autoComplete="current-password" placeholder="••••••••" />
-            </TextField>
-            <TextField value={newPw} onChange={setNewPw}>
-              <Label>New password</Label>
-              <Input
-                type="password"
-                autoComplete="new-password"
-                placeholder="at least 8 characters"
-              />
-            </TextField>
+            <PasswordField
+              label="Current password"
+              value={curPw}
+              onChange={setCurPw}
+              autoComplete="current-password"
+            />
+            <PasswordField
+              label="New password"
+              value={newPw}
+              onChange={setNewPw}
+              autoComplete="new-password"
+              placeholder="at least 8 characters"
+            />
           </Card.Content>
           <Card.Footer className="mt-4 flex items-center justify-between">
             <Button

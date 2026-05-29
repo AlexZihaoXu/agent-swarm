@@ -5,6 +5,7 @@ import { motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
 import { LuLock, LuShieldCheck } from 'react-icons/lu';
 import { getAuthStatus, login, setupLogin } from '@/lib/gateway';
+import { PasswordField } from '@/app/PasswordField';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
@@ -84,19 +85,20 @@ export default function LoginPage() {
                 <Label>Username</Label>
                 <Input autoComplete="username" placeholder="admin" />
               </TextField>
-              <TextField value={password} onChange={setPassword} isRequired>
-                <Label>Password</Label>
-                <Input
-                  type="password"
-                  autoComplete={setup ? 'new-password' : 'current-password'}
-                  placeholder={setup ? 'at least 8 characters' : '••••••••'}
-                />
-              </TextField>
+              <PasswordField
+                label="Password"
+                value={password}
+                onChange={setPassword}
+                autoComplete={setup ? 'new-password' : 'current-password'}
+                placeholder={setup ? 'at least 8 characters' : '••••••••'}
+              />
               {setup && (
-                <TextField value={confirm} onChange={setConfirm} isRequired>
-                  <Label>Confirm password</Label>
-                  <Input type="password" autoComplete="new-password" placeholder="••••••••" />
-                </TextField>
+                <PasswordField
+                  label="Confirm password"
+                  value={confirm}
+                  onChange={setConfirm}
+                  autoComplete="new-password"
+                />
               )}
               {error && <p className="text-danger text-sm">{error}</p>}
               <Button
