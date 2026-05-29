@@ -59,7 +59,7 @@ RUN set -eux; \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        libgl1-mesa-dri libegl-mesa0 mesa-va-drivers mesa-vulkan-drivers \
-       libvulkan1 vainfo mesa-utils \
+       libvulkan1 vulkan-tools vainfo mesa-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Make the browser usable inside a container:
@@ -69,14 +69,18 @@ RUN apt-get update \
 #  --no-first-run / --no-default-browser-check : skip first-run prompts
 #  --disable-dev-shm-usage : write shared memory to /tmp, not the small /dev/shm
 #       (Chrome's compositor SIGTRAPs when /dev/shm is the 64MB container default)
-#  --ignore-gpu-blocklist --use-gl=angle --use-angle=gl : use the GPU through
-#       Mesa when /dev/dri is passed in (hardware accel); ANGLE-GL falls back to
-#       Mesa llvmpipe / SwiftShader otherwise. --enable-unsafe-swiftshader keeps
-#       WebGL working as the ultimate software fallback.
+#  --ignore-gpu-blocklist --use-gl=angle --use-angle=vulkan --enable-features=Vulkan :
+#       use the GPU through ANGLE's Vulkan backend, which drives Mesa RADV on the
+#       passed-in /dev/dri render node directly. This is the path that actually
+#       reaches the hardware here: the desktop X server is software (Xtigervnc), so
+#       the ANGLE-GL/GLX path only ever gets llvmpipe — Vulkan bypasses it and binds
+#       the real GPU (verified: "ANGLE (AMD, ... AMD Radeon 680M (RADV REMBRANDT), radv)").
+#       --enable-unsafe-swiftshader keeps WebGL working as the software fallback when
+#       no GPU is present (AGENT_GPU unset / no /dev/dri).
 # Also suppress the TigerVNC clipboard-config window (-iconic -> -nowin).
 RUN set -eux; \
     ARCH="$(dpkg --print-architecture)"; \
-    FLAGS="--no-sandbox --test-type --password-store=basic --no-first-run --no-default-browser-check --disable-dev-shm-usage --ignore-gpu-blocklist --use-gl=angle --use-angle=gl --enable-unsafe-swiftshader"; \
+    FLAGS="--no-sandbox --test-type --password-store=basic --no-first-run --no-default-browser-check --disable-dev-shm-usage --ignore-gpu-blocklist --use-gl=angle --use-angle=vulkan --enable-features=Vulkan --enable-unsafe-swiftshader"; \
     if [ "$ARCH" = "amd64" ]; then \
       DESKTOP=/usr/share/applications/google-chrome.desktop; BIN=google-chrome-stable; \
     else \
