@@ -567,8 +567,89 @@ export class AgentManager {
     if (this.samplingTimer) return;
     void this.sampleUsage();
     this.samplingTimer = setInterval(() => void this.sampleUsage(), 60_000);
+    // Disk watch: prune transient inboxes + warn the agent when its home > 1GB.
+    this.diskTimer = setInterval(() => void this.checkDisks(), 5 * 60_000);
+    void this.checkDisks();
   }
   private samplingTimer: ReturnType<typeof setInterval> | null = null;
+  private diskTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly diskWarnedAt = new Map<string, number>();
+
+  /** Total bytes of a directory via `du` (null if it can't be measured). */
+  private async dirBytes(dir: string): Promise<number | null> {
+    try {
+      const { stdout } = await execFileAsync('du', ['-sb', dir]);
+      const n = parseInt(stdout.trim().split(/\s+/)[0] ?? '', 10);
+      return Number.isFinite(n) ? n : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Delete oldest files in `dir` until its total is under `budget`. Returns
+   *  bytes freed. Used to reclaim transient inbox drops, not real work. */
+  private pruneDirToBudget(dir: string, budget: number): number {
+    let files: { p: string; size: number; mt: number }[];
+    try {
+      files = readdirSync(dir)
+        .map((f) => {
+          const p = join(dir, f);
+          const st = statSync(p);
+          return { p, size: st.size, mt: st.mtimeMs, isFile: st.isFile() };
+        })
+        .filter((f) => f.isFile);
+    } catch {
+      return 0;
+    }
+    let total = files.reduce((s, f) => s + f.size, 0);
+    if (total <= budget) return 0;
+    files.sort((a, b) => a.mt - b.mt); // oldest first
+    let freed = 0;
+    for (const f of files) {
+      if (total <= budget) break;
+      try {
+        rmSync(f.p, { force: true });
+        total -= f.size;
+        freed += f.size;
+      } catch {
+        /* ignore */
+      }
+    }
+    return freed;
+  }
+
+  /** Per running agent: if its home exceeds 1GB, prune the transient inboxes and
+   *  warn it via a throttled `[sys://disk]` message. */
+  private async checkDisks(): Promise<void> {
+    const GB = 1024 ** 3;
+    try {
+      for (const a of await this.list()) {
+        if (a.status !== 'running') continue;
+        const dir = this.agentDataDir(a.id);
+        const bytes = await this.dirBytes(dir);
+        if (bytes === null || bytes <= GB) continue;
+        const budget = 100 * 1024 * 1024; // keep each inbox under 100MB
+        let freed = 0;
+        freed += this.pruneDirToBudget(join(dir, '.swarm', 'shared-inbox'), budget);
+        freed += this.pruneDirToBudget(join(dir, '.swarm', 'discord-inbox'), budget);
+        const now = Date.now();
+        if (now - (this.diskWarnedAt.get(a.id) ?? 0) > 3_600_000) {
+          this.diskWarnedAt.set(a.id, now);
+          const gb = (bytes / GB).toFixed(2);
+          const note =
+            freed > 0 ? ` Cleared ${(freed / (1 << 20)).toFixed(0)} MB of old inbox files.` : '';
+          this.queueDeliver(a.id, {
+            text:
+              `**[sys://disk]** Your home disk is using ${gb} GB (over 1 GB).${note} ` +
+              `Delete build artifacts and large files you no longer need.`,
+            attachments: [],
+          });
+        }
+      }
+    } catch {
+      /* best-effort */
+    }
+  }
 
   /** Create the shared network if it doesn't exist yet (idempotent). */
   async ensureNetwork(): Promise<void> {

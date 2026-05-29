@@ -1,7 +1,8 @@
 'use client';
 
 import { Card, ProgressCircle } from '@heroui/react';
-import { useEffect, useState } from 'react';
+import { animate } from 'framer-motion';
+import { useEffect, useRef, useState } from 'react';
 import {
   Bar,
   BarChart,
@@ -125,6 +126,59 @@ function UsageRing({
   );
 }
 
+/** Smoothly ease a displayed number toward each new target (no sudden jumps). */
+function useLerp(value: number, duration = 0.45): number {
+  const [shown, setShown] = useState(value);
+  const prev = useRef(value);
+  useEffect(() => {
+    const controls = animate(prev.current, value, {
+      duration,
+      ease: 'easeOut',
+      onUpdate: (v) => setShown(v),
+    });
+    prev.current = value;
+    return () => controls.stop();
+  }, [value, duration]);
+  return shown;
+}
+
+/** Live resource ring (CPU / memory): a progress circle filled to value/max with
+ *  a lerped %, plus a label + sub-line. Colour tracks utilization. */
+function LiveRing({
+  label,
+  value,
+  max,
+  format,
+}: {
+  label: string;
+  value: number;
+  max: number;
+  /** Sub-line text from the lerped value (so it eases, not jumps). */
+  format: (shown: number) => string;
+}) {
+  const shown = useLerp(value);
+  const pct = max > 0 ? Math.min(100, Math.max(0, (shown / max) * 100)) : 0;
+  const color = pct >= 85 ? 'danger' : pct >= 60 ? 'warning' : 'success';
+  return (
+    <div className="flex items-center gap-3">
+      <div className="relative grid place-items-center">
+        <ProgressCircle aria-label={`${label} usage`} size="lg" color={color} value={pct}>
+          <ProgressCircle.Track>
+            <ProgressCircle.TrackCircle />
+            <ProgressCircle.FillCircle />
+          </ProgressCircle.Track>
+        </ProgressCircle>
+        <span className="absolute text-xs font-semibold tabular-nums">{Math.round(pct)}%</span>
+      </div>
+      {/* Fixed width so a changing value (e.g. "969 MB" → "1.1 GB") never reflows. */}
+      <div className="w-20">
+        <div className="text-sm font-semibold">{label}</div>
+        <div className="text-muted text-xs tabular-nums">{format(shown)}</div>
+      </div>
+    </div>
+  );
+}
+
 /**
  * Always-on usage overview: 5h/7d rate-limit rings, per-agent 24h tokens, and
  * total tokens + money spent over the last 24h. Polls every 30s.
@@ -221,20 +275,20 @@ export function DashboardMetrics() {
             <span className="text-muted text-sm">No usage data yet.</span>
           )}
 
-          {/* Divider, then live CPU + memory across running agents (updates ~2/s). */}
+          {/* Divider, then live CPU + memory rings across running agents (~2/s). */}
           <div className="bg-separator h-10 w-px" />
-          <div>
-            <div className="text-muted text-xs font-semibold tracking-wide uppercase">CPU</div>
-            <div className="text-sm font-semibold tabular-nums">
-              {usage ? `${Math.round(usage.cpuPct)}%` : '—'}
-            </div>
-          </div>
-          <div>
-            <div className="text-muted text-xs font-semibold tracking-wide uppercase">Memory</div>
-            <div className="text-sm font-semibold tabular-nums">
-              {usage ? fmtBytes(usage.memUsed) : '—'}
-            </div>
-          </div>
+          <LiveRing
+            label="CPU"
+            value={usage?.cpuPct ?? 0}
+            max={host ? host.cpus * 100 : 100}
+            format={() => (host ? `${host.cpus} cores` : '')}
+          />
+          <LiveRing
+            label="Memory"
+            value={usage?.memUsed ?? 0}
+            max={host ? host.memoryMb * (1 << 20) : 1}
+            format={(v) => fmtBytes(v)}
+          />
 
           <div className="ml-auto text-right">
             <div className="text-muted text-xs font-semibold tracking-wide uppercase">Last 12h</div>

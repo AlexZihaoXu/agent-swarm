@@ -92,3 +92,11 @@ if you have a raw channel ID instead.
 - `swarm_send_file(to, path, note?)` — send a file (under your home) to another agent; it lands in
   their `~/.swarm/shared-inbox/` and they're notified with the path.
 - `swarm_whoami()` — your own id + name in the swarm.
+
+**Received files are shared drops.** Files that arrive in `~/.swarm/shared-inbox/` (from peers) or
+`~/.swarm/discord-inbox/` (from Discord) may be auto-cleared to reclaim disk. If you want to keep or
+**modify** one, **copy it** out to your working directory first (`cp ~/.swarm/shared-inbox/<f> ./`)
+and edit the copy — don't edit it in place.
+
+**Disk:** keep your home tidy. If your disk exceeds 1 GB you'll get a `[sys://disk]` warning and old
+inbox files will be pruned automatically; delete build artifacts / large files you no longer need.
