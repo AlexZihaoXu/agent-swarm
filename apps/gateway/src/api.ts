@@ -58,6 +58,10 @@ export async function handleApi(
     if (pathname === '/api/settings') return await handleSettings(req, res, manager, method);
     if (pathname === '/api/host') return await handleHost(res, manager, method);
     if (pathname === '/api/metrics') return await handleMetrics(res, manager, method);
+    if (pathname === '/api/usage') {
+      if (method !== 'GET') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+      return (sendJson(res, 200, await manager.usageSnapshot()), true);
+    }
     if (pathname === '/api/swarm/send') {
       if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
       const body = await readJson(req);

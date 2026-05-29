@@ -282,13 +282,29 @@ export interface Metrics {
    *  when the values last changed (= last API activity); used to mark the rings
    *  outdated when the account has been idle for >5m. */
   rateLimits: { fiveHour: RateWindow; sevenDay: RateWindow; updatedAt: number } | null;
-  /** Per-agent 24h totals (tokens + computed cost). */
+  /** Per-agent 12h totals (tokens + computed cost). */
   agents: { id: string; name: string; tokens: number; cost: number }[];
-  /** 24 hourly buckets (oldest→newest) summed across agents. */
+  /** 12 hourly buckets (oldest→newest) summed across agents. */
   buckets: { t: number; tokens: number; cost: number }[];
+  /** Per-agent cpu%/memory history over the last 12h, for the resource graphs. */
+  usage: {
+    series: { id: string; name: string }[];
+    points: { t: number; cpu: Record<string, number>; mem: Record<string, number> }[];
+  };
 }
 /** Global usage metrics (per-agent 24h tokens/cost, hourly totals, rate limits). */
 export const getMetrics = () => api<Metrics>('/api/metrics');
+
+export interface Usage {
+  /** Total CPU across running agents (cores × 100, like `docker stats` %). */
+  cpuPct: number;
+  /** Total memory in use (bytes) and the summed limit. */
+  memUsed: number;
+  memLimit: number;
+  agents: { id: string; name: string; cpuPct: number; memUsed: number; memLimit: number }[];
+}
+/** Live resource usage across running agents (poll fast — it's cheap). */
+export const getUsage = () => api<Usage>('/api/usage');
 
 export const listAgents = () => api<Agent[]>('/api/agents');
 export const createAgent = (opts: CreateAgentOptions = {}) =>

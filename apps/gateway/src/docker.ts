@@ -101,6 +101,15 @@ export class AgentManager {
   private building = false;
   /** Receive-side Discord connections, keyed by agent id (apply → connect). */
   private readonly discord = new DiscordBridge();
+  /** Live per-agent resource usage (cpu% + memory), fed by docker stats streams
+   *  (one per running agent), so the dashboard can poll it cheaply/often. */
+  private readonly usage = new Map<string, { cpuPct: number; memUsed: number; memLimit: number }>();
+  private readonly usageStreams = new Map<string, Readable>();
+  /** 12h per-agent cpu/mem history (sampled ~1/min) for the dashboard graphs,
+   *  plus id→name for the line labels. In-memory (resets on gateway restart). */
+  private usageHistory: { t: number; cpu: Record<string, number>; mem: Record<string, number> }[] =
+    [];
+  private readonly usageNames = new Map<string, string>();
 
   constructor(
     private readonly docker: Docker,
@@ -299,10 +308,16 @@ export class AgentManager {
     } | null;
     agents: { id: string; name: string; tokens: number; cost: number }[];
     buckets: { t: number; tokens: number; cost: number }[];
+    /** Per-agent live-resource history over the last 12h (cpu% + memory bytes). */
+    usage: {
+      series: { id: string; name: string }[];
+      points: { t: number; cpu: Record<string, number>; mem: Record<string, number> }[];
+    };
   }> {
     const HOUR = 3_600_000;
-    const base = Math.floor(Date.now() / HOUR) * HOUR - 23 * HOUR;
-    const buckets = Array.from({ length: 24 }, (_, i) => ({
+    const WINDOW_H = 12;
+    const base = Math.floor(Date.now() / HOUR) * HOUR - (WINDOW_H - 1) * HOUR;
+    const buckets = Array.from({ length: WINDOW_H }, (_, i) => ({
       t: base + i * HOUR,
       tokens: 0,
       cost: 0,
@@ -357,7 +372,7 @@ export class AgentManager {
           // turns wildly over-counts — but it IS billed, so cost below keeps it.
           const tk = inp + out + cc;
           const idx = Math.floor((ts - base) / HOUR);
-          if (idx < 0 || idx >= 24) continue;
+          if (idx < 0 || idx >= WINDOW_H) continue;
           const r = modelRates(o.message?.model, inp + cr + cc);
           const c = (inp * r.in + out * r.out + cc * r.cw + cr * r.cr) / 1_000_000;
           tokens += tk;
@@ -422,7 +437,15 @@ export class AgentManager {
     } else {
       result = this.lastRateLimits;
     }
-    return { rateLimits: result, agents, buckets };
+    return {
+      rateLimits: result,
+      agents,
+      buckets,
+      usage: {
+        series: [...this.usageNames.entries()].map(([id, name]) => ({ id, name })),
+        points: this.usageHistory,
+      },
+    };
   }
   private lastRateLimits: {
     fiveHour: { usedPercent: number; resetsAt: number };
@@ -430,6 +453,120 @@ export class AgentManager {
     updatedAt: number;
   } | null = null;
   private lastRateLimitsChangedAt = 0;
+
+  /** Start a docker stats stream for one agent (idempotent), parsing each frame
+   *  into a cached cpu%/memory snapshot. Docker emits ~1 frame/s and includes
+   *  precpu_stats for the CPU delta, so we don't have to sample ourselves. */
+  private ensureUsageStream(id: string): void {
+    if (this.usageStreams.has(id)) return;
+    void this.docker
+      .getContainer(this.containerName(id))
+      .stats({ stream: true })
+      .then((stream) => {
+        const s = stream as unknown as Readable;
+        this.usageStreams.set(id, s);
+        let buf = '';
+        s.on('data', (chunk: Buffer) => {
+          buf += chunk.toString();
+          let nl: number;
+          while ((nl = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, nl);
+            buf = buf.slice(nl + 1);
+            if (!line.trim()) continue;
+            try {
+              const d = JSON.parse(line);
+              const cpuDelta =
+                (d.cpu_stats?.cpu_usage?.total_usage ?? 0) -
+                (d.precpu_stats?.cpu_usage?.total_usage ?? 0);
+              const sysDelta =
+                (d.cpu_stats?.system_cpu_usage ?? 0) - (d.precpu_stats?.system_cpu_usage ?? 0);
+              const cores =
+                d.cpu_stats?.online_cpus || d.cpu_stats?.cpu_usage?.percpu_usage?.length || 1;
+              const cpuPct = sysDelta > 0 && cpuDelta > 0 ? (cpuDelta / sysDelta) * cores * 100 : 0;
+              const memUsed =
+                (d.memory_stats?.usage ?? 0) - (d.memory_stats?.stats?.inactive_file ?? 0);
+              const memLimit = d.memory_stats?.limit ?? 0;
+              this.usage.set(id, { cpuPct, memUsed, memLimit });
+            } catch {
+              /* skip a malformed frame */
+            }
+          }
+        });
+        const drop = () => {
+          this.usageStreams.delete(id);
+          this.usage.delete(id);
+        };
+        s.on('error', drop);
+        s.on('close', drop);
+        s.on('end', drop);
+      })
+      .catch(() => {});
+  }
+
+  /** Live resource usage across running agents (cpu% = cores×100, memory bytes).
+   *  Lazily starts/stops the per-agent stats streams to match the fleet. */
+  async usageSnapshot(): Promise<{
+    cpuPct: number;
+    memUsed: number;
+    memLimit: number;
+    agents: { id: string; name: string; cpuPct: number; memUsed: number; memLimit: number }[];
+  }> {
+    const all = await this.list();
+    const running = all.filter((a) => a.status === 'running');
+    const live = new Set(running.map((a) => a.id));
+    for (const a of running) this.ensureUsageStream(a.id);
+    // Tear down streams for agents that are no longer running.
+    for (const id of [...this.usageStreams.keys()]) {
+      if (!live.has(id)) {
+        try {
+          this.usageStreams.get(id)?.destroy();
+        } catch {
+          /* ignore */
+        }
+        this.usageStreams.delete(id);
+        this.usage.delete(id);
+      }
+    }
+    const agents = running.map((a) => {
+      const u = this.usage.get(a.id) ?? { cpuPct: 0, memUsed: 0, memLimit: 0 };
+      return { id: a.id, name: a.username || a.id, ...u };
+    });
+    return {
+      cpuPct: agents.reduce((s, a) => s + a.cpuPct, 0),
+      memUsed: agents.reduce((s, a) => s + a.memUsed, 0),
+      memLimit: agents.reduce((s, a) => s + a.memLimit, 0),
+      agents,
+    };
+  }
+
+  /** Sample current usage into the 12h per-agent history (called on an interval). */
+  private async sampleUsage(): Promise<void> {
+    try {
+      const u = await this.usageSnapshot();
+      const t = Date.now();
+      const cpu: Record<string, number> = {};
+      const mem: Record<string, number> = {};
+      for (const a of u.agents) {
+        cpu[a.id] = Math.round(a.cpuPct);
+        mem[a.id] = a.memUsed;
+        this.usageNames.set(a.id, a.name);
+      }
+      this.usageHistory.push({ t, cpu, mem });
+      const cutoff = t - 12 * 3_600_000;
+      while (this.usageHistory.length && this.usageHistory[0]!.t < cutoff)
+        this.usageHistory.shift();
+    } catch {
+      /* sampling is best-effort */
+    }
+  }
+
+  /** Begin periodic resource sampling (idempotent). Called once at startup. */
+  startUsageSampling(): void {
+    if (this.samplingTimer) return;
+    void this.sampleUsage();
+    this.samplingTimer = setInterval(() => void this.sampleUsage(), 60_000);
+  }
+  private samplingTimer: ReturnType<typeof setInterval> | null = null;
 
   /** Create the shared network if it doesn't exist yet (idempotent). */
   async ensureNetwork(): Promise<void> {

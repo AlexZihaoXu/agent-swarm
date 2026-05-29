@@ -72,4 +72,6 @@ server.listen(config.port, () => {
   // Bridge connections live in memory, so reconnect active integrations for
   // already-running agents after a gateway (re)start.
   void manager.reconnectAllIntegrations();
+  // Begin sampling per-agent cpu/mem into the 12h history for the dashboard.
+  manager.startUsageSampling();
 });

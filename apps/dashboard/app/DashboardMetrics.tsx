@@ -8,12 +8,26 @@ import {
   CartesianGrid,
   ComposedChart,
   Line,
+  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
-import { getMetrics, type Metrics, type RateWindow } from '@/lib/gateway';
+import { getMetrics, getUsage, type Metrics, type RateWindow, type Usage } from '@/lib/gateway';
+
+/** Distinct line colors for per-agent resource graphs (cycled by index). */
+const LINE_COLORS = ['#e0a55e', '#7aa2f7', '#9ece6a', '#bb9af7', '#f7768e', '#7dcfff', '#e0af68'];
+
+function fmtBytes(n: number): string {
+  if (n >= 1 << 30) return `${(n / (1 << 30)).toFixed(1)} GB`;
+  if (n >= 1 << 20) return `${(n / (1 << 20)).toFixed(0)} MB`;
+  return `${(n / 1024).toFixed(0)} KB`;
+}
+function fmtClock(t: number): string {
+  const d = new Date(t);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
 
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -109,6 +123,7 @@ function UsageRing({
  */
 export function DashboardMetrics() {
   const [m, setM] = useState<Metrics | null>(null);
+  const [usage, setUsage] = useState<Usage | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -124,6 +139,21 @@ export function DashboardMetrics() {
     };
   }, []);
 
+  // Live resource usage refreshes fast (cheap snapshot) for the headline numbers.
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      getUsage()
+        .then((u) => alive && setUsage(u))
+        .catch(() => {});
+    void load();
+    const t = setInterval(load, 500);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, []);
+
   if (!m) return null;
   const perAgent = m.agents
     .filter((a) => a.tokens > 0)
@@ -132,6 +162,19 @@ export function DashboardMetrics() {
   const overTime = m.buckets.map((b) => ({ label: fmtHour(b.t), tokens: b.tokens, cost: b.cost }));
   const totalTokens = m.agents.reduce((s, a) => s + a.tokens, 0);
   const totalCost = m.agents.reduce((s, a) => s + a.cost, 0);
+
+  // Per-agent 12h resource series → recharts rows keyed by agent name.
+  const series = m.usage.series;
+  const cpuData = m.usage.points.map((p) => {
+    const row: Record<string, number> = { t: p.t };
+    for (const s of series) row[s.name] = p.cpu[s.id] ?? 0;
+    return row;
+  });
+  const memData = m.usage.points.map((p) => {
+    const row: Record<string, number> = { t: p.t };
+    for (const s of series) row[s.name] = Math.round((p.mem[s.id] ?? 0) / (1 << 20)); // MB
+    return row;
+  });
 
   return (
     <Card className="mb-6">
@@ -161,8 +204,24 @@ export function DashboardMetrics() {
           ) : (
             <span className="text-muted text-sm">No usage data yet.</span>
           )}
+
+          {/* Divider, then live CPU + memory across running agents (updates ~2/s). */}
+          <div className="bg-separator h-10 w-px" />
+          <div>
+            <div className="text-muted text-xs font-semibold tracking-wide uppercase">CPU</div>
+            <div className="text-sm font-semibold tabular-nums">
+              {usage ? `${Math.round(usage.cpuPct)}%` : '—'}
+            </div>
+          </div>
+          <div>
+            <div className="text-muted text-xs font-semibold tracking-wide uppercase">Memory</div>
+            <div className="text-sm font-semibold tabular-nums">
+              {usage ? fmtBytes(usage.memUsed) : '—'}
+            </div>
+          </div>
+
           <div className="ml-auto text-right">
-            <div className="text-muted text-xs font-semibold tracking-wide uppercase">Last 24h</div>
+            <div className="text-muted text-xs font-semibold tracking-wide uppercase">Last 12h</div>
             <div className="text-sm">
               <span className="font-semibold tabular-nums">{fmtTokens(totalTokens)}</span> tokens ·{' '}
               <span className="font-semibold tabular-nums">{fmtCost(totalCost)}</span>
@@ -174,7 +233,7 @@ export function DashboardMetrics() {
         <div className="grid gap-6 lg:grid-cols-2">
           <div>
             <div className="text-muted mb-2 text-xs font-semibold tracking-wide uppercase">
-              Tokens per agent · 24h
+              Tokens per agent · 12h
             </div>
             <div className="h-40 w-full">
               {perAgent.length === 0 ? (
@@ -214,7 +273,7 @@ export function DashboardMetrics() {
 
           <div>
             <div className="text-muted mb-2 text-xs font-semibold tracking-wide uppercase">
-              Total tokens &amp; cost · 24h
+              Total tokens &amp; cost · 12h
             </div>
             <div className="h-40 w-full">
               <ResponsiveContainer width="100%" height="100%">
@@ -260,7 +319,70 @@ export function DashboardMetrics() {
             </div>
           </div>
         </div>
+
+        {/* Per-agent resource graphs over the last 12h (one line per agent). */}
+        <div className="grid gap-6 lg:grid-cols-2">
+          <ResourceChart title="CPU per agent · 12h" data={cpuData} series={series} unit="%" />
+          <ResourceChart title="Memory per agent · 12h" data={memData} series={series} unit=" MB" />
+        </div>
       </Card.Content>
     </Card>
+  );
+}
+
+/** A per-agent line chart over the 12h window (CPU% or memory MB). */
+function ResourceChart({
+  title,
+  data,
+  series,
+  unit,
+}: {
+  title: string;
+  data: Record<string, number>[];
+  series: { id: string; name: string }[];
+  unit: string;
+}) {
+  return (
+    <div>
+      <div className="text-muted mb-2 text-xs font-semibold tracking-wide uppercase">{title}</div>
+      <div className="h-40 w-full">
+        {data.length === 0 || series.length === 0 ? (
+          <p className="text-muted pt-8 text-center text-sm">No data yet.</p>
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--separator)" vertical={false} />
+              <XAxis
+                dataKey="t"
+                type="number"
+                scale="time"
+                domain={['dataMin', 'dataMax']}
+                tickFormatter={fmtClock}
+                tick={AXIS}
+                stroke="var(--separator)"
+              />
+              <YAxis width={44} tick={AXIS} stroke="var(--separator)" />
+              <Tooltip
+                contentStyle={TOOLTIP}
+                labelStyle={{ color: 'var(--muted)' }}
+                labelFormatter={(t) => fmtClock(Number(t))}
+                formatter={(v, n) => [`${Math.round(Number(v) || 0)}${unit}`, n]}
+              />
+              {series.map((s, i) => (
+                <Line
+                  key={s.id}
+                  type="monotone"
+                  dataKey={s.name}
+                  stroke={LINE_COLORS[i % LINE_COLORS.length]}
+                  strokeWidth={2}
+                  dot={false}
+                  isAnimationActive={false}
+                />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+    </div>
   );
 }

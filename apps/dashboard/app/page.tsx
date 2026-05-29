@@ -50,7 +50,7 @@ export default function HomePage() {
     <main className="mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-10">
       <header className="mb-8 flex flex-wrap items-center justify-between gap-x-3 gap-y-3">
         <div>
-          <h1 className="text-2xl font-semibold">Agent Swarm</h1>
+          <h1 className="text-2xl font-semibold">Swarm Control</h1>
           <p className="text-muted text-sm">A swarm of autonomous agents for any task</p>
         </div>
         <div className="flex items-center gap-2 sm:gap-3">
