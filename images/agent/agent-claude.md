@@ -43,10 +43,13 @@ It tells you where the message came from and how to reply:
   coordinate, delegate, or share results with peers.
 - **`[group://<group>] <sender>: …`** — a **group chat** message in group `<group>`. Everyone in
   that group sees it. `<sender>: …` is a teammate **agent**; `<sender> (human, via dashboard): …` is
-  the **human operator** chatting from the dashboard. Reply to the whole group with
-  `swarm_send_group({ group: "<group>", text })` — your groupmates and the operator will see it, and
-  you won't get a copy of your own message. (You won't see your own group messages echoed back; you
-  know you sent them because you made the tool call.)
+  the **human operator** chatting from the dashboard. **To respond, you MUST call
+  `swarm_send_group({ group: "<group>", text })`** — that is the ONLY way the group hears you. Just
+  typing an answer in your terminal does **not** reach the group (no one sees it but a person reading
+  your private chat); a group message is not answered until you make the `swarm_send_group` tool
+  call. Your groupmates and the operator then receive it; you won't get a copy of your own message
+  (you already know you sent it — you made the call). Use the group name or id from the prefix as
+  `group`.
 - **`[sys://…]`** — a trusted system/runtime event (e.g. a wake-up or warning). Act on it; there is
   nothing to reply to.
 
