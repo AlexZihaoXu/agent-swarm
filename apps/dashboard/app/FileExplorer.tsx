@@ -560,7 +560,7 @@ export function FileExplorer({
                             <Header>Danger zone</Header>
                             <Dropdown.Item id="delete" textValue="Delete" variant="danger">
                               <div className="flex items-center justify-center">
-                                <LuTrash2 className="size-4 shrink-0" />
+                                <LuTrash2 className="text-danger size-4 shrink-0" />
                               </div>
                               <div className="flex flex-col">
                                 <Label>Delete</Label>

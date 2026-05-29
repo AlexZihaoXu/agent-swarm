@@ -237,7 +237,7 @@ export function AgentCard({
               <Header>Danger zone</Header>
               <Dropdown.Item id="remove" textValue="Remove" variant="danger">
                 <span className="flex items-center justify-center">
-                  <LuTrash2 className="size-4 shrink-0" />
+                  <LuTrash2 className="text-danger size-4 shrink-0" />
                 </span>
                 <Label>Remove</Label>
               </Dropdown.Item>
