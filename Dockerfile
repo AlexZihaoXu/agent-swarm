@@ -42,6 +42,8 @@ COPY --from=build /repo/apps/gateway/dist ./gateway/dist
 # Traced from the repo root, so the entry is apps/dashboard/server.js.
 COPY --from=build /repo/apps/dashboard/.next/standalone ./dashboard/
 COPY --from=build /repo/apps/dashboard/.next/static ./dashboard/apps/dashboard/.next/static
+# public/ (PWA manifest, service worker, icon) — Next standalone doesn't bundle it.
+COPY --from=build /repo/apps/dashboard/public ./dashboard/apps/dashboard/public
 
 COPY start.mjs ./start.mjs
 EXPOSE 8080

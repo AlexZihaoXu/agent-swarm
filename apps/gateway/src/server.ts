@@ -15,7 +15,11 @@ function isPublicPath(pathname: string): boolean {
     pathname.startsWith('/api/auth/') ||
     pathname.startsWith('/_next/') ||
     pathname.startsWith('/__next') || // Next dev internals
-    pathname === '/favicon.ico'
+    pathname === '/favicon.ico' ||
+    // PWA assets must load without a session (install + service worker + icon).
+    pathname === '/manifest.webmanifest' ||
+    pathname === '/sw.js' ||
+    pathname === '/icon.svg'
   );
 }
 

@@ -15,6 +15,7 @@ export default tseslint.config(
       'images/**',
       '.swarm_data/**', // persistent agent disks — not our source
       'start.mjs', // container entrypoint (Node runtime, not part of the TS app)
+      'apps/dashboard/public/**', // static assets (the service worker uses worker globals)
     ],
   },
   js.configs.recommended,

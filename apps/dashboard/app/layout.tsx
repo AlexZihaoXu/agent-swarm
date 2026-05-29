@@ -1,6 +1,7 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Hanken_Grotesk, Newsreader } from 'next/font/google';
 import { Providers } from './providers';
+import { Pwa } from './Pwa';
 import './globals.css';
 
 // Open-source stand-ins for Anthropic's brand pair (which are licensed/
@@ -21,6 +22,17 @@ const serif = Newsreader({
 export const metadata: Metadata = {
   title: 'Dashboard — Agent Swarm',
   description: 'Dashboard for managing a swarm of autonomous agents.',
+  applicationName: 'Agent Swarm',
+  manifest: '/manifest.webmanifest',
+  icons: {
+    icon: [{ url: '/icon.svg', type: 'image/svg+xml' }],
+    apple: [{ url: '/icon.svg' }],
+  },
+  appleWebApp: { capable: true, title: 'Agent Swarm', statusBarStyle: 'default' },
+};
+
+export const viewport: Viewport = {
+  themeColor: '#ffffff',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -28,6 +40,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" suppressHydrationWarning className={`${sans.variable} ${serif.variable}`}>
       <body className="bg-background text-foreground font-sans antialiased">
         <Providers>{children}</Providers>
+        <Pwa />
       </body>
     </html>
   );
