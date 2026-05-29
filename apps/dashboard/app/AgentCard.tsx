@@ -1,7 +1,17 @@
 'use client';
 
-import { Button, Card, Dropdown, Label, Modal } from '@heroui/react';
+import { Button, Card, Dropdown, Header, Label, Modal } from '@heroui/react';
 import Link from 'next/link';
+import {
+  LuCircleArrowUp,
+  LuCirclePlay,
+  LuCircleStop,
+  LuFolderOpen,
+  LuMonitor,
+  LuPackage,
+  LuSettings,
+  LuTrash2,
+} from 'react-icons/lu';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState, type MouseEvent } from 'react';
 import {
@@ -172,37 +182,66 @@ export function AgentCard({
         />
         <Dropdown.Popover>
           <Dropdown.Menu onAction={(key) => onAction(String(key))}>
-            <Dropdown.Item id="open" textValue="Open">
-              <Label>Open</Label>
-            </Dropdown.Item>
-            {running ? (
-              <Dropdown.Item id="stop" textValue="Stop">
-                <Label>Stop</Label>
+            <Dropdown.Section>
+              <Dropdown.Item id="open" textValue="Open">
+                <span className="flex items-center justify-center">
+                  <LuMonitor className="text-muted size-4 shrink-0" />
+                </span>
+                <Label>Open</Label>
               </Dropdown.Item>
-            ) : (
-              <Dropdown.Item id="start" textValue="Start">
-                <Label>Start</Label>
+              {running ? (
+                <Dropdown.Item id="stop" textValue="Stop">
+                  <span className="flex items-center justify-center">
+                    <LuCircleStop className="text-muted size-4 shrink-0" />
+                  </span>
+                  <Label>Stop</Label>
+                </Dropdown.Item>
+              ) : (
+                <Dropdown.Item id="start" textValue="Start">
+                  <span className="flex items-center justify-center">
+                    <LuCirclePlay className="text-muted size-4 shrink-0" />
+                  </span>
+                  <Label>Start</Label>
+                </Dropdown.Item>
+              )}
+              {running && upgrade?.outdated ? (
+                <Dropdown.Item id="upgrade" textValue="Upgrade">
+                  <span className="flex items-center justify-center">
+                    <LuCircleArrowUp className="text-muted size-4 shrink-0" />
+                  </span>
+                  <Label>
+                    Upgrade (v{upgrade.installed} → v{upgrade.latest})
+                  </Label>
+                </Dropdown.Item>
+              ) : null}
+              <Dropdown.Item id="files" textValue="Files">
+                <span className="flex items-center justify-center">
+                  <LuFolderOpen className="text-muted size-4 shrink-0" />
+                </span>
+                <Label>Files…</Label>
               </Dropdown.Item>
-            )}
-            {running && upgrade?.outdated ? (
-              <Dropdown.Item id="upgrade" textValue="Upgrade">
-                <Label>
-                  Upgrade (v{upgrade.installed} → v{upgrade.latest})
-                </Label>
+              <Dropdown.Item id="settings" textValue="Settings">
+                <span className="flex items-center justify-center">
+                  <LuSettings className="text-muted size-4 shrink-0" />
+                </span>
+                <Label>Settings…</Label>
               </Dropdown.Item>
-            ) : null}
-            <Dropdown.Item id="files" textValue="Files">
-              <Label>Files…</Label>
-            </Dropdown.Item>
-            <Dropdown.Item id="settings" textValue="Settings">
-              <Label>Settings…</Label>
-            </Dropdown.Item>
-            <Dropdown.Item id="package" textValue="Package">
-              <Label>Package…</Label>
-            </Dropdown.Item>
-            <Dropdown.Item id="remove" textValue="Remove" variant="danger">
-              <Label>Remove</Label>
-            </Dropdown.Item>
+              <Dropdown.Item id="package" textValue="Package">
+                <span className="flex items-center justify-center">
+                  <LuPackage className="text-muted size-4 shrink-0" />
+                </span>
+                <Label>Package…</Label>
+              </Dropdown.Item>
+            </Dropdown.Section>
+            <Dropdown.Section>
+              <Header>Danger zone</Header>
+              <Dropdown.Item id="remove" textValue="Remove" variant="danger">
+                <span className="flex items-center justify-center">
+                  <LuTrash2 className="size-4 shrink-0" />
+                </span>
+                <Label>Remove</Label>
+              </Dropdown.Item>
+            </Dropdown.Section>
           </Dropdown.Menu>
         </Dropdown.Popover>
       </Dropdown>

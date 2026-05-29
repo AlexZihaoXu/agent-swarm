@@ -274,7 +274,7 @@ export function FileExplorer({
               <Modal.Heading>Files — {agentName}</Modal.Heading>
             </Modal.Header>
             <Modal.Body
-              className="flex max-h-[74vh] min-h-0 flex-1 flex-col gap-3 overflow-hidden"
+              className="flex h-[72vh] flex-col gap-3 overflow-hidden"
               onContextMenu={(e) => e.preventDefault()}
             >
               {editing ? (
@@ -366,14 +366,14 @@ export function FileExplorer({
                   )}
 
                   {/* Search within the current folder */}
-                  <div className="relative">
-                    <LuSearch className="text-muted pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
+                  <div className="relative w-full">
+                    <LuSearch className="text-muted pointer-events-none absolute top-1/2 left-2.5 z-10 size-4 -translate-y-1/2" />
                     <Input
                       placeholder="Search this folder…"
                       value={query}
                       onChange={(e) => setQuery(e.target.value)}
                       onKeyDown={(e) => e.key === 'Escape' && setQuery('')}
-                      className="pl-8"
+                      className="w-full pl-8"
                     />
                   </div>
 
@@ -509,7 +509,7 @@ export function FileExplorer({
                           <Dropdown.Section>
                             <Header>{menu.entry.dir ? 'Folder' : 'File'}</Header>
                             <Dropdown.Item id="open" textValue="Open">
-                              <div className="flex h-8 items-start justify-center pt-px">
+                              <div className="flex items-center justify-center">
                                 {menu.entry.dir ? (
                                   <LuFolderOpen className="text-muted size-4 shrink-0" />
                                 ) : (
@@ -524,7 +524,7 @@ export function FileExplorer({
                               </div>
                             </Dropdown.Item>
                             <Dropdown.Item id="download" textValue="Download">
-                              <div className="flex h-8 items-start justify-center pt-px">
+                              <div className="flex items-center justify-center">
                                 {menu.entry.dir ? (
                                   <LuFileArchive className="text-muted size-4 shrink-0" />
                                 ) : (
@@ -539,7 +539,7 @@ export function FileExplorer({
                               </div>
                             </Dropdown.Item>
                             <Dropdown.Item id="copy" textValue="Copy path">
-                              <div className="flex h-8 items-start justify-center pt-px">
+                              <div className="flex items-center justify-center">
                                 <LuCopy className="text-muted size-4 shrink-0" />
                               </div>
                               <div className="flex flex-col">
@@ -548,7 +548,7 @@ export function FileExplorer({
                               </div>
                             </Dropdown.Item>
                             <Dropdown.Item id="rename" textValue="Rename">
-                              <div className="flex h-8 items-start justify-center pt-px">
+                              <div className="flex items-center justify-center">
                                 <LuPencil className="text-muted size-4 shrink-0" />
                               </div>
                               <div className="flex flex-col">
@@ -559,7 +559,7 @@ export function FileExplorer({
                           <Dropdown.Section>
                             <Header>Danger zone</Header>
                             <Dropdown.Item id="delete" textValue="Delete" variant="danger">
-                              <div className="flex h-8 items-start justify-center pt-px">
+                              <div className="flex items-center justify-center">
                                 <LuTrash2 className="size-4 shrink-0" />
                               </div>
                               <div className="flex flex-col">
