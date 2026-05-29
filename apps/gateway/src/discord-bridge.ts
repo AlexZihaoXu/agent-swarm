@@ -133,7 +133,6 @@ export class DiscordBridge {
         // The bot's own messages keep it online (but aren't forwarded back).
         if (selfId && msg.author.id === selfId) return bumpOnline();
         if (rules.ignoreBots && msg.author.bot) return;
-        if (rules.allowedUserIds.length && !rules.allowedUserIds.includes(msg.author.id)) return;
 
         const isDm = !msg.guildId;
         const mentioned =
@@ -145,6 +144,8 @@ export class DiscordBridge {
 
         if (isDm) {
           if (!rules.forwardDms) return;
+          // DM allow-list: if set, only these users may DM the agent.
+          if (rules.allowedUserIds.length && !rules.allowedUserIds.includes(msg.author.id)) return;
           bumpOnline();
           unread.clear();
           // A DM is direct address → interrupt if the agent is mid-turn.
@@ -153,7 +154,15 @@ export class DiscordBridge {
 
         if (rules.forwardChannelIds.length) {
           // Watched channels: online → forward all; idle → buffer unless @-addressed.
-          if (!rules.forwardChannelIds.includes(msg.channelId)) return;
+          if (!rules.forwardChannelIds.includes(msg.channelId)) {
+            // Outside the watch-list: only let a single @mention/reply through when
+            // "respond to mentions anywhere" is on (no history, no buffering).
+            if (mentioned && rules.respondToMentionsAnywhere) {
+              bumpOnline();
+              return send(formatLine(msg, false), attachments, true);
+            }
+            return;
+          }
           if (mentioned || Date.now() < onlineUntil) {
             bumpOnline();
             unread.clear();

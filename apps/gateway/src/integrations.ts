@@ -23,6 +23,7 @@ export const DEFAULT_DISCORD_RULES: DiscordRules = {
   allowedUserIds: [],
   ignoreBots: true,
   requireMention: true,
+  respondToMentionsAnywhere: false,
 };
 
 export function readStore(dataDir: string): Store {

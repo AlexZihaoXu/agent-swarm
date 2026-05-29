@@ -112,13 +112,18 @@ export interface DiscordRules {
   forwardChannelIds: string[];
   /** Also forward direct messages sent to the bot. */
   forwardDms: boolean;
-  /** If non-empty, only forward messages authored by these user IDs. */
+  /** If non-empty, only DMs from these user IDs are forwarded (DM allow-list).
+   *  Does not restrict channel messages. */
   allowedUserIds: string[];
   /** Ignore messages authored by bots (including itself). */
   ignoreBots: boolean;
   /** In server channels, only forward messages that @-mention the bot (DMs are
    *  always forwarded). Keeps the agent from reacting to unrelated chatter. */
   requireMention: boolean;
+  /** When a channel watch-list is set, also forward a single @mention/reply from
+   *  channels OUTSIDE the watch-list (just that message — no history/buffering),
+   *  so the agent can be pulled into other channels by name. */
+  respondToMentionsAnywhere: boolean;
 }
 
 /** Secret credentials for Discord. Never returned in full over the API. */

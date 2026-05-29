@@ -539,9 +539,12 @@ export type IntegrationStatus =
 export interface DiscordRules {
   forwardChannelIds: string[];
   forwardDms: boolean;
+  /** DM allow-list (does not restrict channel messages). */
   allowedUserIds: string[];
   ignoreBots: boolean;
   requireMention: boolean;
+  /** Let a single @mention/reply through from channels outside the watch-list. */
+  respondToMentionsAnywhere: boolean;
 }
 
 export interface IntegrationTestResult {

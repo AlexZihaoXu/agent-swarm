@@ -47,6 +47,7 @@ const DEFAULT_RULES: DiscordRules = {
   allowedUserIds: [],
   ignoreBots: true,
   requireMention: true,
+  respondToMentionsAnywhere: false,
 };
 
 /** A field label with an info tooltip. */
@@ -153,6 +154,7 @@ export function IntegrationsPanel({ agentId, active }: { agentId: string; active
   const [forwardDms, setForwardDms] = useState(DEFAULT_RULES.forwardDms);
   const [ignoreBots, setIgnoreBots] = useState(DEFAULT_RULES.ignoreBots);
   const [requireMention, setRequireMention] = useState(DEFAULT_RULES.requireMention);
+  const [mentionsAnywhere, setMentionsAnywhere] = useState(DEFAULT_RULES.respondToMentionsAnywhere);
   const [channels, setChannels] = useState<string[]>([]);
   const [users, setUsers] = useState<string[]>([]);
   const [seeded, setSeeded] = useState(false);
@@ -177,6 +179,7 @@ export function IntegrationsPanel({ agentId, active }: { agentId: string; active
       setForwardDms(discord.rules.forwardDms);
       setIgnoreBots(discord.rules.ignoreBots);
       setRequireMention(discord.rules.requireMention ?? true);
+      setMentionsAnywhere(discord.rules.respondToMentionsAnywhere ?? false);
       setChannels(discord.rules.forwardChannelIds);
       setUsers(discord.rules.allowedUserIds);
       setSeeded(true);
@@ -206,6 +209,7 @@ export function IntegrationsPanel({ agentId, active }: { agentId: string; active
           forwardDms,
           ignoreBots,
           requireMention,
+          respondToMentionsAnywhere: mentionsAnywhere,
           forwardChannelIds: channels,
           allowedUserIds: users,
         },
@@ -299,6 +303,19 @@ export function IntegrationsPanel({ agentId, active }: { agentId: string; active
                 </p>
               </Switch.Content>
             </Switch>
+            <Switch isSelected={mentionsAnywhere} onChange={setMentionsAnywhere}>
+              <Switch.Control>
+                <Switch.Thumb />
+              </Switch.Control>
+              <Switch.Content>
+                <Label className="text-sm">Respond to mentions anywhere</Label>
+                <p className="text-muted text-xs">
+                  When watched channels are set above, also let the agent see and reply to a message
+                  in any other channel if it @-mentions or replies to the bot — only that one
+                  message, not the channel&apos;s history.
+                </p>
+              </Switch.Content>
+            </Switch>
             <Switch isSelected={forwardDms} onChange={setForwardDms}>
               <Switch.Control>
                 <Switch.Thumb />
@@ -331,8 +348,8 @@ export function IntegrationsPanel({ agentId, active }: { agentId: string; active
           </div>
 
           <div>
-            <FieldLabel hint="If set, only these people's messages reach the agent — everyone else is ignored. Right-click a user → Copy User ID (Developer Mode). Empty = anyone may message the agent.">
-              Allowed senders
+            <FieldLabel hint="If set, only these users may DM the agent — DMs from anyone else are ignored. Right-click a user → Copy User ID (Developer Mode). Empty = anyone may DM the agent. This does not restrict channel messages.">
+              Allowed DMs
             </FieldLabel>
             <TagInput
               values={users}
