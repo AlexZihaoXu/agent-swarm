@@ -49,7 +49,7 @@ export function ConfirmActionDialog({
   return (
     <Modal>
       <Modal.Backdrop isOpen={isOpen} onOpenChange={onOpenChange} isDismissable={!busy}>
-        <Modal.Container>
+        <Modal.Container placement="center">
           <Modal.Dialog className="sm:max-w-[420px]">
             <Modal.CloseTrigger />
             <Modal.Header>

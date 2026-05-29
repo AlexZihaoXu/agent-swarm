@@ -103,7 +103,7 @@ export function PackageModal({
   return (
     <Modal>
       <Modal.Backdrop isOpen={isOpen} onOpenChange={onOpenChange} isDismissable={!busy}>
-        <Modal.Container>
+        <Modal.Container placement="center">
           <Modal.Dialog className="sm:max-w-[480px]">
             <Modal.CloseTrigger />
             <Modal.Header>

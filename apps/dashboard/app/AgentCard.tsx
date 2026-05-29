@@ -252,7 +252,7 @@ export function AgentCard({
           onOpenChange={(o) => !o && setDialog(null)}
           isDismissable={!busy}
         >
-          <Modal.Container>
+          <Modal.Container placement="center">
             <Modal.Dialog className="sm:max-w-[460px]">
               <Modal.CloseTrigger />
               <Modal.Header>

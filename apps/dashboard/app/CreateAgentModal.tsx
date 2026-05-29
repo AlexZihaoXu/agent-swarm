@@ -179,7 +179,7 @@ export function CreateAgentModal({
         New agent
       </Button>
       <Modal.Backdrop isOpen={open} onOpenChange={setOpen}>
-        <Modal.Container>
+        <Modal.Container placement="center">
           <Modal.Dialog className="sm:max-w-[440px]">
             <Modal.CloseTrigger />
             <Modal.Header>

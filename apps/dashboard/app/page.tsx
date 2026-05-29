@@ -53,7 +53,7 @@ export default function HomePage() {
   }, [refresh, refreshImage]);
 
   return (
-    <main className="mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-10">
+    <main className="mx-auto max-w-5xl px-4 py-6 pb-28 sm:px-6 sm:py-10 sm:pb-28">
       <header className="mb-8 flex flex-wrap items-center justify-between gap-x-3 gap-y-3">
         <div>
           <h1 className="text-2xl font-semibold">Dashboard</h1>

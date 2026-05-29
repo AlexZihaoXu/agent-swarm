@@ -255,48 +255,52 @@ export function DashboardMetrics() {
     >
       <Card>
         <Card.Content className="space-y-3">
-          {/* Rate-limit rings + 24h totals */}
-          <div className="flex flex-wrap items-center gap-x-8 gap-y-4">
-            {m.rateLimits ? (
-              (() => {
-                const outdated = Date.now() - m.rateLimits.updatedAt > 5 * 60_000;
-                return (
-                  <>
-                    <UsageRing
-                      label="5h window"
-                      w={m.rateLimits.fiveHour}
-                      windowMs={5 * 3_600_000}
-                      outdated={outdated}
-                    />
-                    <UsageRing
-                      label="7d window"
-                      w={m.rateLimits.sevenDay}
-                      windowMs={7 * 86_400_000}
-                      outdated={outdated}
-                    />
-                  </>
-                );
-              })()
-            ) : (
-              <span className="text-muted text-sm">No usage data yet.</span>
-            )}
+          {/* Rate-limit rings + 12h totals. On phones the rings sit in a 2-col
+              grid and the totals drop to a full-width row; on lg+ it's one inline
+              row with the totals pushed right. */}
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:gap-x-8">
+            <div className="grid grid-cols-2 items-center gap-x-6 gap-y-4 sm:flex sm:flex-wrap sm:gap-x-8">
+              {m.rateLimits ? (
+                (() => {
+                  const outdated = Date.now() - m.rateLimits.updatedAt > 5 * 60_000;
+                  return (
+                    <>
+                      <UsageRing
+                        label="5h window"
+                        w={m.rateLimits.fiveHour}
+                        windowMs={5 * 3_600_000}
+                        outdated={outdated}
+                      />
+                      <UsageRing
+                        label="7d window"
+                        w={m.rateLimits.sevenDay}
+                        windowMs={7 * 86_400_000}
+                        outdated={outdated}
+                      />
+                    </>
+                  );
+                })()
+              ) : (
+                <span className="text-muted col-span-2 text-sm">No usage data yet.</span>
+              )}
 
-            {/* Divider, then live CPU + memory rings across running agents (~2/s). */}
-            <div className="bg-separator h-10 w-px" />
-            <LiveRing
-              label="CPU"
-              value={usage?.cpuPct ?? 0}
-              max={host ? host.cpus * 100 : 100}
-              format={() => (host ? `${host.cpus} cores` : '')}
-            />
-            <LiveRing
-              label="Memory"
-              value={usage?.memUsed ?? 0}
-              max={host ? host.memoryMb * (1 << 20) : 1}
-              format={(v) => fmtBytes(v)}
-            />
+              {/* Divider only when the rings are inline (sm+); hidden when they grid. */}
+              <div className="bg-separator hidden h-10 w-px sm:block" />
+              <LiveRing
+                label="CPU"
+                value={usage?.cpuPct ?? 0}
+                max={host ? host.cpus * 100 : 100}
+                format={() => (host ? `${host.cpus} cores` : '')}
+              />
+              <LiveRing
+                label="Memory"
+                value={usage?.memUsed ?? 0}
+                max={host ? host.memoryMb * (1 << 20) : 1}
+                format={(v) => fmtBytes(v)}
+              />
+            </div>
 
-            <div className="ml-auto text-right">
+            <div className="border-separator flex items-baseline justify-between gap-3 border-t pt-3 lg:ml-auto lg:block lg:border-0 lg:pt-0 lg:text-right">
               <div className="text-muted text-xs font-semibold tracking-wide uppercase">
                 Last 12h
               </div>

@@ -156,7 +156,7 @@ export function AgentSettingsModal({
         onOpenChange={(o) => !o && onOpenChange(false)}
         isDismissable={!busy}
       >
-        <Modal.Container>
+        <Modal.Container placement="center">
           <Modal.Dialog className="sm:max-w-[520px]">
             <Modal.CloseTrigger />
             <Modal.Header>

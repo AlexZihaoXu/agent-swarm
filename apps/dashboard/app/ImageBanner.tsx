@@ -74,7 +74,7 @@ export function ImageBanner({ image, onBuilt }: { image: string; onBuilt: () => 
 
       <Modal>
         <Modal.Backdrop isOpen={open} onOpenChange={setOpen} isDismissable={phase !== 'building'}>
-          <Modal.Container>
+          <Modal.Container placement="center">
             <Modal.Dialog className="sm:max-w-[640px]">
               {phase !== 'building' && <Modal.CloseTrigger />}
               <Modal.Header>
