@@ -1,7 +1,7 @@
 'use client';
 
 import { Card, ProgressCircle } from '@heroui/react';
-import { animate } from 'framer-motion';
+import { animate, motion } from 'framer-motion';
 import { useEffect, useRef, useState } from 'react';
 import {
   Bar,
@@ -247,79 +247,133 @@ export function DashboardMetrics() {
   });
 
   return (
-    <Card className="mb-6">
-      <Card.Content className="space-y-3">
-        {/* Rate-limit rings + 24h totals */}
-        <div className="flex flex-wrap items-center gap-x-8 gap-y-4">
-          {m.rateLimits ? (
-            (() => {
-              const outdated = Date.now() - m.rateLimits.updatedAt > 5 * 60_000;
-              return (
-                <>
-                  <UsageRing
-                    label="5h window"
-                    w={m.rateLimits.fiveHour}
-                    windowMs={5 * 3_600_000}
-                    outdated={outdated}
-                  />
-                  <UsageRing
-                    label="7d window"
-                    w={m.rateLimits.sevenDay}
-                    windowMs={7 * 86_400_000}
-                    outdated={outdated}
-                  />
-                </>
-              );
-            })()
-          ) : (
-            <span className="text-muted text-sm">No usage data yet.</span>
-          )}
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+      className="mb-6"
+    >
+      <Card>
+        <Card.Content className="space-y-3">
+          {/* Rate-limit rings + 24h totals */}
+          <div className="flex flex-wrap items-center gap-x-8 gap-y-4">
+            {m.rateLimits ? (
+              (() => {
+                const outdated = Date.now() - m.rateLimits.updatedAt > 5 * 60_000;
+                return (
+                  <>
+                    <UsageRing
+                      label="5h window"
+                      w={m.rateLimits.fiveHour}
+                      windowMs={5 * 3_600_000}
+                      outdated={outdated}
+                    />
+                    <UsageRing
+                      label="7d window"
+                      w={m.rateLimits.sevenDay}
+                      windowMs={7 * 86_400_000}
+                      outdated={outdated}
+                    />
+                  </>
+                );
+              })()
+            ) : (
+              <span className="text-muted text-sm">No usage data yet.</span>
+            )}
 
-          {/* Divider, then live CPU + memory rings across running agents (~2/s). */}
-          <div className="bg-separator h-10 w-px" />
-          <LiveRing
-            label="CPU"
-            value={usage?.cpuPct ?? 0}
-            max={host ? host.cpus * 100 : 100}
-            format={() => (host ? `${host.cpus} cores` : '')}
-          />
-          <LiveRing
-            label="Memory"
-            value={usage?.memUsed ?? 0}
-            max={host ? host.memoryMb * (1 << 20) : 1}
-            format={(v) => fmtBytes(v)}
-          />
+            {/* Divider, then live CPU + memory rings across running agents (~2/s). */}
+            <div className="bg-separator h-10 w-px" />
+            <LiveRing
+              label="CPU"
+              value={usage?.cpuPct ?? 0}
+              max={host ? host.cpus * 100 : 100}
+              format={() => (host ? `${host.cpus} cores` : '')}
+            />
+            <LiveRing
+              label="Memory"
+              value={usage?.memUsed ?? 0}
+              max={host ? host.memoryMb * (1 << 20) : 1}
+              format={(v) => fmtBytes(v)}
+            />
 
-          <div className="ml-auto text-right">
-            <div className="text-muted text-xs font-semibold tracking-wide uppercase">Last 12h</div>
-            <div className="text-sm">
-              <span className="font-semibold tabular-nums">{fmtTokens(totalTokens)}</span> tokens ·{' '}
-              <span className="font-semibold tabular-nums">{fmtCost(totalCost)}</span>
+            <div className="ml-auto text-right">
+              <div className="text-muted text-xs font-semibold tracking-wide uppercase">
+                Last 12h
+              </div>
+              <div className="text-sm">
+                <span className="font-semibold tabular-nums">{fmtTokens(totalTokens)}</span> tokens
+                · <span className="font-semibold tabular-nums">{fmtCost(totalCost)}</span>
+              </div>
             </div>
           </div>
-        </div>
 
-        {/* Charts */}
-        <div className="grid gap-6 lg:grid-cols-2">
-          <div>
-            <div className="text-muted mb-2 text-xs font-semibold tracking-wide uppercase">
-              Tokens per agent · 12h
+          {/* Charts */}
+          <div className="grid gap-6 lg:grid-cols-2">
+            <div>
+              <div className="text-muted mb-2 text-xs font-semibold tracking-wide uppercase">
+                Tokens per agent · 12h
+              </div>
+              <div className="h-28 w-full">
+                {perAgent.length === 0 ? (
+                  <p className="text-muted pt-8 text-center text-sm">No activity.</p>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={perAgent} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                      <CartesianGrid
+                        strokeDasharray="3 3"
+                        stroke="var(--separator)"
+                        vertical={false}
+                      />
+                      <XAxis dataKey="name" tick={AXIS} stroke="var(--separator)" />
+                      <YAxis
+                        tickFormatter={fmtTokens}
+                        width={44}
+                        tick={AXIS}
+                        stroke="var(--separator)"
+                      />
+                      <Tooltip
+                        cursor={{ fill: 'rgba(255,255,255,0.05)' }}
+                        contentStyle={TOOLTIP}
+                        labelStyle={{ color: 'var(--muted)' }}
+                        formatter={(v, n) =>
+                          n === 'cost'
+                            ? [fmtCost(Number(v) || 0), 'cost']
+                            : [fmtTokens(Number(v) || 0), 'tokens']
+                        }
+                      />
+                      <Bar dataKey="cost" hide />
+                      <Bar dataKey="tokens" fill="#e0a55e" radius={[2, 2, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
             </div>
-            <div className="h-28 w-full">
-              {perAgent.length === 0 ? (
-                <p className="text-muted pt-8 text-center text-sm">No activity.</p>
-              ) : (
+
+            <div>
+              <div className="text-muted mb-2 text-xs font-semibold tracking-wide uppercase">
+                Total tokens &amp; cost · 12h
+              </div>
+              <div className="h-28 w-full">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={perAgent} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <ComposedChart data={overTime} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
                     <CartesianGrid
                       strokeDasharray="3 3"
                       stroke="var(--separator)"
                       vertical={false}
                     />
-                    <XAxis dataKey="name" tick={AXIS} stroke="var(--separator)" />
+                    <XAxis dataKey="label" interval={3} tick={AXIS} stroke="var(--separator)" />
                     <YAxis
+                      yAxisId="t"
                       tickFormatter={fmtTokens}
                       width={44}
+                      tick={AXIS}
+                      stroke="var(--separator)"
+                    />
+                    <YAxis
+                      yAxisId="c"
+                      orientation="right"
+                      tickFormatter={(v) => fmtCost(Number(v) || 0)}
+                      width={48}
                       tick={AXIS}
                       stroke="var(--separator)"
                     />
@@ -333,82 +387,41 @@ export function DashboardMetrics() {
                           : [fmtTokens(Number(v) || 0), 'tokens']
                       }
                     />
-                    <Bar dataKey="cost" hide />
-                    <Bar dataKey="tokens" fill="#e0a55e" radius={[2, 2, 0, 0]} />
-                  </BarChart>
+                    <Bar yAxisId="t" dataKey="tokens" fill="#7aa2f7" radius={[2, 2, 0, 0]} />
+                    <Line
+                      yAxisId="c"
+                      type="monotone"
+                      dataKey="cost"
+                      stroke="#9ece6a"
+                      strokeWidth={2}
+                      dot={false}
+                    />
+                  </ComposedChart>
                 </ResponsiveContainer>
-              )}
+              </div>
             </div>
           </div>
 
-          <div>
-            <div className="text-muted mb-2 text-xs font-semibold tracking-wide uppercase">
-              Total tokens &amp; cost · 12h
-            </div>
-            <div className="h-28 w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={overTime} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--separator)" vertical={false} />
-                  <XAxis dataKey="label" interval={3} tick={AXIS} stroke="var(--separator)" />
-                  <YAxis
-                    yAxisId="t"
-                    tickFormatter={fmtTokens}
-                    width={44}
-                    tick={AXIS}
-                    stroke="var(--separator)"
-                  />
-                  <YAxis
-                    yAxisId="c"
-                    orientation="right"
-                    tickFormatter={(v) => fmtCost(Number(v) || 0)}
-                    width={48}
-                    tick={AXIS}
-                    stroke="var(--separator)"
-                  />
-                  <Tooltip
-                    cursor={{ fill: 'rgba(255,255,255,0.05)' }}
-                    contentStyle={TOOLTIP}
-                    labelStyle={{ color: 'var(--muted)' }}
-                    formatter={(v, n) =>
-                      n === 'cost'
-                        ? [fmtCost(Number(v) || 0), 'cost']
-                        : [fmtTokens(Number(v) || 0), 'tokens']
-                    }
-                  />
-                  <Bar yAxisId="t" dataKey="tokens" fill="#7aa2f7" radius={[2, 2, 0, 0]} />
-                  <Line
-                    yAxisId="c"
-                    type="monotone"
-                    dataKey="cost"
-                    stroke="#9ece6a"
-                    strokeWidth={2}
-                    dot={false}
-                  />
-                </ComposedChart>
-              </ResponsiveContainer>
-            </div>
+          {/* Per-agent resource graphs over the last 12h (one line per agent). */}
+          <div className="grid gap-6 lg:grid-cols-2">
+            <ResourceChart
+              title="CPU per agent · 12h"
+              data={cpuData}
+              series={series}
+              unit="%"
+              max={host ? host.cpus * 100 : undefined}
+            />
+            <ResourceChart
+              title="Memory per agent · 12h"
+              data={memData}
+              series={series}
+              unit=" MB"
+              max={host ? host.memoryMb : undefined}
+            />
           </div>
-        </div>
-
-        {/* Per-agent resource graphs over the last 12h (one line per agent). */}
-        <div className="grid gap-6 lg:grid-cols-2">
-          <ResourceChart
-            title="CPU per agent · 12h"
-            data={cpuData}
-            series={series}
-            unit="%"
-            max={host ? host.cpus * 100 : undefined}
-          />
-          <ResourceChart
-            title="Memory per agent · 12h"
-            data={memData}
-            series={series}
-            unit=" MB"
-            max={host ? host.memoryMb : undefined}
-          />
-        </div>
-      </Card.Content>
-    </Card>
+        </Card.Content>
+      </Card>
+    </motion.div>
   );
 }
 

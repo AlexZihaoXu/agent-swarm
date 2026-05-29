@@ -1,6 +1,6 @@
 'use client';
 
-import { Button, Input, Label, Modal, Slider, TextField, toast } from '@heroui/react';
+import { Button, Input, Label, Modal, Slider, Tabs, TextField, toast } from '@heroui/react';
 import { useState } from 'react';
 import { LuChevronRight, LuDices } from 'react-icons/lu';
 import { createAgent, getHostInfo, MODEL_OPTIONS } from '@/lib/gateway';
@@ -195,21 +195,23 @@ export function CreateAgentModal({
                   <Input placeholder="workspace-A3F9K2" />
                 </TextField>
 
-                <div className="space-y-1.5">
+                <div className="space-y-2">
                   <Label className="text-sm">Model</Label>
-                  <div className="flex flex-wrap gap-1.5">
-                    {MODEL_OPTIONS.map((opt) => (
-                      <Button
-                        key={opt.value}
-                        type="button"
-                        size="sm"
-                        variant={model === opt.value ? 'primary' : 'tertiary'}
-                        onPress={() => setModel(opt.value)}
-                      >
-                        {opt.label}
-                      </Button>
-                    ))}
-                  </div>
+                  <Tabs
+                    selectedKey={model || 'default'}
+                    onSelectionChange={(k) => setModel(String(k) === 'default' ? '' : String(k))}
+                  >
+                    <Tabs.ListContainer>
+                      <Tabs.List aria-label="Model">
+                        {MODEL_OPTIONS.map((opt) => (
+                          <Tabs.Tab key={opt.value} id={opt.value || 'default'}>
+                            {opt.label}
+                            <Tabs.Indicator />
+                          </Tabs.Tab>
+                        ))}
+                      </Tabs.List>
+                    </Tabs.ListContainer>
+                  </Tabs>
                 </div>
 
                 <button

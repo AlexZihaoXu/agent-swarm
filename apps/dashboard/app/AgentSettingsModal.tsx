@@ -178,21 +178,25 @@ export function AgentSettingsModal({
                         </Button>
                       </div>
 
-                      <div className="space-y-1.5">
+                      <div className="space-y-2">
                         <Label className="text-sm">Model</Label>
-                        <div className="flex flex-wrap gap-1.5">
-                          {MODEL_OPTIONS.map((opt) => (
-                            <Button
-                              key={opt.value}
-                              type="button"
-                              size="sm"
-                              variant={model === opt.value ? 'primary' : 'tertiary'}
-                              onPress={() => setModel(opt.value)}
-                            >
-                              {opt.label}
-                            </Button>
-                          ))}
-                        </div>
+                        <Tabs
+                          selectedKey={model || 'default'}
+                          onSelectionChange={(k) =>
+                            setModel(String(k) === 'default' ? '' : String(k))
+                          }
+                        >
+                          <Tabs.ListContainer>
+                            <Tabs.List aria-label="Model">
+                              {MODEL_OPTIONS.map((opt) => (
+                                <Tabs.Tab key={opt.value} id={opt.value || 'default'}>
+                                  {opt.label}
+                                  <Tabs.Indicator />
+                                </Tabs.Tab>
+                              ))}
+                            </Tabs.List>
+                          </Tabs.ListContainer>
+                        </Tabs>
                         <p className="text-muted text-xs">
                           The model this agent&apos;s <code>claude</code> runs — switches live.
                           &ldquo;Default&rdquo; uses claude&apos;s own default.
