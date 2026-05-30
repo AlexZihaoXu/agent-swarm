@@ -1,4 +1,4 @@
-import { createReadStream, createWriteStream } from 'node:fs';
+import { createReadStream, createWriteStream, rmSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { basename } from 'node:path';
 import type { AgentManager } from './docker.js';
@@ -13,6 +13,9 @@ import {
   issueToken,
   sessionCookie,
   clearCookie,
+  loginThrottle,
+  noteLoginFailure,
+  noteLoginSuccess,
 } from './auth.js';
 import { CAPABILITIES, listRoles, createRole, updateRole, deleteRole } from './roles.js';
 import { listGroups, createGroup, updateGroup, deleteGroup } from './groups.js';
@@ -42,6 +45,29 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 function errStatus(err: unknown): number {
   const s = (err as { statusCode?: number })?.statusCode;
   return s && s >= 400 && s < 600 ? s : 500;
+}
+
+/** Client IP for rate-limiting. X-Forwarded-For is CLIENT-CONTROLLED unless a
+ *  trusted reverse proxy sets it, so we only honor it when TRUST_PROXY is on;
+ *  otherwise an attacker could forge a unique IP per request and slip the
+ *  throttle (and balloon its map). Default: the real socket peer. */
+function clientIp(req: IncomingMessage): string {
+  if (config.trustProxy) {
+    const xff = req.headers['x-forwarded-for'];
+    const raw = Array.isArray(xff) ? xff[0] : xff;
+    const first = raw?.split(',')[0]?.trim();
+    if (first) return first;
+  }
+  return req.socket.remoteAddress || 'unknown';
+}
+
+/** Whether the request reached us over HTTPS — gates the `Secure` cookie. Direct
+ *  TLS always counts; X-Forwarded-Proto is client-forgeable, so it's only trusted
+ *  behind a configured proxy (TRUST_PROXY) — otherwise a forged `https` header
+ *  over plain HTTP would attach Secure and silently break login. */
+function isSecureRequest(req: IncomingMessage): boolean {
+  if ((req.socket as { encrypted?: boolean }).encrypted === true) return true;
+  return config.trustProxy && req.headers['x-forwarded-proto'] === 'https';
 }
 
 /** Apply permissive CORS for the dashboard origin; answer preflight directly. */
@@ -189,25 +215,43 @@ async function handleAuth(
     if (method !== 'GET') return (sendJson(res, 405, { error: 'method not allowed' }), true);
     return (sendJson(res, 200, { configured: isConfigured(), authed }), true);
   }
+  const isSecure = isSecureRequest(req);
   if (pathname === '/api/auth/setup') {
     if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
     if (isConfigured()) return (sendJson(res, 409, { error: 'already configured' }), true);
     const body = await readJson(req);
     setupCredentials(body.username ?? '', body.password ?? '');
-    res.setHeader('set-cookie', sessionCookie(issueToken((body.username ?? '').trim())));
+    res.setHeader('set-cookie', sessionCookie(issueToken((body.username ?? '').trim()), isSecure));
     return (sendJson(res, 200, { ok: true }), true);
   }
   if (pathname === '/api/auth/login') {
     if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+    // Brute-force guard: a blocked source IP is turned away with 429 + Retry-After
+    // BEFORE the password is even checked. A correct first-try login never trips it.
+    const ip = clientIp(req);
+    const throttle = loginThrottle(ip);
+    if (throttle.blocked) {
+      res.setHeader('retry-after', String(throttle.retryAfterSec));
+      return (
+        sendJson(res, 429, {
+          error: 'too many login attempts, try again later',
+          retryAfter: throttle.retryAfterSec,
+        }),
+        true
+      );
+    }
     const body = await readJson(req);
-    if (!verifyPassword(body.username ?? '', body.password ?? ''))
+    if (!verifyPassword(body.username ?? '', body.password ?? '')) {
+      noteLoginFailure(ip);
       return (sendJson(res, 401, { error: 'invalid username or password' }), true);
-    res.setHeader('set-cookie', sessionCookie(issueToken((body.username ?? '').trim())));
+    }
+    noteLoginSuccess(ip);
+    res.setHeader('set-cookie', sessionCookie(issueToken((body.username ?? '').trim()), isSecure));
     return (sendJson(res, 200, { ok: true }), true);
   }
   if (pathname === '/api/auth/logout') {
     if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
-    res.setHeader('set-cookie', clearCookie());
+    res.setHeader('set-cookie', clearCookie(isSecure));
     return (sendJson(res, 200, { ok: true }), true);
   }
   if (pathname === '/api/auth/password') {
@@ -218,7 +262,7 @@ async function handleAuth(
     // The change rotates the session secret (invalidating other sessions); mint a
     // fresh cookie so the operator who changed it stays logged in.
     const username = getSettings().auth?.username ?? '';
-    res.setHeader('set-cookie', sessionCookie(issueToken(username)));
+    res.setHeader('set-cookie', sessionCookie(issueToken(username), isSecure));
     return (sendJson(res, 200, { ok: true }), true);
   }
   sendJson(res, 404, { error: 'unknown endpoint' });
@@ -530,12 +574,47 @@ async function handlePackages(
     if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
     const url = new URL(req.url ?? '/', 'http://localhost');
     const dest = manager.uploadDestination(url.searchParams.get('name') || 'package.7z');
-    await new Promise<void>((resolve, reject) => {
+    // Cap the stream at MAX_UPLOAD_BYTES (mirrors the agent-file upload guard): on
+    // overflow stop reading, tear down both streams, drop the partial file, and 413.
+    const tooLarge = await new Promise<boolean>((resolve, reject) => {
       const out = createWriteStream(dest);
+      let size = 0;
+      let aborted = false;
+      req.on('data', (c: Buffer) => {
+        size += c.length;
+        if (size > MAX_UPLOAD_BYTES && !aborted) {
+          aborted = true;
+          req.unpipe(out);
+          out.destroy();
+          // Remove the partial file only AFTER the write stream has fully torn
+          // down — out.destroy() is async, so a queued write could otherwise
+          // re-create the file just after a synchronous rmSync.
+          out.on('close', () => {
+            try {
+              rmSync(dest, { force: true });
+            } catch {
+              /* best-effort cleanup of the partial file */
+            }
+          });
+          // Drain (and discard) the rest of the body rather than destroying req:
+          // req and res share one TCP socket, so req.destroy() would reset it
+          // before the 413 flushes, and the client would get ECONNRESET instead.
+          req.resume();
+          resolve(true);
+        }
+      });
       req.pipe(out);
-      out.on('finish', () => resolve());
-      out.on('error', reject);
+      out.on('finish', () => {
+        if (!aborted) resolve(false);
+      });
+      out.on('error', (e) => {
+        if (!aborted) reject(e);
+      });
+      req.on('error', (e) => {
+        if (!aborted) reject(e);
+      });
     });
+    if (tooLarge) return (sendJson(res, 413, { error: 'package too large' }), true);
     return (sendJson(res, 200, { file: basename(dest) }), true);
   } else if (action === 'download' && method === 'GET') {
     const path = manager.packageFilePath(file);

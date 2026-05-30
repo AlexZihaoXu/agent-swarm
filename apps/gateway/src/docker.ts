@@ -1023,26 +1023,20 @@ export class AgentManager {
           },
         ]
       : undefined;
+    // Sysbox runs systemd/GNOME unprivileged inside a user namespace (container
+    // root → unprivileged host uid). When it's the runtime we DROP the escape
+    // surface the privileged `runc` path needs (SYS_ADMIN, unconfined
+    // seccomp/apparmor, cgroupns=host, the host cgroup bind). Sysbox virtualizes
+    // /sys, /proc and cgroups itself, and ID-maps the home bind-mount so the
+    // gateway's uid-1000 writes still appear as the agent user inside.
+    const sysbox = this.cfg.agentRuntime === 'sysbox-runc';
+    const homeBind = `${this.agentHostDir(id)}:/home/agent`;
     const hostConfig = {
-      // systemd as PID 1 + GNOME Shell need these — mirrors README run flags.
-      // `CgroupnsMode` is cast in: it's a valid Docker API field that the
-      // current @types/dockerode HostConfig doesn't declare yet.
-      CgroupnsMode: 'host',
       // Hard resource caps (omitted → unlimited). NanoCpus is cores × 1e9.
       NanoCpus: cpus ? Math.round(cpus * 1e9) : undefined,
       Memory: memoryMb ? memoryMb * 1024 * 1024 : undefined,
       // Chrome needs a real /dev/shm (64MB default → SIGTRAP under load).
       ShmSize: this.cfg.agentShmMb * 1024 * 1024,
-      Binds: [
-        '/sys/fs/cgroup:/sys/fs/cgroup:rw',
-        // Persistent home (host folder). Credentials are seeded into it (see
-        // seedAgentDisk) rather than bind-mounted — Docker Desktop can't nest
-        // a file bind inside a bind-mounted dir.
-        `${this.agentHostDir(id)}:/home/agent`,
-      ],
-      Tmpfs: { '/run': '', '/run/lock': '', '/tmp': '' },
-      CapAdd: ['SYS_BOOT', 'SYS_ADMIN'],
-      SecurityOpt: ['seccomp=unconfined', 'apparmor=unconfined'],
       NetworkMode: this.cfg.networkName,
       ...(gpuDevices ? { Devices: gpuDevices } : {}),
       // Dev (macOS): let Docker assign ephemeral host ports so the host-run
@@ -1051,6 +1045,22 @@ export class AgentManager {
         ? { '6080/tcp': [{ HostPort: '' }], '7681/tcp': [{ HostPort: '' }] }
         : undefined,
       RestartPolicy: { Name: 'unless-stopped' },
+      ...(sysbox
+        ? {
+            // Unprivileged: Sysbox provides the rest. Just the home bind-mount.
+            Runtime: 'sysbox-runc',
+            Binds: [homeBind],
+          }
+        : {
+            // Privileged `runc` fallback (e.g. macOS dev): systemd/GNOME need
+            // these. `CgroupnsMode` is cast in — a valid Docker API field the
+            // current @types/dockerode HostConfig doesn't declare yet.
+            CgroupnsMode: 'host',
+            Binds: ['/sys/fs/cgroup:/sys/fs/cgroup:rw', homeBind],
+            Tmpfs: { '/run': '', '/run/lock': '', '/tmp': '' },
+            CapAdd: ['SYS_BOOT', 'SYS_ADMIN'],
+            SecurityOpt: ['seccomp=unconfined', 'apparmor=unconfined'],
+          }),
     } as Docker.ContainerCreateOptions['HostConfig'];
 
     const createWith = (hc: Docker.ContainerCreateOptions['HostConfig']) =>

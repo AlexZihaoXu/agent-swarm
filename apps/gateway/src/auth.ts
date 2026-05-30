@@ -9,6 +9,86 @@ const COOKIE_NAME = 'swarm_session';
 const SESSION_TTL_MS = 7 * 86_400_000; // 7 days
 const SCRYPT_KEYLEN = 64;
 
+// ── Login brute-force throttle ────────────────────────────────────────────────
+// In-memory, per-source-IP failed-attempt tracker. A handful of misses inside a
+// rolling window are free (legit typos); past that the IP is blocked with
+// exponential backoff. A successful login clears the IP entirely. State lives in
+// process memory only (resets on restart) — no dep, no persistence needed for a
+// single-operator gateway.
+const LOGIN_FREE_FAILS = 5; // misses allowed before backoff kicks in
+const LOGIN_WINDOW_MS = 15 * 60_000; // rolling window; idle this long → counter resets
+const LOGIN_BACKOFF_BASE_MS = 30_000; // first block: 30s, then 60s, 120s, …
+const LOGIN_BACKOFF_MAX_MS = 15 * 60_000; // cap each block at ~15m
+const LOGIN_PRUNE_MAX = 10_000; // hard cap on tracked IPs (DoS guard)
+
+interface LoginAttempt {
+  fails: number;
+  firstTs: number;
+  blockedUntil: number;
+}
+const loginAttempts = new Map<string, LoginAttempt>();
+
+/** Drop entries past their window and not currently blocked; then, if a flood of
+ *  still-live entries keeps the map over the cap, evict the oldest (insertion-
+ *  ordered) so it can't grow without bound. */
+function pruneLoginAttempts(now: number): void {
+  for (const [ip, a] of loginAttempts) {
+    if (a.blockedUntil <= now && now - a.firstTs > LOGIN_WINDOW_MS) loginAttempts.delete(ip);
+  }
+  if (loginAttempts.size > LOGIN_PRUNE_MAX) {
+    let excess = loginAttempts.size - LOGIN_PRUNE_MAX;
+    for (const ip of loginAttempts.keys()) {
+      if (excess-- <= 0) break;
+      loginAttempts.delete(ip);
+    }
+  }
+}
+
+/**
+ * Is this IP currently blocked from attempting a login? Call BEFORE checking the
+ * password. `retryAfterSec` is the (ceil) seconds until the block lifts — feed it
+ * straight into a `Retry-After` header. A clean/under-threshold IP is never
+ * blocked, so a correct first-try login is unaffected.
+ */
+export function loginThrottle(ip: string): { blocked: boolean; retryAfterSec: number } {
+  const now = Date.now();
+  const a = loginAttempts.get(ip);
+  if (a && a.blockedUntil > now) {
+    return { blocked: true, retryAfterSec: Math.ceil((a.blockedUntil - now) / 1000) };
+  }
+  return { blocked: false, retryAfterSec: 0 };
+}
+
+/** Record a failed login from `ip`; arms/extends exponential backoff past the
+ *  free-fail allowance. Resets the counter if the previous window has lapsed. */
+export function noteLoginFailure(ip: string): void {
+  const now = Date.now();
+  if (loginAttempts.size > LOGIN_PRUNE_MAX) pruneLoginAttempts(now);
+  let a = loginAttempts.get(ip);
+  // Start a fresh window if there's no record or the last one has gone stale.
+  if (!a || (a.blockedUntil <= now && now - a.firstTs > LOGIN_WINDOW_MS)) {
+    a = { fails: 0, firstTs: now, blockedUntil: 0 };
+    loginAttempts.set(ip, a);
+  }
+  a.fails += 1;
+  if (a.fails > LOGIN_FREE_FAILS) {
+    // 6th fail → base, 7th → 2×, 8th → 4×, … capped. Block extends from `now`.
+    const over = a.fails - LOGIN_FREE_FAILS - 1; // 0,1,2,…
+    const backoff = Math.min(LOGIN_BACKOFF_BASE_MS * 2 ** over, LOGIN_BACKOFF_MAX_MS);
+    a.blockedUntil = now + backoff;
+  }
+}
+
+/** Clear all throttle state for `ip` after a successful login. */
+export function noteLoginSuccess(ip: string): void {
+  loginAttempts.delete(ip);
+}
+
+/** Test-only: wipe the throttle map between cases. */
+export function _resetLoginThrottle(): void {
+  loginAttempts.clear();
+}
+
 /** Whether an operator login has been set (false → show first-run setup). */
 export function isConfigured(): boolean {
   return !!getSettings().auth;
@@ -113,15 +193,19 @@ export function isAuthed(cookieHeader: string | undefined): boolean {
   return verifyToken(sessionFromCookie(cookieHeader)) !== null;
 }
 
-/** Set-Cookie value establishing a session (HttpOnly, Lax, root path). */
-export function sessionCookie(token: string): string {
+/** Set-Cookie value establishing a session (HttpOnly, Lax, root path). `Secure`
+ *  is appended only over HTTPS — on plain HTTP it must be omitted or the browser
+ *  drops the cookie and login breaks. */
+export function sessionCookie(token: string, isSecure = false): string {
   const maxAge = Math.floor(SESSION_TTL_MS / 1000);
-  return `${COOKIE_NAME}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
+  return `${COOKIE_NAME}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${
+    isSecure ? '; Secure' : ''
+  }`;
 }
 
 /** Set-Cookie value that clears the session. */
-export function clearCookie(): string {
-  return `${COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`;
+export function clearCookie(isSecure = false): string {
+  return `${COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${isSecure ? '; Secure' : ''}`;
 }
 
 /** The shared token agents present so their machine-to-machine calls to the

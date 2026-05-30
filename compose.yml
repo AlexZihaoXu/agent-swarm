@@ -46,6 +46,13 @@ services:
       # more than the 64MB default or it crashes).
       AGENT_GPU: ${AGENT_GPU:-}
       AGENT_SHM_MB: ${AGENT_SHM_MB:-512}
+      # Container runtime for agents. Set AGENT_RUNTIME=sysbox-runc on a Linux
+      # host with Sysbox installed (https://github.com/nestybox/sysbox) to run the
+      # agents' systemd/GNOME desktop UNPRIVILEGED in a user namespace — the
+      # gateway then drops SYS_ADMIN + the unconfined seccomp/apparmor profiles +
+      # cgroupns=host. Leave blank for the default runc (needed on macOS dev,
+      # where Sysbox isn't available — there the privileged flags are kept).
+      AGENT_RUNTIME: ${AGENT_RUNTIME:-}
       # Persistent agent disks. SWARM_DATA_HOST is a HOST path (the daemon
       # resolves it when bind-mounting each agent's home); SWARM_DATA_MOUNT is
       # where this container sees that same tree (the volume below) so the

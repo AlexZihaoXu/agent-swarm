@@ -81,6 +81,18 @@ export const config = {
    *  Opt-in (only set on hosts with a GPU); creation falls back to software if
    *  the device is missing. */
   agentGpu: /^(1|true|yes|on)$/i.test(process.env.AGENT_GPU ?? ''),
+  /** Container runtime for agents. Set to `sysbox-runc` on a host with Sysbox
+   *  installed to run the systemd/GNOME desktop UNPRIVILEGED inside a user
+   *  namespace (container-root maps to an unprivileged host uid) — this lets us
+   *  drop SYS_ADMIN + the unconfined seccomp/apparmor profiles + cgroupns=host.
+   *  Empty = the default `runc` (which still needs those privileges to boot
+   *  systemd/GNOME — the macOS dev path, where Sysbox isn't available). */
+  agentRuntime: process.env.AGENT_RUNTIME?.trim() || '',
+  /** Trust X-Forwarded-* headers (client IP for rate-limiting, proto for the
+   *  Secure cookie). Only enable when a trusted reverse proxy sets them — these
+   *  headers are forgeable by clients reaching the gateway directly, so the
+   *  default is OFF (use the real socket peer / direct TLS only). */
+  trustProxy: /^(1|true|yes|on)$/i.test(process.env.TRUST_PROXY ?? ''),
   /** In-container service ports (fixed by the agent image). */
   desktopPort: 6080,
   terminalPort: 7681,
