@@ -205,5 +205,8 @@ on `swarm_manage_agent` / `swarm_view_agent`.
 **modify** one, **copy it** out to your working directory first (`cp ~/.swarm/shared-inbox/<f> ./`)
 and edit the copy — don't edit it in place.
 
-**Disk:** keep your home tidy. If your disk exceeds 1 GB you'll get a `[sys://disk]` warning and old
-inbox files will be pruned automatically; delete build artifacts / large files you no longer need.
+**Disk:** your overall home disk is **not** capped — use it freely. The only limit is your
+**file-sharing pool**: incoming peer shares (`~/.swarm/shared-inbox/`), Discord attachments
+(`~/.swarm/discord-inbox/`), and saved agent views (`~/.swarm/views/`) are kept under **1 GB total** —
+when that fills, the oldest are auto-cleared and you get a `[sys://disk]` notice. To keep something
+from those inboxes long-term, move it elsewhere in your home (outside `~/.swarm/`).
