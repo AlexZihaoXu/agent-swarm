@@ -303,8 +303,10 @@ export function DashboardMetrics() {
                 <span className="text-muted col-span-2 text-sm">No usage data yet.</span>
               )}
 
-              {/* Divider only when the rings are inline (sm+); hidden when they grid. */}
-              <div className="bg-separator hidden h-10 w-px sm:block" />
+              {/* Divider between the rate-limit rings and the resource rings: a
+                  full-width horizontal rule across the 2-col grid on phones, a
+                  vertical hairline when the rings are inline (sm+). */}
+              <div className="bg-separator col-span-2 my-0.5 h-px w-full sm:my-0 sm:h-10 sm:w-px" />
               <LiveRing
                 label="CPU"
                 value={usage?.cpuPct ?? 0}
