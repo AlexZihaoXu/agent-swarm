@@ -278,7 +278,7 @@ export function DashboardMetrics() {
               (flex-1) so every ring — including Disk — stays on one inline row with
               the totals pushed to the right. */}
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:gap-x-8">
-            <div className="grid grid-cols-2 items-start gap-4 sm:flex sm:flex-wrap sm:items-center sm:gap-x-8 sm:gap-y-4 lg:flex-1">
+            <div className="grid grid-cols-2 items-start gap-4 sm:flex sm:flex-wrap sm:items-center sm:gap-x-8 sm:gap-y-4 lg:flex-1 lg:flex-nowrap lg:gap-x-6">
               {m.rateLimits ? (
                 (() => {
                   const outdated = Date.now() - m.rateLimits.updatedAt > 5 * 60_000;
