@@ -8,6 +8,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  statfsSync,
   writeFileSync,
 } from 'node:fs';
 import { basename, dirname, join, sep } from 'node:path';
@@ -434,12 +435,34 @@ export class AgentManager {
 
   /** Host hardware limits (from the Docker daemon), so the UI can cap the
    *  per-agent CPU/memory sliders at what the machine actually has. */
-  async hostInfo(): Promise<{ cpus: number; memoryMb: number }> {
+  async hostInfo(): Promise<{
+    cpus: number;
+    memoryMb: number;
+    diskTotalMb: number;
+    diskUsedMb: number;
+  }> {
     const info = await this.docker.info();
     return {
       cpus: Number(info.NCPU) || 0,
       memoryMb: Math.round(Number(info.MemTotal || 0) / (1024 * 1024)),
+      ...this.hostDisk(),
     };
+  }
+
+  /** Host disk usage (MB) for the filesystem holding agent data. statfs the
+   *  swarm-data mount — a bind-mount from the host, so it reflects the HOST disk,
+   *  not the gateway container. Best-effort. */
+  private hostDisk(): { diskTotalMb: number; diskUsedMb: number } {
+    try {
+      const s = statfsSync(this.cfg.swarmDataMount);
+      const bsize = Number(s.bsize);
+      const total = Number(s.blocks) * bsize;
+      const used = (Number(s.blocks) - Number(s.bfree)) * bsize;
+      const mb = (n: number) => Math.round(n / (1024 * 1024));
+      return { diskTotalMb: mb(total), diskUsedMb: mb(used) };
+    } catch {
+      return { diskTotalMb: 0, diskUsedMb: 0 };
+    }
   }
 
   /** Recursively yield every *.jsonl transcript under a directory. */
@@ -859,20 +882,28 @@ export class AgentManager {
     }
   }
 
-  /** Delete oldest files in `dir` until its total is under `budget`. Returns
-   *  bytes freed. Used to reclaim transient inbox drops, not real work. */
-  private pruneDirToBudget(dir: string, budget: number): number {
-    let files: { p: string; size: number; mt: number }[];
-    try {
-      files = readdirSync(dir)
-        .map((f) => {
-          const p = join(dir, f);
+  /** Delete the oldest entries ACROSS the given dirs until their COMBINED total
+   *  is under `budget`. Returns bytes freed. Caps the file-sharing pool (incoming
+   *  shares/attachments/views), not the whole home. */
+  private async prunePoolToBudget(dirs: string[], budget: number): Promise<number> {
+    const files: { p: string; size: number; mt: number }[] = [];
+    for (const dir of dirs) {
+      let names: string[];
+      try {
+        names = readdirSync(dir);
+      } catch {
+        continue; // dir doesn't exist / unreadable
+      }
+      for (const f of names) {
+        const p = join(dir, f);
+        try {
           const st = statSync(p);
-          return { p, size: st.size, mt: st.mtimeMs, isFile: st.isFile() };
-        })
-        .filter((f) => f.isFile);
-    } catch {
-      return 0;
+          const size = st.isDirectory() ? ((await this.dirBytes(p)) ?? 0) : st.size;
+          files.push({ p, size, mt: st.mtimeMs });
+        } catch {
+          /* skip unstattable entry */
+        }
+      }
     }
     let total = files.reduce((s, f) => s + f.size, 0);
     if (total <= budget) return 0;
@@ -881,7 +912,7 @@ export class AgentManager {
     for (const f of files) {
       if (total <= budget) break;
       try {
-        rmSync(f.p, { force: true });
+        rmSync(f.p, { recursive: true, force: true });
         total -= f.size;
         freed += f.size;
       } catch {
@@ -891,30 +922,29 @@ export class AgentManager {
     return freed;
   }
 
-  /** Per running agent: if its home exceeds 1GB, prune the transient inboxes and
-   *  warn it via a throttled `[sys://disk]` message. */
+  /** Per running agent: cap the file-SHARING pool (incoming peer shares, Discord
+   *  attachments, and saved agent views under ~/.swarm/) at 1 GB by pruning the
+   *  oldest, and tell the agent (throttled) when that happens. The agent's overall
+   *  home/disk is intentionally NOT limited — that's the host's concern, surfaced
+   *  separately as the host disk metric. */
   private async checkDisks(): Promise<void> {
-    const GB = 1024 ** 3;
+    const POOL_BUDGET = 1024 ** 3; // 1 GB across the sharing pool, not the whole home
     try {
       for (const a of await this.list()) {
         if (a.status !== 'running') continue;
         const dir = this.agentDataDir(a.id);
-        const bytes = await this.dirBytes(dir);
-        if (bytes === null || bytes <= GB) continue;
-        const budget = 100 * 1024 * 1024; // keep each inbox under 100MB
-        let freed = 0;
-        freed += this.pruneDirToBudget(join(dir, '.swarm', 'shared-inbox'), budget);
-        freed += this.pruneDirToBudget(join(dir, '.swarm', 'discord-inbox'), budget);
+        const pool = ['shared-inbox', 'discord-inbox', 'views'].map((d) => join(dir, '.swarm', d));
+        const freed = await this.prunePoolToBudget(pool, POOL_BUDGET);
+        if (freed <= 0) continue;
         const now = Date.now();
-        if (now - (this.diskWarnedAt.get(a.id) ?? 0) > 3_600_000) {
+        if (now - (this.diskWarnedAt.get(a.id) ?? 0) > 12 * 3_600_000) {
           this.diskWarnedAt.set(a.id, now);
-          const gb = (bytes / GB).toFixed(2);
-          const note =
-            freed > 0 ? ` Cleared ${(freed / (1 << 20)).toFixed(0)} MB of old inbox files.` : '';
           this.queueDeliver(a.id, {
             text:
-              `**[sys://disk]** Your home disk is using ${gb} GB (over 1 GB).${note} ` +
-              `Delete build artifacts and large files you no longer need.`,
+              `**[sys://disk]** Your file-sharing pool (incoming shares + Discord attachments + ` +
+              `saved agent views under ~/.swarm/) hit its 1 GB cap, so the oldest ` +
+              `${(freed / (1 << 20)).toFixed(0)} MB were auto-cleared. Your overall home disk ` +
+              `is not limited — move anything you want to keep out of those inboxes.`,
             attachments: [],
           });
         }

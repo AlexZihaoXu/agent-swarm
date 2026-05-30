@@ -188,11 +188,20 @@ export function DashboardMetrics() {
   const [usage, setUsage] = useState<Usage | null>(null);
   const [host, setHost] = useState<HostInfo | null>(null);
 
-  // Host hardware = the fixed ceiling for the resource graphs (max exposed).
+  // Host capacity = the ceiling for the resource graphs. CPU/RAM are fixed, but
+  // disk usage drifts, so re-poll (slowly — it changes gradually).
   useEffect(() => {
-    getHostInfo()
-      .then(setHost)
-      .catch(() => {});
+    let alive = true;
+    const load = () =>
+      getHostInfo()
+        .then((h) => alive && setHost(h))
+        .catch(() => {});
+    void load();
+    const t = setInterval(load, 30_000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
   }, []);
 
   useEffect(() => {
@@ -304,6 +313,12 @@ export function DashboardMetrics() {
                 label="Memory"
                 value={usage?.memUsed ?? 0}
                 max={host ? host.memoryMb * (1 << 20) : 1}
+                format={(v) => fmtBytes(v)}
+              />
+              <LiveRing
+                label="Disk"
+                value={host ? host.diskUsedMb * (1 << 20) : 0}
+                max={host ? host.diskTotalMb * (1 << 20) : 1}
                 format={(v) => fmtBytes(v)}
               />
             </div>

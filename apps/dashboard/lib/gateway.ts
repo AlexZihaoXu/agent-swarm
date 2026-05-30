@@ -397,6 +397,9 @@ export async function uploadPackage(file: File): Promise<{ file: string }> {
 export interface HostInfo {
   cpus: number;
   memoryMb: number;
+  /** Host disk (MB) for the filesystem holding agent data. */
+  diskTotalMb: number;
+  diskUsedMb: number;
 }
 /** Host hardware limits, to cap the per-agent resource sliders. */
 export const getHostInfo = () => api<HostInfo>('/api/host');
