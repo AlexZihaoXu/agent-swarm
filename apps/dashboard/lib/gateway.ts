@@ -27,7 +27,7 @@ export interface Agent {
 // --- Roles & groups --------------------------------------------------------
 
 /** A special capability a role can grant over the rest of the swarm. */
-export type Capability = 'manage_agents' | 'view_screen';
+export type Capability = 'manage_agents' | 'view_screen' | 'dashboard_alerts';
 
 export interface Role {
   id: string;

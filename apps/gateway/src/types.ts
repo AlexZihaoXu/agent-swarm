@@ -63,7 +63,7 @@ export interface Role {
 }
 
 /** Special capabilities a role can grant over the rest of the swarm. */
-export type Capability = 'manage_agents' | 'view_screen';
+export type Capability = 'manage_agents' | 'view_screen' | 'dashboard_alerts';
 
 /** A group scopes swarm comms: agents only reach peers sharing a group. */
 export interface Group {

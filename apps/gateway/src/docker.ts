@@ -88,6 +88,17 @@ function modelRates(model: string | undefined, ctxTokens: number) {
   return { in: 3, out: 15, cw: 3.75, cr: 0.3 };
 }
 
+/** Human "resets in …" label from an epoch-MS reset time (mirrors the
+ *  dashboard's resetsIn): minutes under an hour, hours under a day, else days. */
+function resetsInLabel(at: number): string {
+  const ms = at - Date.now();
+  if (ms <= 0) return 'imminently';
+  const h = ms / 3_600_000;
+  if (h < 1) return `in ${Math.round(ms / 60_000)}m`;
+  if (h < 24) return `in ${Math.round(h)}h`;
+  return `in ${Math.round(h / 24)}d`;
+}
+
 /** Random `workspace-XXXXXX` id, suffix from 0-9 + A-Z. */
 export function generateAgentId(): string {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -781,12 +792,24 @@ export class AgentManager {
     // Memory watchdog: warn at 80%/90% of the cap with hysteresis (reads the
     // live per-agent usage the stats streams already provide — cheap).
     this.memTimer = setInterval(() => this.checkMemory(), 10_000);
+    // Usage watchdog: warn capable agents when a rate-limit window is projected
+    // to hit 100% (or actually reaches 90%). Limits change slowly, so 60s is plenty.
+    this.usageAlertTimer = setInterval(() => void this.checkUsageAlerts(), 60_000);
+    void this.checkUsageAlerts();
   }
   private samplingTimer: ReturnType<typeof setInterval> | null = null;
   private diskTimer: ReturnType<typeof setInterval> | null = null;
   private memTimer: ReturnType<typeof setInterval> | null = null;
+  private usageAlertTimer: ReturnType<typeof setInterval> | null = null;
   /** Per-agent memory-warning latches for hysteresis (avoid repeat warnings). */
   private readonly memState = new Map<string, { warned80: boolean; warned90: boolean }>();
+  /** Global per-window rate-limit alert latches (limits are account-shared, so the
+   *  state is the same for every agent). Re-armed when the window drops well below
+   *  the threshold (or resets). Avoids re-spamming capable agents each tick. */
+  private readonly usageAlertState = {
+    fiveHour: { warned: false, level: null as 'warning' | 'critical' | null },
+    sevenDay: { warned: false, level: null as 'warning' | 'critical' | null },
+  };
 
   /** Memory watchdog with hysteresis: warn once at ≥80% (re-arm after dropping
    *  below 70%) and once at ≥90% (re-arm after dropping below 80%). */
@@ -819,6 +842,117 @@ export class AgentManager {
       }
       this.memState.set(id, st);
     }
+  }
+
+  /** Project a rate-limit window's end-of-window usage at the current burn rate
+   *  (linear extrapolation), mirroring the dashboard's UsageRing math. `resetsAt`
+   *  is epoch MILLISECONDS (lastRateLimits stores the statusline seconds × 1000),
+   *  matched here against Date.now(). The first 5% of the window is too noisy to
+   *  trust, so we fall back to the raw used% there. */
+  private projectWindow(w: { usedPercent: number; resetsAt: number }, windowMs: number): number {
+    const elapsedFrac = Math.min(1, Math.max(0, 1 - (w.resetsAt - Date.now()) / windowMs));
+    return elapsedFrac > 0.05 ? w.usedPercent / elapsedFrac : w.usedPercent;
+  }
+
+  /** Window length in ms for projection/labels (mirrors the dashboard). */
+  private static readonly WINDOW_MS = { fiveHour: 5 * 3_600_000, sevenDay: 7 * 86_400_000 };
+
+  /** Usage watchdog: warn capable agents (the `dashboard_alerts` permission) when
+   *  a shared rate-limit window is in trouble — actual ≥90% (critical) or, failing
+   *  that, projected ≥100% at the current burn rate (warning). Rate limits are
+   *  account-global, so a single latch per (window, level) gates the broadcast and
+   *  re-arms only when usage drops well below 90% / the window resets (so a brand-
+   *  new grant or a gateway restart doesn't re-spam). Best-effort; never throws. */
+  private async checkUsageAlerts(): Promise<void> {
+    const rl = this.lastRateLimits;
+    if (!rl) return;
+    try {
+      const windows: { key: 'fiveHour' | 'sevenDay'; label: string }[] = [
+        { key: 'fiveHour', label: '5h' },
+        { key: 'sevenDay', label: '7d' },
+      ];
+      // Figure out, per window, whether to fire and what message — before touching
+      // the agent list (so we skip the docker call entirely when nothing's due).
+      const due: { label: string; level: 'warning' | 'critical'; text: string }[] = [];
+      for (const { key, label } of windows) {
+        const w = rl[key];
+        const st = this.usageAlertState[key];
+        const actual = w.usedPercent;
+        const projected = this.projectWindow(w, AgentManager.WINDOW_MS[key]);
+        // Re-arm once usage eases back below 75% (mirrors checkMemory's reset) and
+        // the projection no longer threatens to blow the window.
+        if (actual < 75 && projected < 100) {
+          st.warned = false;
+          st.level = null;
+        }
+        const level: 'warning' | 'critical' | null =
+          actual >= 90 ? 'critical' : projected >= 100 ? 'warning' : null;
+        if (!level) continue;
+        // Already warned at this (or a higher) level for this window → stay quiet.
+        if (st.warned && (st.level === level || st.level === 'critical')) continue;
+        st.warned = true;
+        st.level = level;
+        const when = resetsInLabel(w.resetsAt);
+        const pct = Math.round(actual);
+        const text =
+          level === 'critical'
+            ? `**[sys://usage]** Heads up: the ${label} usage window is at ${pct}% (resets ${when}). ` +
+              `You're close to the cap — pace heavy work or pause non-urgent tasks.`
+            : `**[sys://usage]** Heads up: at the current burn rate the ${label} usage window is ` +
+              `projected to hit 100% before it resets (${when}); currently ${pct}%. Consider slowing down.`;
+        due.push({ label, level, text });
+      }
+      if (!due.length) return;
+      for (const a of await this.list()) {
+        if (a.status !== 'running') continue;
+        if (!rolesGrant(this.readIdentity(a.id)?.roles ?? [], 'dashboard_alerts')) continue;
+        for (const d of due) this.queueDeliver(a.id, { text: d.text, attachments: [] });
+      }
+    } catch {
+      /* best-effort — a missed usage warning is never worth crashing the timer */
+    }
+  }
+
+  /** Compact usage summary for a capable agent (the `dashboard_alerts` permission):
+   *  the 5h & 7d windows (used%, projected%, resetsAt ms) plus 12h total tokens +
+   *  cost. Throws 403 if the agent's roles don't grant the capability. */
+  async usageForAgent(fromId: string): Promise<{
+    rateLimits: {
+      fiveHour: { usedPercent: number; projected: number; resetsAt: number };
+      sevenDay: { usedPercent: number; projected: number; resetsAt: number };
+      updatedAt: number;
+    } | null;
+    totals: { tokens: number; cost: number; windowHours: number };
+  }> {
+    if (!rolesGrant(this.readIdentity(fromId)?.roles ?? [], 'dashboard_alerts'))
+      throw Object.assign(new Error('your role does not permit reading dashboard usage'), {
+        statusCode: 403,
+      });
+    const m = await this.metrics();
+    const rl = m.rateLimits;
+    const rateLimits = rl
+      ? {
+          fiveHour: {
+            usedPercent: rl.fiveHour.usedPercent,
+            projected: this.projectWindow(rl.fiveHour, AgentManager.WINDOW_MS.fiveHour),
+            resetsAt: rl.fiveHour.resetsAt,
+          },
+          sevenDay: {
+            usedPercent: rl.sevenDay.usedPercent,
+            projected: this.projectWindow(rl.sevenDay, AgentManager.WINDOW_MS.sevenDay),
+            resetsAt: rl.sevenDay.resetsAt,
+          },
+          updatedAt: rl.updatedAt,
+        }
+      : null;
+    return {
+      rateLimits,
+      totals: {
+        tokens: m.agents.reduce((s, a) => s + a.tokens, 0),
+        cost: m.agents.reduce((s, a) => s + a.cost, 0),
+        windowHours: 12,
+      },
+    };
   }
 
   /** Restore persisted runtime state (resource history + cached rate limits) so

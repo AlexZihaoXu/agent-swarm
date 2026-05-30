@@ -19,6 +19,12 @@ export const CAPABILITIES: { key: Capability; label: string; description: string
     label: 'View screens',
     description: "Capture and view another agent's live screen image.",
   },
+  {
+    key: 'dashboard_alerts',
+    label: 'Dashboard usage alerts',
+    description:
+      'Read the swarm dashboard usage (5h/7d rate-limit windows, tokens, cost) and receive proactive warnings when usage is projected to hit 100% or actually reaches 90% of a window.',
+  },
 ];
 
 const CAPABILITY_KEYS = new Set<string>(CAPABILITIES.map((c) => c.key));

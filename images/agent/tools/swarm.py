@@ -217,6 +217,57 @@ def view_agent(args: dict) -> dict:
     return _ok(f"captured {to}'s screen → {path} (use Read to view the image)")
 
 
+def _resets_in(at_ms) -> str:
+    # Mirror the gateway/dashboard "resets in …" label (at_ms is epoch ms).
+    try:
+        import time
+
+        ms = float(at_ms) - time.time() * 1000
+    except Exception:  # noqa: BLE001
+        return "?"
+    if ms <= 0:
+        return "imminently"
+    h = ms / 3_600_000
+    if h < 1:
+        return f"in {round(ms / 60_000)}m"
+    if h < 24:
+        return f"in {round(h)}h"
+    return f"in {round(h / 24)}d"
+
+
+def swarm_usage(_args: dict) -> dict:
+    me = _identity()
+    try:
+        r = _http("POST", "/api/swarm/usage", {"fromId": me["id"]})
+    except urllib.error.HTTPError as e:
+        if e.code == 403:
+            return _err(
+                "you don't have the dashboard_alerts capability — ask the operator to "
+                "grant it to one of your roles to read usage."
+            )
+        return _err(f"HTTP {e.code}: {e.read().decode()[:200]}")
+    except Exception as e:  # noqa: BLE001
+        return _err(str(e))
+    data = r or {}
+    rl = data.get("rateLimits")
+    lines = []
+    if rl:
+        for key, label in (("fiveHour", "5h window"), ("sevenDay", "7d window")):
+            w = rl.get(key) or {}
+            used = round(float(w.get("usedPercent") or 0))
+            proj = round(float(w.get("projected") or 0))
+            when = _resets_in(w.get("resetsAt"))
+            lines.append(f"{label}: {used}% used (~{proj}% projected, resets {when})")
+    else:
+        lines.append("Rate-limit windows: no data yet (no recent API activity).")
+    totals = data.get("totals") or {}
+    hours = totals.get("windowHours", 12)
+    tokens = totals.get("tokens") or 0
+    cost = totals.get("cost") or 0
+    lines.append(f"Last {hours}h: {tokens:,} tokens · ${cost:.2f}")
+    return _ok("\n".join(lines))
+
+
 TOOLS = [
     ("swarm_whoami", "Your own identity (id + name) within the swarm.", {}, [], whoami),
     (
@@ -294,6 +345,16 @@ TOOLS = [
         },
         ["to"],
         view_agent,
+    ),
+    (
+        "swarm_usage",
+        "Read the swarm's current usage: the 5h and 7d rate-limit windows "
+        "(used % + projected % at the current burn rate + when each resets) plus "
+        "the last 12h total tokens and cost. Requires a role with the 'dashboard "
+        "usage alerts' permission (403 otherwise). No arguments.",
+        {},
+        [],
+        swarm_usage,
     ),
 ]
 HANDLERS = {name: fn for name, _d, _p, _r, fn in TOOLS}

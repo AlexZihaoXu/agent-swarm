@@ -170,6 +170,11 @@ export async function handleApi(
       const savedPath = await manager.viewAgent(body.fromId ?? '', body.to ?? '');
       return (sendJson(res, 200, { ok: true, path: savedPath }), true);
     }
+    if (pathname === '/api/swarm/usage') {
+      if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+      const body = await readJson(req);
+      return (sendJson(res, 200, await manager.usageForAgent(body.fromId ?? '')), true);
+    }
     if (pathname === '/api/swarm/group-send') {
       if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
       const body = await readJson(req);
