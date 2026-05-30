@@ -1038,6 +1038,13 @@ export class AgentManager {
       // Chrome needs a real /dev/shm (64MB default → SIGTRAP under load).
       ShmSize: this.cfg.agentShmMb * 1024 * 1024,
       NetworkMode: this.cfg.networkName,
+      // Resolve external names via public DNS, not the host's resolver — so an
+      // agent can't resolve or enumerate the host's tailnet (*.ts.net) names,
+      // and the tailnet search domain isn't leaked into the agent's resolv.conf.
+      // Container names (e.g. the gateway) still resolve via Docker's embedded
+      // DNS (127.0.0.11); only outbound lookups use these upstreams.
+      Dns: ['1.1.1.1', '8.8.8.8'],
+      DnsSearch: ['.'],
       ...(gpuDevices ? { Devices: gpuDevices } : {}),
       // Dev (macOS): let Docker assign ephemeral host ports so the host-run
       // gateway can reach them on 127.0.0.1 — no manual port juggling.
