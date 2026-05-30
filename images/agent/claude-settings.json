@@ -2,5 +2,8 @@
   "statusLine": {
     "type": "command",
     "command": "/usr/local/bin/swarm-statusline"
+  },
+  "permissions": {
+    "defaultMode": "bypassPermissions"
   }
 }
