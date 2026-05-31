@@ -7,6 +7,7 @@ import {
   LuCirclePlay,
   LuCircleStop,
   LuEllipsisVertical,
+  LuFoldVertical,
   LuFolderOpen,
   LuMonitor,
   LuPackage,
@@ -16,6 +17,7 @@ import {
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState, type MouseEvent } from 'react';
 import {
+  compactAgent,
   getUpgradeInfo,
   removeAgent,
   screenshotUrl,
@@ -112,6 +114,7 @@ export function AgentCard({
     setMenuPos(null);
     if (key === 'open') router.push(`/agents/${agent.id}/desktop`);
     else if (key === 'start') void act(() => startAgent(agent.id));
+    else if (key === 'compact') void act(() => compactAgent(agent.id));
     else setDialog(key as Dialog);
   };
 
@@ -217,6 +220,14 @@ export function AgentCard({
                   <Label>Start</Label>
                 </Dropdown.Item>
               )}
+              {running ? (
+                <Dropdown.Item id="compact" textValue="Compact">
+                  <span className="flex items-center justify-center">
+                    <LuFoldVertical className="text-muted size-4 shrink-0" />
+                  </span>
+                  <Label>Compact context</Label>
+                </Dropdown.Item>
+              ) : null}
               {running && upgrade?.outdated ? (
                 <Dropdown.Item id="upgrade" textValue="Upgrade">
                   <span className="flex items-center justify-center">

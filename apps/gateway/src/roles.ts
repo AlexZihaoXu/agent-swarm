@@ -20,6 +20,17 @@ export const CAPABILITIES: { key: Capability; label: string; description: string
     description: "Capture and view another agent's live screen image.",
   },
   {
+    key: 'compact_agents',
+    label: 'Compact agents',
+    description: 'Trigger context compaction (/compact) on other agents that share a group.',
+  },
+  {
+    key: 'view_stats',
+    label: 'Read agent stats',
+    description:
+      "Read other agents' live stats (context-window usage, tokens, activity) for agents that share a group.",
+  },
+  {
     key: 'dashboard_alerts',
     label: 'Dashboard usage alerts',
     description:

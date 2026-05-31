@@ -18,6 +18,7 @@ import {
   noteLoginSuccess,
 } from './auth.js';
 import { CAPABILITIES, listRoles, createRole, updateRole, deleteRole } from './roles.js';
+import type { Capability } from './types.js';
 import { listGroups, createGroup, updateGroup, deleteGroup } from './groups.js';
 import { listGroupMessages, clearGroupMessages } from './group-chats.js';
 import {
@@ -83,8 +84,9 @@ export function applyCors(req: IncomingMessage, res: ServerResponse): boolean {
   return false;
 }
 
-// /api/agents, /api/agents/:id, /api/agents/:id/(start|stop|upgrade|paths|package)
-const AGENT_API = /^\/api\/agents(?:\/([^/]+)(?:\/(start|stop|recreate|upgrade|paths|package))?)?$/;
+// /api/agents, /api/agents/:id, /api/agents/:id/(start|stop|compact|upgrade|paths|package)
+const AGENT_API =
+  /^\/api\/agents(?:\/([^/]+)(?:\/(start|stop|compact|recreate|upgrade|paths|package))?)?$/;
 // /api/agents/:id/files — the per-agent file explorer (op via ?op=…).
 const AGENT_FILES_API = /^\/api\/agents\/([^/]+)\/files$/;
 // /api/agents/:id/integrations[/:type[/(test|apply|disable)]]
@@ -169,6 +171,18 @@ export async function handleApi(
       const body = await readJson(req);
       const savedPath = await manager.viewAgent(body.fromId ?? '', body.to ?? '');
       return (sendJson(res, 200, { ok: true, path: savedPath }), true);
+    }
+    if (pathname === '/api/swarm/compact') {
+      if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+      const body = await readJson(req);
+      const result = await manager.compactPeer(body.fromId ?? '', body.to ?? '');
+      return (sendJson(res, 200, result), true);
+    }
+    if (pathname === '/api/swarm/stats') {
+      if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+      const body = await readJson(req);
+      const stats = await manager.statsForPeer(body.fromId ?? '', body.to ?? '');
+      return (sendJson(res, 200, stats), true);
     }
     if (pathname === '/api/swarm/usage') {
       if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
@@ -530,6 +544,7 @@ async function handleAgents(
         model?: string | null;
         roles?: string[];
         groups?: string[];
+        permissions?: Capability[];
         avatarSeed?: string;
       } = {};
       if (body.username !== undefined) patch.username = body.username;
@@ -537,6 +552,7 @@ async function handleAgents(
       if (body.model !== undefined) patch.model = body.model;
       if (body.roles !== undefined) patch.roles = body.roles;
       if (body.groups !== undefined) patch.groups = body.groups;
+      if (Array.isArray(body.permissions)) patch.permissions = body.permissions as Capability[];
       if (body.avatarSeed !== undefined) patch.avatarSeed = body.avatarSeed;
       return (sendJson(res, 200, await manager.patchAgent(id, patch)), true);
     }
@@ -550,6 +566,11 @@ async function handleAgents(
       const body = await readJson(req);
       const result = await manager.packageAgent(id, Array.isArray(body.paths) ? body.paths : []);
       return (sendJson(res, 200, result), true);
+    }
+  } else if (action === 'compact') {
+    if (method === 'POST') {
+      await manager.compactAgent(id);
+      return (sendJson(res, 200, { ok: true }), true);
     }
   } else if (method === 'POST') {
     if (action === 'recreate') return (sendJson(res, 200, await manager.recreate(id)), true);

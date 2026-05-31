@@ -20,6 +20,8 @@ export interface Agent {
   /** Assigned role ids + group ids. */
   roles?: string[];
   groups?: string[];
+  /** Direct per-agent capability grants (union'd with role-based permissions). */
+  permissions?: Capability[];
   /** Identicon avatar seed (defaults to the id; reshuffleable). */
   avatarSeed?: string;
 }
@@ -27,7 +29,12 @@ export interface Agent {
 // --- Roles & groups --------------------------------------------------------
 
 /** A special capability a role can grant over the rest of the swarm. */
-export type Capability = 'manage_agents' | 'view_screen' | 'dashboard_alerts';
+export type Capability =
+  | 'manage_agents'
+  | 'view_screen'
+  | 'compact_agents'
+  | 'view_stats'
+  | 'dashboard_alerts';
 
 export interface Role {
   id: string;
@@ -446,6 +453,9 @@ export const createAgent = (opts: CreateAgentOptions = {}) =>
   });
 export const startAgent = (id: string) => api(`/api/agents/${id}/start`, { method: 'POST' });
 export const stopAgent = (id: string) => api(`/api/agents/${id}/stop`, { method: 'POST' });
+/** Run Claude Code's native `/compact` in the agent's session (operator-driven). */
+export const compactAgent = (id: string) =>
+  api<{ ok: true }>(`/api/agents/${id}/compact`, { method: 'POST' });
 export const removeAgent = (id: string) => api(`/api/agents/${id}`, { method: 'DELETE' });
 
 /** Fetch a single agent (incl. its editable per-agent settings). */
@@ -514,6 +524,7 @@ export const updateAgent = (
     model?: string | null;
     roles?: string[];
     groups?: string[];
+    permissions?: Capability[];
     avatarSeed?: string;
   },
 ) =>

@@ -74,6 +74,8 @@ interface AgentIdentity {
   /** Assigned role ids + group ids (resolved against the global registries). */
   roles?: string[];
   groups?: string[];
+  /** Direct per-agent capability grants (union'd with role-based permissions). */
+  permissions?: Capability[];
   /** Identicon avatar seed (defaults to the id; reshuffleable from the UI). */
   avatarSeed?: string;
 }
@@ -196,6 +198,7 @@ export class AgentManager {
       model: patch.model !== undefined ? patch.model : (cur?.model ?? null),
       roles: patch.roles !== undefined ? patch.roles : (cur?.roles ?? []),
       groups: patch.groups !== undefined ? patch.groups : (cur?.groups ?? []),
+      permissions: patch.permissions !== undefined ? patch.permissions : (cur?.permissions ?? []),
       avatarSeed: patch.avatarSeed !== undefined ? patch.avatarSeed : cur?.avatarSeed,
     };
     mkdirSync(dirname(this.identityFile(id)), { recursive: true });
@@ -223,6 +226,7 @@ export class AgentManager {
       model?: string | null;
       roles?: string[];
       groups?: string[];
+      permissions?: Capability[];
       avatarSeed?: string;
     },
   ): Promise<Agent> {
@@ -248,6 +252,7 @@ export class AgentManager {
     }
     if (Array.isArray(patch.roles)) idPatch.roles = patch.roles;
     if (Array.isArray(patch.groups)) idPatch.groups = patch.groups;
+    if (Array.isArray(patch.permissions)) idPatch.permissions = patch.permissions as Capability[];
     // Empty string explicitly resets the avatar to the default (id-seeded).
     if (patch.avatarSeed !== undefined) idPatch.avatarSeed = patch.avatarSeed.trim() || id;
     const prevModel = this.readIdentity(id)?.model ?? null;
@@ -796,13 +801,22 @@ export class AgentManager {
     // to hit 100% (or actually reaches 90%). Limits change slowly, so 60s is plenty.
     this.usageAlertTimer = setInterval(() => void this.checkUsageAlerts(), 60_000);
     void this.checkUsageAlerts();
+    // Auto-compact watchdog: the REAL auto-compact for the swarm. The in-claude
+    // CLAUDE_AUTOCOMPACT_PCT_OVERRIDE env proved unreliable, so the gateway drives
+    // it instead — poll each agent's context-window usage and run /compact when it
+    // crosses the agent's threshold. Context grows slowly, so 60s is plenty.
+    this.autoCompactTimer = setInterval(() => void this.checkAutoCompact(), 60_000);
   }
   private samplingTimer: ReturnType<typeof setInterval> | null = null;
   private diskTimer: ReturnType<typeof setInterval> | null = null;
   private memTimer: ReturnType<typeof setInterval> | null = null;
   private usageAlertTimer: ReturnType<typeof setInterval> | null = null;
+  private autoCompactTimer: ReturnType<typeof setInterval> | null = null;
   /** Per-agent memory-warning latches for hysteresis (avoid repeat warnings). */
   private readonly memState = new Map<string, { warned80: boolean; warned90: boolean }>();
+  /** Per-agent auto-compact latch: true once we've fired for this fill, re-armed
+   *  when context drops back below 50% (so one fill = one /compact). */
+  private readonly autoCompactState = new Map<string, boolean>();
   /** Global per-window rate-limit alert latches (limits are account-shared, so the
    *  state is the same for every agent). Re-armed when the window drops well below
    *  the threshold (or resets). Avoids re-spamming capable agents each tick. */
@@ -841,6 +855,56 @@ export class AgentManager {
         });
       }
       this.memState.set(id, st);
+    }
+  }
+
+  /** Auto-compact watchdog — the swarm's REAL auto-compact (gateway-driven),
+   *  since the in-claude CLAUDE_AUTOCOMPACT_PCT_OVERRIDE env was unreliable. For
+   *  each running agent: read its live context-window fill and, when it crosses
+   *  the agent's threshold (identity.autoCompactPct, default 85; >=100 disables),
+   *  run Claude Code's native `/compact` (Esc + /compact — interrupts a busy turn,
+   *  which is intended). A per-agent latch makes one fill = one /compact; it
+   *  re-arms once context falls back below 50%. Best-effort + per-agent try/catch
+   *  so the timer never throws (a missed tick just retries 60s later). */
+  private async checkAutoCompact(): Promise<void> {
+    let agents: Agent[];
+    try {
+      agents = await this.list();
+    } catch {
+      return; // docker not ready — try again next tick
+    }
+    for (const a of agents) {
+      if (a.status !== 'running') continue;
+      try {
+        const threshold = this.readIdentity(a.id)?.autoCompactPct ?? 85;
+        if (threshold >= 100) {
+          this.autoCompactState.delete(a.id); // "off" — drop any stale latch
+          continue;
+        }
+        const { host, port } = await this.resolveTarget(a.id, 'terminal');
+        const resp = await fetch(`http://${host}:${port}/api/stats`);
+        if (!resp.ok) continue;
+        const s = (await resp.json()) as {
+          context?: number | null;
+          contextLimit?: number | null;
+        };
+        const context = typeof s.context === 'number' ? s.context : 0;
+        const contextLimit = typeof s.contextLimit === 'number' ? s.contextLimit : 0;
+        const contextPct = contextLimit > 0 ? (context / contextLimit) * 100 : null;
+        if (contextPct === null) continue;
+        if (contextPct < 50) this.autoCompactState.set(a.id, false); // re-arm
+        const latched = this.autoCompactState.get(a.id) === true;
+        if (contextPct >= threshold && !latched) {
+          this.autoCompactState.set(a.id, true);
+          await this.compactAgent(a.id);
+          console.log(
+            `[auto-compact] ${a.username || a.id}: context ${Math.round(contextPct)}% ` +
+              `>= ${threshold}% — ran /compact`,
+          );
+        }
+      } catch {
+        /* best-effort per agent — a missed auto-compact is never worth a crash */
+      }
     }
   }
 
@@ -1591,7 +1655,9 @@ export class AgentManager {
 
   /** Whether an agent's assigned roles grant a special capability. */
   private agentCan(id: string, cap: Capability): boolean {
-    return rolesGrant(this.readIdentity(id)?.roles ?? [], cap);
+    const identity = this.readIdentity(id);
+    if (identity?.permissions?.includes(cap)) return true;
+    return rolesGrant(identity?.roles ?? [], cap);
   }
 
   /** Resolve a peer by id or display name (404 if unknown). Used by the
@@ -1657,6 +1723,107 @@ export class AgentManager {
       /* best-effort */
     }
     return `/home/agent/.swarm/views/${basename(dest)}`;
+  }
+
+  /** Run Claude Code's own native `/compact` slash command in an agent's claude
+   *  session (the operator button + the `compact_agents` peer tool + the
+   *  auto-compact watchdog all funnel through here). Nothing about Claude Code
+   *  is modified — we just type `/compact` into the live TUI, pressing Esc first
+   *  (interrupt=true) so it runs NOW even if the agent is mid-turn. */
+  async compactAgent(id: string): Promise<void> {
+    let agent: Agent;
+    try {
+      agent = await this.getAgent(id);
+    } catch {
+      throw Object.assign(new Error('agent not found'), { statusCode: 404 });
+    }
+    if (agent.status !== 'running')
+      throw Object.assign(new Error('agent is not running'), { statusCode: 409 });
+    await this.injectToTerminal(id, '/compact', true);
+  }
+
+  /** Capability-gated context compaction of a peer (the `compact_agents` role
+   *  permission), scoped to agents that share a group with the caller. Runs the
+   *  target's native `/compact` (Esc + /compact). Returns the target's name. */
+  async compactPeer(fromId: string, to: string): Promise<{ ok: true; name: string }> {
+    if (!this.agentCan(fromId, 'compact_agents'))
+      throw Object.assign(new Error('your role does not permit compacting agents'), {
+        statusCode: 403,
+      });
+    const target = await this.resolvePeer(to);
+    if (target.id === fromId)
+      throw Object.assign(new Error('cannot compact yourself'), { statusCode: 400 });
+    if (!this.sharesGroup(fromId, target.id))
+      throw Object.assign(new Error(`you don't share a group with ${to}`), { statusCode: 403 });
+    await this.compactAgent(target.id);
+    return { ok: true, name: target.username || target.id };
+  }
+
+  /** Capability-gated live-stats read of a peer (the `view_stats` role
+   *  permission), scoped to agents that share a group with the caller. Returns a
+   *  compact summary of the target's session (context-window usage, model,
+   *  activity, tokens). Best-effort: an unreachable runtime yields `{error}`. */
+  async statsForPeer(
+    fromId: string,
+    to: string,
+  ): Promise<{
+    name: string;
+    status: string | null;
+    model: string | null;
+    context: number | null;
+    contextLimit: number | null;
+    contextPct: number | null;
+    tokens: number | null;
+    error?: string;
+  }> {
+    if (!this.agentCan(fromId, 'view_stats'))
+      throw Object.assign(new Error('your role does not permit reading agent stats'), {
+        statusCode: 403,
+      });
+    const target = await this.resolvePeer(to);
+    if (!this.sharesGroup(fromId, target.id))
+      throw Object.assign(new Error(`you don't share a group with ${to}`), { statusCode: 403 });
+    const name = target.username || target.id;
+    if (target.status !== 'running')
+      throw Object.assign(new Error('target agent is not running'), { statusCode: 409 });
+    try {
+      const { host, port } = await this.resolveTarget(target.id, 'terminal');
+      const resp = await fetch(`http://${host}:${port}/api/stats`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const s = (await resp.json()) as {
+        status?: string | null;
+        model?: string | null;
+        context?: number | null;
+        contextLimit?: number | null;
+        tokens?: { total?: number } | null;
+      };
+      const context = typeof s.context === 'number' ? s.context : null;
+      const contextLimit = typeof s.contextLimit === 'number' ? s.contextLimit : null;
+      const contextPct =
+        context !== null && contextLimit && contextLimit > 0
+          ? Math.round((context / contextLimit) * 100)
+          : null;
+      return {
+        name,
+        status: s.status ?? null,
+        model: s.model ?? null,
+        context,
+        contextLimit,
+        contextPct,
+        tokens: typeof s.tokens?.total === 'number' ? s.tokens.total : null,
+      };
+    } catch (e) {
+      return {
+        name,
+        status: null,
+        model: null,
+        context: null,
+        contextLimit: null,
+        contextPct: null,
+        tokens: null,
+        error: e instanceof Error ? e.message : String(e),
+      };
+    }
   }
 
   /** On gateway startup, reconnect bridges for every running agent that has an
@@ -2075,6 +2242,7 @@ export class AgentManager {
       model: this.readIdentity(id)?.model ?? null,
       roles: this.readIdentity(id)?.roles ?? [],
       groups: this.readIdentity(id)?.groups ?? [],
+      permissions: this.readIdentity(id)?.permissions ?? [],
       avatarSeed: this.readIdentity(id)?.avatarSeed ?? id,
     };
   }

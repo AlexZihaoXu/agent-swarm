@@ -11,8 +11,11 @@ import {
   updateAgent,
   listRoles,
   listGroups,
+  listCapabilities,
   MODEL_OPTIONS,
   type Agent,
+  type Capability,
+  type CapabilityInfo,
   type Role,
 } from '@/lib/gateway';
 import { randomName } from '@/lib/names';
@@ -52,8 +55,10 @@ export function AgentSettingsModal({
   const [roles, setRoles] = useState<string[]>([]);
   const [groups, setGroups] = useState<string[]>([]);
   const [avatarSeed, setAvatarSeed] = useState('');
+  const [permissions, setPermissions] = useState<Capability[]>([]);
   const [allRoles, setAllRoles] = useState<Role[]>([]);
   const [allGroups, setAllGroups] = useState<Role[]>([]);
+  const [allCaps, setAllCaps] = useState<CapabilityInfo[]>([]);
   const [busy, setBusy] = useState(false);
   const [phase, setPhase] = useState<'form' | 'restart'>('form');
   const [tab, setTab] = useState('general');
@@ -66,6 +71,9 @@ export function AgentSettingsModal({
       .catch(() => {});
     void listGroups()
       .then(setAllGroups)
+      .catch(() => {});
+    void listCapabilities()
+      .then(setAllCaps)
       .catch(() => {});
   }, [isOpen]);
 
@@ -86,6 +94,7 @@ export function AgentSettingsModal({
         setModel(a.model ?? '');
         setRoles(a.roles ?? []);
         setGroups(a.groups ?? []);
+        setPermissions(a.permissions ?? []);
         setAvatarSeed(a.avatarSeed || a.id);
       })
       .catch(() => {});
@@ -114,6 +123,7 @@ export function AgentSettingsModal({
         model: model || null,
         roles,
         groups,
+        permissions,
         avatarSeed,
       });
       onChanged?.();
@@ -283,6 +293,37 @@ export function AgentSettingsModal({
                         value={groups}
                         onChange={setGroups}
                       />
+
+                      {allCaps.length > 0 && (
+                        <div className="space-y-2">
+                          <Label className="text-sm">Capabilities</Label>
+                          <p className="text-muted text-xs">
+                            Grant this agent direct capabilities (in addition to any from its
+                            roles).
+                          </p>
+                          <div className="space-y-2">
+                            {allCaps.map((c) => (
+                              <Switch
+                                key={c.key}
+                                isSelected={permissions.includes(c.key)}
+                                onChange={(on) =>
+                                  setPermissions((prev) =>
+                                    on ? [...prev, c.key] : prev.filter((p) => p !== c.key),
+                                  )
+                                }
+                              >
+                                <Switch.Control>
+                                  <Switch.Thumb />
+                                </Switch.Control>
+                                <Switch.Content>
+                                  <Label className="text-sm">{c.label}</Label>
+                                  <p className="text-muted text-xs">{c.description}</p>
+                                </Switch.Content>
+                              </Switch>
+                            ))}
+                          </div>
+                        </div>
+                      )}
 
                       <div className="space-y-3">
                         <Switch isSelected={override} onChange={setOverride}>

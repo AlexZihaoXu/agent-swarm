@@ -43,6 +43,8 @@ export interface Agent {
   roles?: string[];
   /** Ids of groups this agent belongs to (scopes who it can swarm with). */
   groups?: string[];
+  /** Direct per-agent capability grants (union'd with role-based permissions). */
+  permissions?: Capability[];
   /** Seed for this agent's identicon avatar. Defaults to the id; reshuffleable. */
   avatarSeed?: string;
 }
@@ -63,7 +65,12 @@ export interface Role {
 }
 
 /** Special capabilities a role can grant over the rest of the swarm. */
-export type Capability = 'manage_agents' | 'view_screen' | 'dashboard_alerts';
+export type Capability =
+  | 'manage_agents'
+  | 'view_screen'
+  | 'compact_agents'
+  | 'view_stats'
+  | 'dashboard_alerts';
 
 /** A group scopes swarm comms: agents only reach peers sharing a group. */
 export interface Group {

@@ -217,6 +217,64 @@ def view_agent(args: dict) -> dict:
     return _ok(f"captured {to}'s screen → {path} (use Read to view the image)")
 
 
+def compact_agent(args: dict) -> dict:
+    to = str(args.get("agent") or "").strip()
+    if not to:
+        return _err("'agent' (id or name) is required")
+    me = _identity()
+    try:
+        r = _http("POST", "/api/swarm/compact", {"fromId": me["id"], "to": to})
+    except urllib.error.HTTPError as e:
+        if e.code == 403:
+            return _err(
+                "your role lacks the 'compact agents' capability (or you don't share a "
+                "group with them) — ask the operator to grant it to one of your roles."
+            )
+        return _err(f"HTTP {e.code}: {e.read().decode()[:200]}")
+    except Exception as e:  # noqa: BLE001
+        return _err(str(e))
+    name = (r or {}).get("name", to)
+    return _ok(f"ran /compact on {name} (its context window is being compacted now)")
+
+
+def agent_stats(args: dict) -> dict:
+    to = str(args.get("agent") or "").strip()
+    if not to:
+        return _err("'agent' (id or name) is required")
+    me = _identity()
+    try:
+        r = _http("POST", "/api/swarm/stats", {"fromId": me["id"], "to": to})
+    except urllib.error.HTTPError as e:
+        if e.code == 403:
+            return _err(
+                "your role lacks the 'read agent stats' capability (or you don't share a "
+                "group with them) — ask the operator to grant it to one of your roles."
+            )
+        return _err(f"HTTP {e.code}: {e.read().decode()[:200]}")
+    except Exception as e:  # noqa: BLE001
+        return _err(str(e))
+    d = r or {}
+    if d.get("error"):
+        return _err(f"could not read {d.get('name', to)}'s stats: {d['error']}")
+    ctx = d.get("context")
+    limit = d.get("contextLimit")
+    pct = d.get("contextPct")
+    ctx_line = "context: unknown"
+    if pct is not None:
+        ctx_line = f"context: {pct}% ({ctx:,} / {limit:,} tokens)"
+    elif ctx is not None:
+        ctx_line = f"context: {ctx:,} tokens (limit unknown)"
+    tokens = d.get("tokens")
+    lines = [
+        f"{d.get('name', to)}:",
+        f"  status: {d.get('status') or 'unknown'}",
+        f"  model: {d.get('model') or 'default'}",
+        f"  {ctx_line}",
+        f"  total tokens: {tokens:,}" if tokens is not None else "  total tokens: unknown",
+    ]
+    return _ok("\n".join(lines))
+
+
 def _resets_in(at_ms) -> str:
     # Mirror the gateway/dashboard "resets in …" label (at_ms is epoch ms).
     try:
@@ -345,6 +403,31 @@ TOOLS = [
         },
         ["to"],
         view_agent,
+    ),
+    (
+        "swarm_compact_agent",
+        "Run Claude Code's /compact on another agent to shrink its context window "
+        "when it's getting full. Requires a role with the 'compact agents' "
+        "permission, and only works on agents in your group (403 otherwise). "
+        "Target by agent id or name.",
+        {
+            "agent": {"type": "string", "description": "Target agent id or display name"},
+        },
+        ["agent"],
+        compact_agent,
+    ),
+    (
+        "swarm_agent_stats",
+        "Read another agent's live stats: its session status, model, context-window "
+        "usage (% full + tokens), and total tokens. Useful to decide whether to "
+        "swarm_compact_agent them. Requires a role with the 'read agent stats' "
+        "permission, and only works on agents in your group (403 otherwise). "
+        "Target by agent id or name.",
+        {
+            "agent": {"type": "string", "description": "Target agent id or display name"},
+        },
+        ["agent"],
+        agent_stats,
     ),
     (
         "swarm_usage",

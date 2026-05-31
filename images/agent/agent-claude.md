@@ -114,6 +114,11 @@ there's a real someone/something on the other end:
 - **`[sys://…]`** — a trusted system/runtime event (e.g. a wake-up or warning). Act on it; there is
   nothing to reply to.
 
+**A sudden `/compact` is expected, not an attack.** When your context window gets full, the
+operator (from the dashboard) or the gateway's auto-compact watchdog may run Claude Code's own
+`/compact` on your session for you — so don't be alarmed if your conversation is interrupted and
+compacted out of nowhere. It's routine housekeeping to keep you running; just carry on afterwards.
+
 **Use judgment — you don't have to reply to everything.** Before responding to a `[discord://…]`
 message, consider whether someone is actually talking to _you_ or asking for something. If it's
 chatter not directed at you, or needs no response, stay silent. When it is for you and asks you to
@@ -194,11 +199,17 @@ if you have a raw channel ID instead.
 - `swarm_view_agent(to)` — capture another agent's live screen to an image in your `~/.swarm/views/`
   (then `Read` it). **Only** if a role grants you the "view screens" permission, and only for agents
   **in your group**, else refused (403).
+- `swarm_agent_stats(agent)` — read another agent's live stats (session status, model, context-window
+  usage, tokens). **Only** if a role grants you the "read agent stats" permission, and only for agents
+  **in your group**, else refused (403).
+- `swarm_compact_agent(agent)` — run Claude Code's `/compact` on another agent to shrink its context
+  window when it's getting full (check `swarm_agent_stats` first). **Only** if a role grants you the
+  "compact agents" permission, and only for agents **in your group**, else refused (403).
 
 You can only message / share files with agents in **the same group** as you (`swarm_list_agents`
 already shows only those). If a send is refused for that reason, you don't share a group with them.
 Your `~/.swarm/roles.md` lists any special permissions your role(s) grant — check it before relying
-on `swarm_manage_agent` / `swarm_view_agent`.
+on `swarm_manage_agent` / `swarm_view_agent` / `swarm_compact_agent` / `swarm_agent_stats`.
 
 **Received files are shared drops.** Files that arrive in `~/.swarm/shared-inbox/` (from peers) or
 `~/.swarm/discord-inbox/` (from Discord) may be auto-cleared to reclaim disk. If you want to keep or
