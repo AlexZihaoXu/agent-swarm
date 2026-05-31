@@ -198,6 +198,22 @@ COPY agent-gpu.service /etc/systemd/system/agent-gpu.service
 # MCP server starts instantly; no X needed since the script connects lazily).
 COPY --chown=agent:agent tools /opt/agent-tools
 RUN su - agent -c '/usr/local/bin/uv run --quiet --script /opt/agent-tools/computer_use.py < /dev/null' || true
+# oc-go-cc: Anthropic↔OpenCode Go translator that Claude Code talks to when
+# an agent's provider is opencodeGo. Handles the dual-endpoint routing
+# (/messages for MiniMax/Qwen, /chat/completions for the rest), the
+# Kimi/DeepSeek `reasoning_content` ↔ thinking-block translation, and
+# tool-call schema differences — all things we'd otherwise have to re-implement
+# and keep in sync. AGPL-licensed binary; we only run it (no redistribution).
+RUN set -eux; \
+    ARCH="$(dpkg --print-architecture)"; \
+    case "$ARCH" in \
+      amd64) URL=https://github.com/samueltuyizere/oc-go-cc/releases/download/v0.1.8/oc-go-cc_linux-amd64;; \
+      arm64) URL=https://github.com/samueltuyizere/oc-go-cc/releases/download/v0.1.8/oc-go-cc_linux-arm64;; \
+      *) echo "unsupported arch: $ARCH" >&2; exit 1;; \
+    esac; \
+    curl -fsSL "$URL" -o /usr/local/bin/oc-go-cc; \
+    chmod +x /usr/local/bin/oc-go-cc; \
+    /usr/local/bin/oc-go-cc --version || true
 # Discord MCP server (outgoing actions; the receive side is the gateway bridge).
 # Built to dist/ with tsc, then dev deps pruned so only the runtime deps remain.
 RUN cd /opt/agent-tools/discord-mcp \

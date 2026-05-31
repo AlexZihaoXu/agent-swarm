@@ -12,10 +12,12 @@ import {
   listRoles,
   listGroups,
   listCapabilities,
-  MODEL_OPTIONS,
+  listProviders,
   type Agent,
   type Capability,
   type CapabilityInfo,
+  type Provider,
+  type ProviderInfo,
   type Role,
 } from '@/lib/gateway';
 import { randomName } from '@/lib/names';
@@ -51,6 +53,7 @@ export function AgentSettingsModal({
   const [name, setName] = useState('');
   const [override, setOverride] = useState(false);
   const [pct, setPct] = useState(DEFAULT_PCT);
+  const [provider, setProvider] = useState<Provider>('anthropic');
   const [model, setModel] = useState(''); // '' = claude default
   const [roles, setRoles] = useState<string[]>([]);
   const [groups, setGroups] = useState<string[]>([]);
@@ -59,6 +62,7 @@ export function AgentSettingsModal({
   const [allRoles, setAllRoles] = useState<Role[]>([]);
   const [allGroups, setAllGroups] = useState<Role[]>([]);
   const [allCaps, setAllCaps] = useState<CapabilityInfo[]>([]);
+  const [allProviders, setAllProviders] = useState<ProviderInfo[]>([]);
   const [busy, setBusy] = useState(false);
   const [phase, setPhase] = useState<'form' | 'restart'>('form');
   const [tab, setTab] = useState('general');
@@ -74,6 +78,9 @@ export function AgentSettingsModal({
       .catch(() => {});
     void listCapabilities()
       .then(setAllCaps)
+      .catch(() => {});
+    void listProviders()
+      .then(setAllProviders)
       .catch(() => {});
   }, [isOpen]);
 
@@ -91,6 +98,7 @@ export function AgentSettingsModal({
         const has = typeof a.autoCompactPct === 'number';
         setOverride(has);
         setPct(has ? a.autoCompactPct! : DEFAULT_PCT);
+        setProvider(a.provider ?? 'anthropic');
         setModel(a.model ?? '');
         setRoles(a.roles ?? []);
         setGroups(a.groups ?? []);
@@ -108,10 +116,21 @@ export function AgentSettingsModal({
   const pctChanged = nextPct !== origPct;
   const origModel = agent?.model ?? '';
   const modelChanged = model !== origModel;
+  const origProvider = agent?.provider ?? 'anthropic';
+  const providerChanged = provider !== origProvider;
   // The threshold is read by claude only at launch, so it needs a restart. The
-  // model switches LIVE (the gateway types `/model …` into the session), so it
-  // does not — only the threshold drives the restart prompt.
+  // provider switch flips ANTHROPIC_BASE_URL, which Claude Code only reads at
+  // process start — so changing provider also needs a restart. The model
+  // switches LIVE for Anthropic (the gateway types `/model …` into the
+  // session); for opencodeGo the model lives in the proxy, also live.
   const running = agent?.status === 'running';
+  const needsRestart = pctChanged || providerChanged;
+
+  const providerModels =
+    allProviders.find((p) => p.key === provider)?.models ??
+    (provider === 'anthropic'
+      ? [{ label: 'Default', value: '' }]
+      : [{ label: 'Default', value: '' }]);
 
   const save = async () => {
     if (!name.trim()) return;
@@ -120,6 +139,7 @@ export function AgentSettingsModal({
       await updateAgent(agentId, {
         username: name.trim(),
         autoCompactPct: nextPct,
+        provider,
         model: model || null,
         roles,
         groups,
@@ -127,14 +147,14 @@ export function AgentSettingsModal({
         avatarSeed,
       });
       onChanged?.();
-      if (modelChanged && running) {
-        const label = (MODEL_OPTIONS.find((o) => o.value === model)?.label ?? model) || 'default';
+      if (modelChanged && !providerChanged && running) {
+        const label = providerModels.find((o) => o.value === model)?.label ?? model ?? 'default';
         toast.warning(`Switching model to ${label}…`);
       }
-      if (pctChanged && running) {
+      if (needsRestart && running) {
         setPhase('restart');
       } else {
-        if (pctChanged)
+        if (pctChanged && !providerChanged)
           toast.warning('Saved — the new threshold applies next time the agent starts.');
         onOpenChange(false);
       }
@@ -255,18 +275,30 @@ export function AgentSettingsModal({
                       </div>
 
                       <div className="space-y-2">
-                        <Label className="text-sm">Model</Label>
+                        <Label className="text-sm">Provider</Label>
                         <Tabs
-                          selectedKey={model || 'default'}
-                          onSelectionChange={(k) =>
-                            setModel(String(k) === 'default' ? '' : String(k))
-                          }
+                          selectedKey={provider}
+                          onSelectionChange={(k) => {
+                            const next = String(k) as Provider;
+                            if (next === provider) return;
+                            setProvider(next);
+                            // Reset the model when switching provider so we
+                            // never carry a stale opus/glm-5/etc. from the
+                            // other side's list.
+                            setModel('');
+                          }}
                         >
                           <Tabs.ListContainer>
-                            <Tabs.List aria-label="Model">
-                              {MODEL_OPTIONS.map((opt) => (
-                                <Tabs.Tab key={opt.value} id={opt.value || 'default'}>
-                                  {opt.label}
+                            <Tabs.List aria-label="Provider">
+                              {(allProviders.length > 0
+                                ? allProviders
+                                : [
+                                    { key: 'anthropic' as Provider, label: 'Anthropic Claude' },
+                                    { key: 'opencodeGo' as Provider, label: 'OpenCode Go' },
+                                  ]
+                              ).map((p) => (
+                                <Tabs.Tab key={p.key} id={p.key}>
+                                  {p.label}
                                   <Tabs.Indicator />
                                 </Tabs.Tab>
                               ))}
@@ -274,8 +306,32 @@ export function AgentSettingsModal({
                           </Tabs.ListContainer>
                         </Tabs>
                         <p className="text-muted text-xs">
-                          The model this agent&apos;s <code>claude</code> runs — switches live.
-                          &ldquo;Default&rdquo; uses claude&apos;s own default.
+                          {provider === 'opencodeGo'
+                            ? 'Routes claude through the in-agent opencode-proxy → opencode.ai/go subscription. Set the key on the dashboard Settings page.'
+                            : 'Direct to Anthropic with your Claude Code OAuth token (the default).'}
+                        </p>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="agent-model-select" className="text-sm">
+                          Model
+                        </Label>
+                        <select
+                          id="agent-model-select"
+                          value={model}
+                          onChange={(e) => setModel(e.target.value)}
+                          className="border-separator bg-surface focus-visible:ring-accent w-full rounded-md border px-3 py-2 text-sm focus-visible:ring-2 focus-visible:outline-none"
+                        >
+                          {providerModels.map((opt) => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="text-muted text-xs">
+                          {provider === 'opencodeGo'
+                            ? "Picked from OpenCode Go's catalog. Switches live on save."
+                            : 'The model this agent\'s claude runs — switches live. "Default" uses claude\'s own default.'}
                         </p>
                       </div>
 
@@ -403,9 +459,11 @@ export function AgentSettingsModal({
               <>
                 <Modal.Body>
                   <p className="text-muted text-sm">
-                    The auto-compact threshold changed. The agent must restart (stop → start) for{' '}
-                    <code>claude</code> to pick it up. The transcript is preserved and resumes via{' '}
-                    <code>--continue</code>.
+                    {providerChanged
+                      ? 'The provider changed (ANTHROPIC_BASE_URL flips). '
+                      : 'The auto-compact threshold changed. '}
+                    The agent must restart (stop → start) for <code>claude</code> to pick it up. The
+                    transcript is preserved and resumes via <code>--continue</code>.
                   </p>
                 </Modal.Body>
                 <Modal.Footer>

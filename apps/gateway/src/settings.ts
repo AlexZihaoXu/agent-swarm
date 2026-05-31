@@ -10,6 +10,16 @@ export interface AuthCreds {
   hash: string;
 }
 
+/** Per-provider credentials. Each provider is independent; an agent uses one. */
+export interface ProvidersConfig {
+  /** OpenCode Go (https://opencode.ai/go) — a subscription-billed gateway for
+   *  GLM / Kimi / DeepSeek / etc. The key (sk-opencode-…) is presented as
+   *  `Authorization: Bearer <key>` to opencode.ai/zen/go/v1; the in-agent
+   *  opencode-proxy reads it from `~/.swarm/opencode-go-key` and translates
+   *  Claude Code's Anthropic Messages requests into OpenAI Chat Completions. */
+  opencodeGo?: { apiKey: string };
+}
+
 /** Runtime-adjustable settings, persisted to config.settingsFile as JSON. */
 export interface Settings {
   /** Claude Code OAuth token (`claude setup-token`) injected into each agent as
@@ -26,6 +36,9 @@ export interface Settings {
   /** Random shared token agents present (x-swarm-token) so their machine-to-
    *  machine calls to /api/swarm/* pass the operator-login gate. */
   swarmSecret?: string;
+  /** Per-provider credentials. The Anthropic OAuth token lives at the top level
+   *  (above) for historical reasons; new providers nest here. */
+  providers?: ProvidersConfig;
 }
 
 /** Assumed validity of a `claude setup-token` token, and how early to warn. */
@@ -49,6 +62,7 @@ export function getSettings(): Settings {
       auth: parsed.auth,
       sessionSecret: parsed.sessionSecret,
       swarmSecret: parsed.swarmSecret,
+      providers: parsed.providers,
     };
   } catch {
     cache = defaults();
@@ -68,6 +82,7 @@ export function updateSettings(patch: Partial<Settings>): Settings {
   if (patch.auth !== undefined) next.auth = patch.auth;
   if (patch.sessionSecret !== undefined) next.sessionSecret = patch.sessionSecret;
   if (patch.swarmSecret !== undefined) next.swarmSecret = patch.swarmSecret;
+  if (patch.providers !== undefined) next.providers = patch.providers;
   mkdirSync(dirname(config.settingsFile), { recursive: true });
   writeFileSync(config.settingsFile, JSON.stringify(next, null, 2));
   cache = next;

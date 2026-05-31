@@ -40,29 +40,100 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const AUTH_FILE = path.join(HOME, '.swarm', 'auth');
 
+// In-agent opencode-proxy: oc-go-cc (https://github.com/samueltuyizere/oc-go-cc),
+// an Anthropic Messages ↔ OpenCode Go translator. Launched once at supervisor
+// start (below). When the agent's provider is 'opencodeGo' we point
+// ANTHROPIC_BASE_URL at it. The API key + per-agent config (model tier
+// mapping) come from disk so changes propagate on (re)spawn without a recreate.
+const OPENCODE_PROXY_PORT = parseInt(process.env.OPENCODE_PROXY_PORT || '8765', 10);
+const OPENCODE_PROXY_BIN = '/usr/local/bin/oc-go-cc';
+const OPENCODE_KEY_FILE = path.join(HOME, '.swarm', 'opencode-go-key');
+const OPENCODE_CONFIG_FILE = path.join(HOME, '.swarm', 'oc-go-cc-config.json');
+
 // Per-agent env the gateway provisions on disk, read fresh on each (re)spawn so
 // a stop→start picks up changes without a container recreate:
 //   - `.swarm/auth`            → CLAUDE_CODE_OAUTH_TOKEN (subscription auth)
 //   - identity.autoCompactPct  → CLAUDE_AUTOCOMPACT_PCT_OVERRIDE (auto-compact %)
+//   - identity.provider        → routes claude through opencode-proxy when 'opencodeGo'
 function settingsEnv() {
   const env = {};
+  let identity = null;
   try {
-    const token = fs.readFileSync(AUTH_FILE, 'utf8').trim();
-    if (token) env.CLAUDE_CODE_OAUTH_TOKEN = token;
+    identity = JSON.parse(fs.readFileSync(IDENTITY_FILE, 'utf8'));
   } catch {
-    /* no token provisioned */
+    /* no identity — defaults below */
   }
-  try {
-    const id = JSON.parse(fs.readFileSync(IDENTITY_FILE, 'utf8'));
-    const pct = id && id.autoCompactPct;
+  const provider = (identity && identity.provider) || 'anthropic';
+  // Anthropic stays on OAuth (auth file → CLAUDE_CODE_OAUTH_TOKEN, no base URL
+  // override or Claude Code disables OAuth and bails). OpenCode Go uses the
+  // local proxy: ANTHROPIC_BASE_URL points at it; ANTHROPIC_AUTH_TOKEN is a
+  // placeholder Claude Code requires when an explicit base URL is set (the
+  // proxy reads the real key from disk).
+  if (provider === 'opencodeGo') {
+    env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${OPENCODE_PROXY_PORT}`;
+    env.ANTHROPIC_AUTH_TOKEN = 'opencode-go-via-proxy';
+  } else {
+    try {
+      const token = fs.readFileSync(AUTH_FILE, 'utf8').trim();
+      if (token) env.CLAUDE_CODE_OAUTH_TOKEN = token;
+    } catch {
+      /* no token provisioned */
+    }
+  }
+  if (identity) {
+    const pct = identity.autoCompactPct;
     if (typeof pct === 'number' && pct >= 1 && pct <= 100)
       env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = String(Math.round(pct));
-    if (id && typeof id.model === 'string' && id.model.trim())
-      env.ANTHROPIC_MODEL = id.model.trim();
-  } catch {
-    /* no identity / setting unset — use defaults */
+    if (typeof identity.model === 'string' && identity.model.trim())
+      env.ANTHROPIC_MODEL = identity.model.trim();
   }
   return env;
+}
+
+// Start oc-go-cc as a long-lived child of the supervisor. It listens on
+// 127.0.0.1 only (never reachable from outside the container) and serves every
+// agent regardless of provider — the env wiring above only points claude at
+// it when the agent is set to opencodeGo, so anthropic agents pay nothing for
+// it being up. The API key is read from disk on each (re)spawn so an operator
+// edit propagates without a recreate.
+function startOpencodeProxy() {
+  if (!fs.existsSync(OPENCODE_PROXY_BIN)) return;
+  // oc-go-cc writes its PID file under ~/.config/oc-go-cc/ — ensure the dir
+  // exists before the first spawn, otherwise it errors out and the supervisor
+  // loops on restart forever.
+  try {
+    fs.mkdirSync(path.join(HOME, '.config', 'oc-go-cc'), { recursive: true });
+  } catch {
+    /* best-effort — the proxy reports its own dir-error if this somehow fails */
+  }
+  const start = () => {
+    let apiKey = '';
+    try {
+      apiKey = fs.readFileSync(OPENCODE_KEY_FILE, 'utf8').trim();
+    } catch {
+      /* no key — the proxy will start anyway and 401 until one's provisioned */
+    }
+    const env = {
+      ...process.env,
+      OC_GO_CC_API_KEY: apiKey || 'unset',
+      OC_GO_CC_HOST: '127.0.0.1',
+      OC_GO_CC_PORT: String(OPENCODE_PROXY_PORT),
+      HOME,
+    };
+    const args = ['serve'];
+    if (fs.existsSync(OPENCODE_CONFIG_FILE)) args.push('-c', OPENCODE_CONFIG_FILE);
+    const child = cp.spawn(OPENCODE_PROXY_BIN, args, {
+      env,
+      stdio: ['ignore', 'inherit', 'inherit'],
+    });
+    child.on('exit', (code) => {
+      // Restart on unexpected exit — no systemd unit keeps it up, so a one-off
+      // crash shouldn't kill the agent's ability to reach OpenCode Go.
+      console.warn(`[opencode-proxy] exited (${code}) — restarting in 2s`);
+      setTimeout(start, 2000);
+    });
+  };
+  start();
 }
 
 // --- Claude session stats -------------------------------------------------
@@ -121,6 +192,25 @@ function modelRates(model, ctxTokens) {
   // Sonnet: long-context (>200K input) tier is priced higher.
   if (ctxTokens > 200000) return { in: 6, out: 22.5, cw: 7.5, cr: 0.6 };
   return { in: 3, out: 15, cw: 3.75, cr: 0.3 };
+}
+
+// Context-window size by model name, used when Claude Code's statusline omits
+// it (which happens for non-Anthropic models served through the opencode-proxy).
+// Best-effort: when in doubt we return 0 and the ring shows no denominator
+// (better than a wrong percentage). Values mirror each provider's published
+// limits at the time of writing.
+function modelContextLimit(model) {
+  const m = (model || '').toLowerCase();
+  if (!m) return 0;
+  if (m.includes('kimi-k2')) return 256_000;
+  if (m.includes('glm-5')) return 128_000;
+  if (m.includes('deepseek-v4')) return 128_000;
+  if (m.includes('minimax')) return 1_000_000;
+  if (m.includes('qwen3.7')) return 256_000;
+  if (m.includes('qwen3')) return 128_000;
+  if (m.includes('mimo')) return 128_000;
+  if (m.includes('hy3')) return 128_000;
+  return 0;
 }
 
 function transcriptStats() {
@@ -555,8 +645,13 @@ function readStats() {
     tokens: { ...t.totals, total },
     context: t.context,
     // Authoritative context-window size from Claude Code's statusline (the model
-    // display name doesn't always carry it, e.g. "Opus 4.7").
-    contextLimit: (sl.context_window && sl.context_window.context_window_size) || null,
+    // display name doesn't always carry it, e.g. "Opus 4.7"). For OpenCode Go
+    // models claude doesn't know about, the statusline omits it — fall back to
+    // a per-model lookup so the dashboard's context ring still has a denominator.
+    contextLimit:
+      (sl.context_window && sl.context_window.context_window_size) ||
+      modelContextLimit((sl.model && sl.model.display_name) || t.model) ||
+      null,
     turns: t.turns,
     // Computed from token usage × per-model rates; fall back to Claude Code's
     // own statusLine figure if we have no turns yet.
@@ -1017,6 +1112,9 @@ server.listen(PORT, () => {
   maybeNudgeResume(); // checks the gap BEFORE we overwrite the heartbeat below
   writeHeartbeat();
   setInterval(writeHeartbeat, 15_000);
+  // Start the opencode-proxy BEFORE the first claude session so an
+  // opencodeGo-provider agent's claude finds the proxy already listening.
+  startOpencodeProxy();
   try {
     createSession({ name: 'claude', command: claudeBootCommand() }); // always-on, from boot
   } catch (e) {

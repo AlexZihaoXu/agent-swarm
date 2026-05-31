@@ -35,6 +35,7 @@ import type {
   IntegrationPatch,
   IntegrationPublic,
   IntegrationType,
+  Provider,
 } from './types.js';
 import type { ProxyTarget, ServiceName } from './types.js';
 
@@ -68,6 +69,8 @@ interface AgentIdentity {
   createdAt: number;
   /** CLAUDE_AUTOCOMPACT_PCT_OVERRIDE (1–100); null = use the claude default. */
   autoCompactPct?: number | null;
+  /** Upstream the agent's claude talks to. Default 'anthropic'. */
+  provider?: Provider;
   /** ANTHROPIC_MODEL the agent's claude runs (alias like "opus"/"sonnet"/"haiku"
    *  or a full model id); null/empty = the claude default. */
   model?: string | null;
@@ -195,6 +198,7 @@ export class AgentManager {
       createdAt: cur?.createdAt ?? Date.now(),
       autoCompactPct:
         patch.autoCompactPct !== undefined ? patch.autoCompactPct : (cur?.autoCompactPct ?? null),
+      provider: patch.provider !== undefined ? patch.provider : (cur?.provider ?? 'anthropic'),
       model: patch.model !== undefined ? patch.model : (cur?.model ?? null),
       roles: patch.roles !== undefined ? patch.roles : (cur?.roles ?? []),
       groups: patch.groups !== undefined ? patch.groups : (cur?.groups ?? []),
@@ -223,6 +227,7 @@ export class AgentManager {
     patch: {
       username?: string;
       autoCompactPct?: number | null;
+      provider?: Provider;
       model?: string | null;
       roles?: string[];
       groups?: string[];
@@ -246,6 +251,13 @@ export class AgentManager {
         });
       idPatch.autoCompactPct = v === null ? null : Math.round(v);
     }
+    if (patch.provider !== undefined) {
+      if (patch.provider !== 'anthropic' && patch.provider !== 'opencodeGo')
+        throw Object.assign(new Error('provider must be "anthropic" or "opencodeGo"'), {
+          statusCode: 400,
+        });
+      idPatch.provider = patch.provider;
+    }
     if (patch.model !== undefined) {
       const m = patch.model?.trim();
       idPatch.model = m ? m : null; // empty/whitespace → clear back to default
@@ -256,9 +268,26 @@ export class AgentManager {
     // Empty string explicitly resets the avatar to the default (id-seeded).
     if (patch.avatarSeed !== undefined) idPatch.avatarSeed = patch.avatarSeed.trim() || id;
     const prevModel = this.readIdentity(id)?.model ?? null;
+    const prevProvider = this.readIdentity(id)?.provider ?? 'anthropic';
     const prevRoles = JSON.stringify(this.readIdentity(id)?.roles ?? []);
     this.writeIdentity(id, idPatch);
     const info = await this.docker.getContainer(this.containerName(id)).inspect();
+
+    // Provider changed → resync the opencode-go key onto disk (added when
+    // switching to opencodeGo, removed when switching back to anthropic). The
+    // claude process picks it up on the next (re)spawn — same constraint as
+    // ANTHROPIC_MODEL (env vars are read once at process start). Model change
+    // on an opencodeGo agent re-writes oc-go-cc's config so the proxy maps
+    // every Claude tier to the newly chosen model.
+    if (patch.provider !== undefined && idPatch.provider !== prevProvider) {
+      this.writeOpencodeGoKey(id);
+    } else if (
+      patch.model !== undefined &&
+      idPatch.model !== prevModel &&
+      (idPatch.provider ?? prevProvider) === 'opencodeGo'
+    ) {
+      this.writeOpencodeGoConfig(id);
+    }
 
     // Roles changed → rewrite the agent's roles doc and nudge it to (re)read.
     if (patch.roles !== undefined && JSON.stringify(idPatch.roles ?? []) !== prevRoles) {
@@ -362,6 +391,86 @@ export class AgentManager {
       chownSync(file, 1000, 1000);
     } catch {
       /* best-effort */
+    }
+  }
+
+  /** Sync the operator's OpenCode Go key onto the agent's disk at
+   *  `.swarm/opencode-go-key`. Only writes for opencodeGo-provider agents; for
+   *  anthropic agents the file is removed (so a provider switch back to
+   *  anthropic doesn't leak credentials into the proxy). Called on create,
+   *  start, and whenever provider or the key changes. */
+  private writeOpencodeGoKey(id: string): void {
+    const dir = this.ensureSwarmDir(id);
+    const file = join(dir, 'opencode-go-key');
+    const ident = this.readIdentity(id);
+    const key = getSettings().providers?.opencodeGo?.apiKey ?? '';
+    try {
+      if (ident?.provider === 'opencodeGo' && key) {
+        writeFileSync(file, key, { mode: 0o600 });
+        chownSync(file, 1000, 1000); // readable by the in-agent proxy (uid 1000)
+      } else {
+        rmSync(file, { force: true });
+      }
+    } catch {
+      /* best-effort */
+    }
+    this.writeOpencodeGoConfig(id);
+  }
+
+  /** Write the per-agent oc-go-cc config (`.swarm/oc-go-cc-config.json`),
+   *  mapping the user's chosen OpenCode Go model into every Claude Code tier
+   *  (default/think/complex/background/fast/long_context). Writing all six
+   *  tiers to the same model means the dashboard's model dropdown drives the
+   *  whole session — power users can still hand-edit this file for tier-
+   *  specific routing. Skipped for anthropic-provider agents. */
+  private writeOpencodeGoConfig(id: string): void {
+    const dir = this.ensureSwarmDir(id);
+    const file = join(dir, 'oc-go-cc-config.json');
+    const ident = this.readIdentity(id);
+    if (ident?.provider !== 'opencodeGo') {
+      try {
+        rmSync(file, { force: true });
+      } catch {
+        /* best-effort */
+      }
+      return;
+    }
+    const model = (ident.model && ident.model.trim()) || 'kimi-k2.6';
+    const tier = (model_id: string) => ({ provider: 'opencode-go', model_id, temperature: 0.7 });
+    const config = {
+      host: '127.0.0.1',
+      port: 8765,
+      models: {
+        default: { ...tier(model), max_tokens: 8192 },
+        background: { ...tier(model), max_tokens: 4096 },
+        think: { ...tier(model), max_tokens: 16384 },
+        complex: { ...tier(model), max_tokens: 16384 },
+        long_context: { ...tier(model), max_tokens: 32768, context_threshold: 80000 },
+        fast: { ...tier(model), max_tokens: 4096 },
+      },
+      opencode_go: {
+        base_url: 'https://opencode.ai/zen/go/v1/chat/completions',
+        timeout_ms: 300_000,
+      },
+      logging: { level: 'info', requests: false },
+    };
+    try {
+      writeFileSync(file, JSON.stringify(config, null, 2), { mode: 0o644 });
+      chownSync(file, 1000, 1000);
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  /** Resync the OpenCode Go key onto every opencodeGo agent's disk (used after
+   *  the operator updates the key in settings, so running agents pick up the
+   *  new value on the next claude (re)spawn — no recreate needed). */
+  writeOpencodeGoKeyAll(): void {
+    try {
+      const base = join(this.cfg.swarmDataMount, 'agents');
+      for (const id of readdirSync(base)) this.writeOpencodeGoKey(id);
+    } catch {
+      /* no agents dir yet */
     }
   }
 
@@ -1210,12 +1319,14 @@ export class AgentManager {
     this.writeIdentity(id, {
       name: username,
       timezone: timezone ?? null,
+      provider: opts.provider ?? 'anthropic',
       model: model ?? null,
       roles: Array.isArray(opts.roles) ? opts.roles : [],
       groups: Array.isArray(opts.groups) ? opts.groups : [],
       avatarSeed: opts.avatarSeed?.trim() || undefined,
     });
     this.writeAuthToken(id);
+    this.writeOpencodeGoKey(id);
     this.writeSwarmToken(id);
     this.writeRolesDoc(id);
 
@@ -1359,6 +1470,7 @@ export class AgentManager {
     // Refresh on-disk provisioning so a rebuilt image starts with current state.
     this.writeAuthToken(id);
     this.writeSwarmToken(id);
+    this.writeOpencodeGoKey(id);
     this.writeRolesDoc(id);
     this.markDeliberateRestart(id); // → [sys://restart] notice once the new container boots
     return this.spawnContainer(id, name, labels, cpus, memoryMb, timezone);
@@ -1397,6 +1509,7 @@ export class AgentManager {
     // change (e.g. an edited role description).
     this.writeAuthToken(id);
     this.writeSwarmToken(id);
+    this.writeOpencodeGoKey(id);
     this.writeRolesDoc(id);
     this.markDeliberateRestart(id); // → [sys://restart] notice once it boots
     await this.docker.getContainer(this.containerName(id)).start();
@@ -2239,6 +2352,7 @@ export class AgentManager {
       memoryMb: labels[MEMORY_LABEL] ? Number(labels[MEMORY_LABEL]) : undefined,
       timezone: labels[TZ_LABEL],
       autoCompactPct: this.readIdentity(id)?.autoCompactPct ?? null,
+      provider: this.readIdentity(id)?.provider ?? 'anthropic',
       model: this.readIdentity(id)?.model ?? null,
       roles: this.readIdentity(id)?.roles ?? [],
       groups: this.readIdentity(id)?.groups ?? [],

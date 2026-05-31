@@ -26,6 +26,7 @@ import {
 import { TokenExpiryBanner } from '@/app/TokenExpiryBanner';
 import { RegistryCard } from '@/app/RolesGroups';
 import { PasswordField } from '@/app/PasswordField';
+import { OpencodeGoCard } from '@/app/OpencodeGoCard';
 
 type Status = { kind: 'ok' | 'warn' | 'err'; msg: string } | null;
 
@@ -177,7 +178,7 @@ export default function SettingsPage() {
 
       <Card>
         <Card.Header>
-          <Card.Title>Claude authentication</Card.Title>
+          <Card.Title>Anthropic Claude</Card.Title>
           <Card.Description>
             Agents authenticate with a Claude Code OAuth token, billed to your subscription.
             Generate one on the host with <span className="font-mono">claude setup-token</span> and
@@ -234,6 +235,10 @@ export default function SettingsPage() {
           </Button>
         </Card.Footer>
       </Card>
+
+      <div className="mt-6">
+        <OpencodeGoCard />
+      </div>
 
       <div className="mt-6">
         <RegistryCard

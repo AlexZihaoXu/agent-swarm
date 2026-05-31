@@ -18,7 +18,8 @@ import {
   noteLoginSuccess,
 } from './auth.js';
 import { CAPABILITIES, listRoles, createRole, updateRole, deleteRole } from './roles.js';
-import type { Capability } from './types.js';
+import { PROVIDERS } from './providers.js';
+import type { Capability, Provider } from './types.js';
 import { listGroups, createGroup, updateGroup, deleteGroup } from './groups.js';
 import { listGroupMessages, clearGroupMessages } from './group-chats.js';
 import {
@@ -123,6 +124,11 @@ export async function handleApi(
       return (sendJson(res, 200, { token: getSettings().oauthToken ?? '' }), true);
     }
     if (pathname === '/api/settings') return await handleSettings(req, res, manager, method);
+    if (pathname === '/api/providers/info') {
+      if (method !== 'GET') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+      return (sendJson(res, 200, PROVIDERS), true);
+    }
+    if (pathname === '/api/providers') return await handleProviders(req, res, manager, method);
     if (pathname === '/api/host') return await handleHost(res, manager, method);
     if (pathname === '/api/metrics') return await handleMetrics(res, manager, method);
     if (pathname === '/api/roles' || pathname.startsWith('/api/roles/'))
@@ -525,6 +531,7 @@ async function handleAgents(
         cpus: body.cpus,
         memoryMb: body.memoryMb,
         timezone: body.timezone,
+        provider: body.provider,
         model: body.model ?? undefined,
         roles: body.roles,
         groups: body.groups,
@@ -541,6 +548,7 @@ async function handleAgents(
       const patch: {
         username?: string;
         autoCompactPct?: number | null;
+        provider?: Provider;
         model?: string | null;
         roles?: string[];
         groups?: string[];
@@ -549,6 +557,7 @@ async function handleAgents(
       } = {};
       if (body.username !== undefined) patch.username = body.username;
       if (body.autoCompactPct !== undefined) patch.autoCompactPct = body.autoCompactPct;
+      if (body.provider !== undefined) patch.provider = body.provider;
       if (body.model !== undefined) patch.model = body.model;
       if (body.roles !== undefined) patch.roles = body.roles;
       if (body.groups !== undefined) patch.groups = body.groups;
@@ -711,6 +720,47 @@ async function handleSettings(
   return true;
 }
 
+/** Per-provider credentials beyond the headline Anthropic OAuth token (which
+ *  lives at /api/settings). Currently: OpenCode Go. Keys are secrets — returned
+ *  only as a presence flag + last-4 hint. PATCH accepts `opencodeGo.apiKey` and
+ *  the gateway syncs it onto each opencodeGo-provider agent's disk so the
+ *  in-agent proxy can read it (and changes propagate without a recreate). */
+async function handleProviders(
+  req: IncomingMessage,
+  res: ServerResponse,
+  manager: AgentManager,
+  method: string,
+): Promise<boolean> {
+  if (method === 'GET') {
+    const key = getSettings().providers?.opencodeGo?.apiKey ?? '';
+    return (
+      sendJson(res, 200, {
+        opencodeGo: {
+          hasKey: !!key,
+          keyHint: key && key.length >= 4 ? key.slice(-4) : null,
+        },
+      }),
+      true
+    );
+  }
+  if (method === 'PATCH') {
+    const body = await readJson(req);
+    const cur = getSettings().providers ?? {};
+    const next: typeof cur = { ...cur };
+    if (body.opencodeGo !== undefined) {
+      const raw = typeof body.opencodeGo?.apiKey === 'string' ? body.opencodeGo.apiKey.trim() : '';
+      next.opencodeGo = raw ? { apiKey: raw } : undefined;
+    }
+    updateSettings({ providers: next });
+    // Push the new (or removed) key onto every opencodeGo-provider agent's disk
+    // so running agents pick it up on the next claude (re)spawn — no recreate.
+    manager.writeOpencodeGoKeyAll();
+    return (sendJson(res, 200, { ok: true }), true);
+  }
+  sendJson(res, 405, { error: 'method not allowed' });
+  return true;
+}
+
 async function handleHost(
   res: ServerResponse,
   manager: AgentManager,
@@ -777,6 +827,8 @@ async function readJson(req: IncomingMessage): Promise<{
   memoryMb?: number;
   timezone?: string;
   autoCompactPct?: number | null;
+  provider?: Provider;
+  opencodeGo?: { apiKey?: string };
   model?: string | null;
   type?: IntegrationType;
   credentials?: { botToken?: string };

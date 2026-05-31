@@ -36,6 +36,10 @@ export interface Agent {
   /** Per-agent CLAUDE_AUTOCOMPACT_PCT_OVERRIDE (1–100). null/omitted = the
    *  claude default (~83%). Applied by the supervisor on (re)launch. */
   autoCompactPct?: number | null;
+  /** Backend the agent's claude talks to. 'anthropic' = the Anthropic API
+   *  (OAuth subscription); 'opencodeGo' = OpenCode Go via the in-agent proxy.
+   *  Default is 'anthropic'. */
+  provider?: Provider;
   /** Configured model override (ANTHROPIC_MODEL: alias or full id); null = the
    *  claude default. Applied by the supervisor on (re)launch. */
   model?: string | null;
@@ -71,6 +75,19 @@ export type Capability =
   | 'compact_agents'
   | 'view_stats'
   | 'dashboard_alerts';
+
+/** Which upstream the agent's claude session uses. 'anthropic' = direct OAuth
+ *  to Anthropic (Claude); 'opencodeGo' = the OpenCode Go subscription routed
+ *  through the in-agent opencode-proxy. */
+export type Provider = 'anthropic' | 'opencodeGo';
+
+/** Catalog entry for a provider in the UI: its label + the available models. */
+export interface ProviderInfo {
+  key: Provider;
+  label: string;
+  /** Models surfaced in the dashboard's model dropdown. */
+  models: { label: string; value: string }[];
+}
 
 /** A group scopes swarm comms: agents only reach peers sharing a group. */
 export interface Group {
@@ -188,6 +205,8 @@ export interface CreateAgentOptions {
   memoryMb?: number;
   /** IANA timezone, e.g. "America/New_York". Omit to inherit the image default (UTC). */
   timezone?: string;
+  /** Initial provider ('anthropic' default; 'opencodeGo' routes via the proxy). */
+  provider?: Provider;
   /** Initial model override (ANTHROPIC_MODEL: alias/full id). Applied at first
    *  boot (a fresh session, so the env takes effect). Omit for the default. */
   model?: string;

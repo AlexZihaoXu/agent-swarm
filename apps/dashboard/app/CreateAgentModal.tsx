@@ -7,8 +7,10 @@ import {
   createAgent,
   getHostInfo,
   listGroups,
+  listProviders,
   listRoles,
-  MODEL_OPTIONS,
+  type Provider,
+  type ProviderInfo,
   type Role,
 } from '@/lib/gateway';
 import { randomName } from '@/lib/names';
@@ -99,11 +101,13 @@ export function CreateAgentModal({
   const [maxCpus, setMaxCpus] = useState(8);
   const [maxMemGb, setMaxMemGb] = useState(16);
   const [timezone, setTimezone] = useState('');
+  const [provider, setProvider] = useState<Provider>('anthropic');
   const [model, setModel] = useState(''); // '' = claude default
   const [roles, setRoles] = useState<string[]>([]);
   const [groups, setGroups] = useState<string[]>([]);
   const [allRoles, setAllRoles] = useState<Role[]>([]);
   const [allGroups, setAllGroups] = useState<Role[]>([]);
+  const [allProviders, setAllProviders] = useState<ProviderInfo[]>([]);
   const [avatarSeed, setAvatarSeed] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -123,6 +127,7 @@ export function CreateAgentModal({
     setCpus(DEFAULT_CPUS);
     setMemGb(DEFAULT_MEM_GB);
     setTimezone(systemTimezone());
+    setProvider('anthropic');
     setModel('');
     setRoles([]);
     setGroups([]);
@@ -134,6 +139,9 @@ export function CreateAgentModal({
       .catch(() => {});
     void listGroups()
       .then(setAllGroups)
+      .catch(() => {});
+    void listProviders()
+      .then(setAllProviders)
       .catch(() => {});
     // Cap the sliders at the host's real hardware (and pull the defaults down
     // if the machine has less than 2 cores / 4 GB).
@@ -159,6 +167,7 @@ export function CreateAgentModal({
         cpus: cpus > 0 ? cpus : undefined,
         memoryMb: memGb > 0 ? Math.round(memGb * 1024) : undefined,
         timezone: timezone.trim() || undefined,
+        provider,
         model: model || undefined,
         roles,
         groups,
@@ -238,22 +247,55 @@ export function CreateAgentModal({
                 </TextField>
 
                 <div className="space-y-2">
-                  <Label className="text-sm">Model</Label>
+                  <Label className="text-sm">Provider</Label>
                   <Tabs
-                    selectedKey={model || 'default'}
-                    onSelectionChange={(k) => setModel(String(k) === 'default' ? '' : String(k))}
+                    selectedKey={provider}
+                    onSelectionChange={(k) => {
+                      const next = String(k) as Provider;
+                      if (next === provider) return;
+                      setProvider(next);
+                      setModel(''); // reset → default for the new provider's list
+                    }}
                   >
                     <Tabs.ListContainer>
-                      <Tabs.List aria-label="Model">
-                        {MODEL_OPTIONS.map((opt) => (
-                          <Tabs.Tab key={opt.value} id={opt.value || 'default'}>
-                            {opt.label}
+                      <Tabs.List aria-label="Provider">
+                        {(allProviders.length > 0
+                          ? allProviders
+                          : [
+                              { key: 'anthropic' as Provider, label: 'Anthropic Claude' },
+                              { key: 'opencodeGo' as Provider, label: 'OpenCode Go' },
+                            ]
+                        ).map((p) => (
+                          <Tabs.Tab key={p.key} id={p.key}>
+                            {p.label}
                             <Tabs.Indicator />
                           </Tabs.Tab>
                         ))}
                       </Tabs.List>
                     </Tabs.ListContainer>
                   </Tabs>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="create-model-select" className="text-sm">
+                    Model
+                  </Label>
+                  <select
+                    id="create-model-select"
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    className="border-separator bg-surface focus-visible:ring-accent w-full rounded-md border px-3 py-2 text-sm focus-visible:ring-2 focus-visible:outline-none"
+                  >
+                    {(
+                      allProviders.find((p) => p.key === provider)?.models ?? [
+                        { label: 'Default', value: '' },
+                      ]
+                    ).map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 <button

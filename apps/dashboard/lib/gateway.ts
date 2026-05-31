@@ -15,6 +15,8 @@ export interface Agent {
   timezone?: string;
   /** Per-agent CLAUDE_AUTOCOMPACT_PCT_OVERRIDE (1–100); null = claude default. */
   autoCompactPct?: number | null;
+  /** Backend the agent's claude talks to. Default 'anthropic'. */
+  provider?: Provider;
   /** Configured model override (ANTHROPIC_MODEL); null = claude default. */
   model?: string | null;
   /** Assigned role ids + group ids. */
@@ -121,6 +123,8 @@ export interface CreateAgentOptions {
   memoryMb?: number;
   /** IANA timezone, e.g. "America/New_York". */
   timezone?: string;
+  /** Initial provider ('anthropic' default; 'opencodeGo' routes via the proxy). */
+  provider?: Provider;
   /** Initial model override (ANTHROPIC_MODEL alias/id); omit for default. */
   model?: string;
   /** Role + group ids to assign at creation. */
@@ -130,14 +134,46 @@ export interface CreateAgentOptions {
   avatarSeed?: string;
 }
 
-/** Model choices shared by the create + settings UIs ('' = claude's default).
- *  Aliases stay current across model releases, so they're preferred over ids. */
+/** Anthropic-provider model choices ('' = claude's default). Aliases stay
+ *  current across model releases, so they're preferred over ids. Kept as a
+ *  fallback when the live /api/providers/info call fails. */
 export const MODEL_OPTIONS: { label: string; value: string }[] = [
   { label: 'Default', value: '' },
   { label: 'Opus', value: 'opus' },
   { label: 'Sonnet', value: 'sonnet' },
   { label: 'Haiku', value: 'haiku' },
 ];
+
+// --- Providers --------------------------------------------------------------
+// The backend the agent's claude talks to. 'anthropic' = direct OAuth (the
+// historical default); 'opencodeGo' = the OpenCode Go subscription routed
+// through the in-agent opencode-proxy.
+
+export type Provider = 'anthropic' | 'opencodeGo';
+
+export interface ProviderInfo {
+  key: Provider;
+  label: string;
+  models: { label: string; value: string }[];
+}
+
+/** Catalog of providers + their model lists, served by the gateway so the
+ *  dashboard's dropdowns stay in sync when models are added without a
+ *  front-end change. */
+export const listProviders = () => api<ProviderInfo[]>('/api/providers/info');
+
+export interface ProvidersStatus {
+  opencodeGo: { hasKey: boolean; keyHint: string | null };
+}
+export const getProviders = () => api<ProvidersStatus>('/api/providers');
+/** Update one or more provider credentials. Pass `opencodeGo: { apiKey: '' }`
+ *  to clear; omit a provider to leave it unchanged. */
+export const updateProviders = (patch: { opencodeGo?: { apiKey: string } }) =>
+  api<{ ok: true }>('/api/providers', {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${GATEWAY_BASE}${path}`, init);
@@ -521,6 +557,7 @@ export const updateAgent = (
   patch: {
     username?: string;
     autoCompactPct?: number | null;
+    provider?: Provider;
     model?: string | null;
     roles?: string[];
     groups?: string[];
