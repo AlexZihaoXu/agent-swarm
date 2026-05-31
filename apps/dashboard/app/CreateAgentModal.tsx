@@ -1,6 +1,17 @@
 'use client';
 
-import { Button, Input, Label, Modal, Slider, Tabs, TextField, toast } from '@heroui/react';
+import {
+  Button,
+  Input,
+  Label,
+  ListBox,
+  Modal,
+  Select,
+  Slider,
+  Tabs,
+  TextField,
+  toast,
+} from '@heroui/react';
 import { useState } from 'react';
 import { LuChevronRight, LuDices, LuRefreshCw } from 'react-icons/lu';
 import {
@@ -20,6 +31,8 @@ import { RegistrySelect } from './RolesGroups';
 const ALL_TAKEN = 'All names are in use — type one manually.';
 const DEFAULT_CPUS = 2;
 const DEFAULT_MEM_GB = 4;
+/** Sentinel for the model dropdown's "Default" option — see AgentSettingsModal. */
+const MODEL_DEFAULT_KEY = '__default__';
 
 /** A resource-cap slider where 0 means "unlimited". */
 function LimitSlider({
@@ -277,25 +290,38 @@ export function CreateAgentModal({
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="create-model-select" className="text-sm">
-                    Model
-                  </Label>
-                  <select
-                    id="create-model-select"
-                    value={model}
-                    onChange={(e) => setModel(e.target.value)}
-                    className="border-separator bg-surface focus-visible:ring-accent w-full rounded-md border px-3 py-2 text-sm focus-visible:ring-2 focus-visible:outline-none"
+                  <Select
+                    fullWidth
+                    value={model || MODEL_DEFAULT_KEY}
+                    onChange={(v) => {
+                      const k = String(v ?? MODEL_DEFAULT_KEY);
+                      setModel(k === MODEL_DEFAULT_KEY ? '' : k);
+                    }}
                   >
-                    {(
-                      allProviders.find((p) => p.key === provider)?.models ?? [
-                        { label: 'Default', value: '' },
-                      ]
-                    ).map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
+                    <Label className="text-sm">Model</Label>
+                    <Select.Trigger>
+                      <Select.Value />
+                      <Select.Indicator />
+                    </Select.Trigger>
+                    <Select.Popover>
+                      <ListBox>
+                        {(
+                          allProviders.find((p) => p.key === provider)?.models ?? [
+                            { label: 'Default', value: '' },
+                          ]
+                        ).map((opt) => (
+                          <ListBox.Item
+                            key={opt.value || MODEL_DEFAULT_KEY}
+                            id={opt.value || MODEL_DEFAULT_KEY}
+                            textValue={opt.label}
+                          >
+                            {opt.label}
+                            <ListBox.ItemIndicator />
+                          </ListBox.Item>
+                        ))}
+                      </ListBox>
+                    </Select.Popover>
+                  </Select>
                 </div>
 
                 <button

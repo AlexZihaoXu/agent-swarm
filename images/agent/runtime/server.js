@@ -216,19 +216,23 @@ function modelContextLimit(model) {
 function transcriptStats() {
   const totals = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
   let model = null;
-  let turns = 0;
   let lastTs = null;
   let cost = 0;
-  // Current context-window usage = the most recent turn's input side
-  // (fresh input + cache read + cache creation all occupy the window).
   let context = 0;
-  // `claude --continue` re-writes prior assistant messages into the resumed
-  // transcript, so the same message.id can appear twice in one file. Summing
-  // every line double-counts the cumulative totals — dedupe by message.id.
-  const seen = new Set();
+  // Two reasons claude can write the same `message.id` more than once:
+  //   1. `claude --continue` replays prior assistant messages into the resumed
+  //      transcript;
+  //   2. Streaming providers (e.g. OpenCode Go via oc-go-cc) flush the message
+  //      record on `message_start` (usage=0) and again on `message_delta`
+  //      (final usage). The first naïve `seen.has(id)` dedup picks #1, which
+  //      is zero — and `context` (the latest turn's input) ends up 0 even
+  //      after a 30k-token turn. Track per-id usage and keep the MAX of each
+  //      field — final values always strictly grow vs. partial ones.
+  const byId = new Map(); // id → { input, output, cacheRead, cacheCreation, model, order }
+  let order = 0;
   const newest = newestFile(path.join(CLAUDE_DIR, 'projects'), '.jsonl');
   const raw = newest && safeRead(newest.path);
-  if (!raw) return { totals, model, turns, lastTs, context, cost };
+  if (!raw) return { totals, model, turns: 0, lastTs, context, cost };
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
     let o;
@@ -238,30 +242,41 @@ function transcriptStats() {
       continue;
     }
     if (o.timestamp) lastTs = o.timestamp;
-    if (o.type === 'assistant' && o.message) {
-      const mid = o.message.id;
-      if (mid) {
-        if (seen.has(mid)) continue;
-        seen.add(mid);
-      }
-      const usage = o.message.usage || {};
-      const input = usage.input_tokens || 0;
-      const output = usage.output_tokens || 0;
-      const cacheRead = usage.cache_read_input_tokens || 0;
-      const cacheCreation = usage.cache_creation_input_tokens || 0;
-      totals.input += input;
-      totals.output += output;
-      totals.cacheRead += cacheRead;
-      totals.cacheCreation += cacheCreation;
-      context = input + cacheRead + cacheCreation;
-      if (o.message.model) model = o.message.model;
-      // Cost this turn, at the message's own model's rates.
-      const r = modelRates(o.message.model, context);
-      cost += (input * r.in + output * r.out + cacheCreation * r.cw + cacheRead * r.cr) / 1_000_000;
-      turns++;
-    }
+    if (o.type !== 'assistant' || !o.message) continue;
+    const mid = o.message.id || `__noid_${order}`; // unique key for missing ids
+    const usage = o.message.usage || {};
+    const cur = byId.get(mid) || {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheCreation: 0,
+      model: null,
+      order: order++,
+    };
+    cur.input = Math.max(cur.input, usage.input_tokens || 0);
+    cur.output = Math.max(cur.output, usage.output_tokens || 0);
+    cur.cacheRead = Math.max(cur.cacheRead, usage.cache_read_input_tokens || 0);
+    cur.cacheCreation = Math.max(cur.cacheCreation, usage.cache_creation_input_tokens || 0);
+    if (o.message.model) cur.model = o.message.model;
+    byId.set(mid, cur);
   }
-  return { totals, model, turns, lastTs, context, cost };
+  // Sum once per id (now with the max usage), and pick `context` from the
+  // latest non-empty message — partial 0/0 entries shouldn't reset the ring
+  // mid-turn.
+  const entries = [...byId.values()].sort((a, b) => a.order - b.order);
+  for (const e of entries) {
+    totals.input += e.input;
+    totals.output += e.output;
+    totals.cacheRead += e.cacheRead;
+    totals.cacheCreation += e.cacheCreation;
+    if (e.model) model = e.model;
+    const ctx = e.input + e.cacheRead + e.cacheCreation;
+    if (ctx > 0) context = ctx;
+    const r = modelRates(e.model, ctx);
+    cost +=
+      (e.input * r.in + e.output * r.out + e.cacheCreation * r.cw + e.cacheRead * r.cr) / 1_000_000;
+  }
+  return { totals, model, turns: entries.length, lastTs, context, cost };
 }
 
 // A short, human one-liner of what a tool call did (command, path, pattern…).
@@ -644,13 +659,14 @@ function readStats() {
     sessionId: sess.sessionId || null,
     tokens: { ...t.totals, total },
     context: t.context,
-    // Authoritative context-window size from Claude Code's statusline (the model
-    // display name doesn't always carry it, e.g. "Opus 4.7"). For OpenCode Go
-    // models claude doesn't know about, the statusline omits it — fall back to
-    // a per-model lookup so the dashboard's context ring still has a denominator.
+    // Authoritative context-window size: trust our per-model lookup first for
+    // non-Anthropic models (claude defaults to 200k for anything it doesn't
+    // recognize — e.g. kimi-k2.6 is actually 256k), and fall back to Claude
+    // Code's own statusline value for everything else (it carries the right
+    // number for Anthropic models, where "Opus 4.7" alone wouldn't).
     contextLimit:
-      (sl.context_window && sl.context_window.context_window_size) ||
       modelContextLimit((sl.model && sl.model.display_name) || t.model) ||
+      (sl.context_window && sl.context_window.context_window_size) ||
       null,
     turns: t.turns,
     // Computed from token usage × per-model rates; fall back to Claude Code's

@@ -18,7 +18,7 @@ import {
   noteLoginSuccess,
 } from './auth.js';
 import { CAPABILITIES, listRoles, createRole, updateRole, deleteRole } from './roles.js';
-import { PROVIDERS } from './providers.js';
+import { listProviders } from './providers.js';
 import type { Capability, Provider } from './types.js';
 import { listGroups, createGroup, updateGroup, deleteGroup } from './groups.js';
 import { listGroupMessages, clearGroupMessages } from './group-chats.js';
@@ -126,7 +126,7 @@ export async function handleApi(
     if (pathname === '/api/settings') return await handleSettings(req, res, manager, method);
     if (pathname === '/api/providers/info') {
       if (method !== 'GET') return (sendJson(res, 405, { error: 'method not allowed' }), true);
-      return (sendJson(res, 200, PROVIDERS), true);
+      return (sendJson(res, 200, await listProviders()), true);
     }
     if (pathname === '/api/providers') return await handleProviders(req, res, manager, method);
     if (pathname === '/api/host') return await handleHost(res, manager, method);

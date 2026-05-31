@@ -1,6 +1,18 @@
 'use client';
 
-import { Button, Input, Label, Modal, Slider, Switch, Tabs, TextField, toast } from '@heroui/react';
+import {
+  Button,
+  Input,
+  Label,
+  ListBox,
+  Modal,
+  Select,
+  Slider,
+  Switch,
+  Tabs,
+  TextField,
+  toast,
+} from '@heroui/react';
 import { useEffect, useState } from 'react';
 import { LuDices, LuDownload, LuShuffle } from 'react-icons/lu';
 import { Identicon, downloadIdenticon, randomSeed } from '@/lib/identicon';
@@ -27,6 +39,11 @@ import { RegistrySelect } from './RolesGroups';
 /** Slider default when first enabling the override (a touch earlier than the
  *  ~83% claude default, so it's a meaningful change). */
 const DEFAULT_PCT = 80;
+
+/** Sentinel for the model dropdown's "Default" option — empty string can't be
+ *  a Select item id (it would render as an unkeyed list and break aria-selected
+ *  state in the popover), so we map model='' ↔ this key at the boundary. */
+const MODEL_DEFAULT_KEY = '__default__';
 
 /**
  * Per-agent settings, in two tabs:
@@ -313,21 +330,34 @@ export function AgentSettingsModal({
                       </div>
 
                       <div className="space-y-2">
-                        <Label htmlFor="agent-model-select" className="text-sm">
-                          Model
-                        </Label>
-                        <select
-                          id="agent-model-select"
-                          value={model}
-                          onChange={(e) => setModel(e.target.value)}
-                          className="border-separator bg-surface focus-visible:ring-accent w-full rounded-md border px-3 py-2 text-sm focus-visible:ring-2 focus-visible:outline-none"
+                        <Select
+                          fullWidth
+                          value={model || MODEL_DEFAULT_KEY}
+                          onChange={(v) => {
+                            const k = String(v ?? MODEL_DEFAULT_KEY);
+                            setModel(k === MODEL_DEFAULT_KEY ? '' : k);
+                          }}
                         >
-                          {providerModels.map((opt) => (
-                            <option key={opt.value} value={opt.value}>
-                              {opt.label}
-                            </option>
-                          ))}
-                        </select>
+                          <Label className="text-sm">Model</Label>
+                          <Select.Trigger>
+                            <Select.Value />
+                            <Select.Indicator />
+                          </Select.Trigger>
+                          <Select.Popover>
+                            <ListBox>
+                              {providerModels.map((opt) => (
+                                <ListBox.Item
+                                  key={opt.value || MODEL_DEFAULT_KEY}
+                                  id={opt.value || MODEL_DEFAULT_KEY}
+                                  textValue={opt.label}
+                                >
+                                  {opt.label}
+                                  <ListBox.ItemIndicator />
+                                </ListBox.Item>
+                              ))}
+                            </ListBox>
+                          </Select.Popover>
+                        </Select>
                         <p className="text-muted text-xs">
                           {provider === 'opencodeGo'
                             ? "Picked from OpenCode Go's catalog. Switches live on save."
