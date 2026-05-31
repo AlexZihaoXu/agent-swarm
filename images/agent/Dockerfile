@@ -222,6 +222,20 @@ RUN cd /opt/agent-tools/discord-mcp \
     && npm prune --omit=dev \
     && chown -R agent:agent /opt/agent-tools/discord-mcp
 
+# Pre-create an empty default GNOME keyring so gnome-keyring-daemon doesn't
+# pop the "Choose password for new keyring" modal the first time Chrome (or
+# any other app) touches the secret service. Password is blank, lock is
+# disabled — fine for a single-user agent container, no real secrets stored.
+RUN mkdir -p /home/agent/.local/share/keyrings \
+    && printf '%s\n' \
+        '[keyring]' \
+        'display-name=Default' \
+        'ctime=0' 'mtime=0' \
+        'lock-on-idle=false' 'lock-after=false' \
+        > /home/agent/.local/share/keyrings/Default.keyring \
+    && echo 'Default' > /home/agent/.local/share/keyrings/default \
+    && chown -R agent:agent /home/agent/.local
+
 # Pre-accept Claude's onboarding + workspace-trust so the auto-started session
 # drops straight to a usable prompt (no trust dialog). Overwrites the simpler
 # seed created above; placed here so the node-pty build layer stays cached.
