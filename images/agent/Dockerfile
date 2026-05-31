@@ -87,7 +87,23 @@ RUN set -eux; \
       DESKTOP=/usr/share/applications/chromium.desktop; BIN=chromium; \
     fi; \
     sed -i -E "s#^Exec=(/usr/bin/)?${BIN}#Exec=\1${BIN} ${FLAGS}#" "${DESKTOP}"; \
-    sed -i 's/tigervncconfig -iconic/tigervncconfig -nowin/' /etc/X11/Xtigervnc-session
+    sed -i 's/tigervncconfig -iconic/tigervncconfig -nowin/' /etc/X11/Xtigervnc-session; \
+    # Shadow the system browser binary with a wrapper that always carries the
+    # flags. Without this, a bare `google-chrome URL` from CLI / xdotool /
+    # xdg-open drops --ignore-gpu-blocklist + --use-angle=vulkan, Chrome's
+    # internal WebGL blocklist trips on the amdgpu+RADV combo, and WebGL falls
+    # back to llvmpipe even though the GPU is reachable. /usr/local/bin is
+    # earlier in PATH than /usr/bin, so this catches every PATH lookup.
+    # Direct `/usr/bin/google-chrome-stable` calls (the .desktop Exec line
+    # uses an absolute path) still hit the real binary without going through
+    # the wrapper — the .desktop already adds the flags itself. \
+    install -d /usr/local/bin; \
+    printf '#!/bin/sh\nexec /usr/bin/%s %s "$@"\n' "${BIN}" "${FLAGS}" \
+      > "/usr/local/bin/${BIN}"; \
+    chmod +x "/usr/local/bin/${BIN}"; \
+    if [ "${BIN}" = "google-chrome-stable" ]; then \
+      ln -sf "${BIN}" /usr/local/bin/google-chrome; \
+    fi
 
 # VS Code (official Microsoft apt repo — ships amd64 + arm64) and common CLI
 # tools. VS Code is Electron, so it needs --no-sandbox in a container too.
