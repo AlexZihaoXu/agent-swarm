@@ -1,6 +1,6 @@
 'use client';
 
-import { Card, ProgressCircle } from '@heroui/react';
+import { Card, ProgressCircle, Tooltip } from '@heroui/react';
 import { animate, motion } from 'framer-motion';
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -11,7 +11,7 @@ import {
   Line,
   LineChart,
   ResponsiveContainer,
-  Tooltip,
+  Tooltip as RechartsTooltip,
   XAxis,
   YAxis,
 } from 'recharts';
@@ -97,32 +97,78 @@ function UsageRing({
         ? 'warning'
         : 'success';
   return (
-    <div className="flex items-center gap-3">
-      <div className="relative grid place-items-center">
-        <ProgressCircle aria-label={`${label} usage`} size="lg" color={color} value={pct}>
-          <ProgressCircle.Track>
-            <ProgressCircle.TrackCircle />
-            <ProgressCircle.FillCircle />
-          </ProgressCircle.Track>
-        </ProgressCircle>
-        <span
-          className={`absolute text-xs font-semibold tabular-nums ${outdated ? 'text-muted' : ''}`}
-        >
-          {Math.round(pct)}%
-        </span>
-      </div>
-      <div className="min-w-0">
-        <div className="text-sm font-semibold">{label}</div>
-        <div className="text-muted text-xs">{resetsIn(w.resetsAt)}</div>
-        {outdated ? (
-          <div className="text-muted/70 text-[11px]">outdated</div>
-        ) : (
-          <div className="text-muted/70 text-[11px] tabular-nums">
-            ~{Math.round(projected)}% projected
+    <Tooltip>
+      <Tooltip.Trigger className="block cursor-help">
+        <div className="flex items-center gap-3">
+          <div className="relative grid place-items-center">
+            <ProgressCircle aria-label={`${label} usage`} size="lg" color={color} value={pct}>
+              <ProgressCircle.Track>
+                <ProgressCircle.TrackCircle />
+                <ProgressCircle.FillCircle />
+              </ProgressCircle.Track>
+            </ProgressCircle>
+            <span
+              className={`absolute text-xs font-semibold tabular-nums ${outdated ? 'text-muted' : ''}`}
+            >
+              {Math.round(pct)}%
+            </span>
           </div>
-        )}
-      </div>
-    </div>
+          <div className="min-w-0">
+            <div className="text-sm font-semibold">{label}</div>
+            <div className="text-muted text-xs">{resetsIn(w.resetsAt)}</div>
+            {outdated ? (
+              <div className="text-muted/70 text-[11px]">outdated</div>
+            ) : (
+              <div className="text-muted/70 text-[11px] tabular-nums">
+                ~{Math.round(projected)}% projected
+              </div>
+            )}
+          </div>
+        </div>
+      </Tooltip.Trigger>
+      <Tooltip.Content showArrow>
+        <Tooltip.Arrow />
+        <div className="min-w-[180px] space-y-1 px-1 py-1.5">
+          <div className="text-sm font-semibold">{label}</div>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs tabular-nums">
+            <dt className="text-muted">Used</dt>
+            <dd className="text-right">{w.usedPercent.toFixed(1)}%</dd>
+            {!outdated && (
+              <>
+                <dt className="text-muted">Projected</dt>
+                <dd
+                  className={`text-right ${
+                    projected >= 100
+                      ? 'text-danger'
+                      : projected >= 80
+                        ? 'text-warning'
+                        : 'text-success'
+                  }`}
+                >
+                  ~{projected.toFixed(0)}%
+                </dd>
+                <dt className="text-muted">Elapsed</dt>
+                <dd className="text-right">{(elapsedFrac * 100).toFixed(0)}% of window</dd>
+              </>
+            )}
+            <dt className="text-muted">Resets</dt>
+            <dd className="text-right">
+              {new Date(w.resetsAt).toLocaleTimeString([], {
+                hour: '2-digit',
+                minute: '2-digit',
+                month: 'short',
+                day: 'numeric',
+              })}
+            </dd>
+          </dl>
+          {outdated && (
+            <p className="text-muted/80 mt-1 text-[11px]">
+              No fresh data for &gt;5m (account idle). Projection paused.
+            </p>
+          )}
+        </div>
+      </Tooltip.Content>
+    </Tooltip>
   );
 }
 
@@ -143,39 +189,64 @@ function useLerp(value: number, duration = 0.45): number {
 }
 
 /** Live resource ring (CPU / memory): a progress circle filled to value/max with
- *  a lerped %, plus a label + sub-line. Colour tracks utilization. */
+ *  a lerped %, plus a label + sub-line. Colour tracks utilization. The ring is
+ *  wrapped in a HeroUI Tooltip; pass `detail` to render formatted breakdown
+ *  (per-agent contributions, host totals, etc.) on hover. */
 function LiveRing({
   label,
   value,
   max,
   format,
+  detail,
 }: {
   label: string;
   value: number;
   max: number;
   /** Sub-line text from the lerped value (so it eases, not jumps). */
   format: (shown: number) => string;
+  /** Tooltip body content. Receives the live (un-lerped) value + max so the
+   *  hover state stays in sync with the headline number — not the eased one. */
+  detail?: (ctx: { value: number; max: number; pct: number }) => React.ReactNode;
 }) {
   const shown = useLerp(value);
   const pct = max > 0 ? Math.min(100, Math.max(0, (shown / max) * 100)) : 0;
+  const livePct = max > 0 ? Math.min(100, Math.max(0, (value / max) * 100)) : 0;
   const color = pct >= 85 ? 'danger' : pct >= 60 ? 'warning' : 'success';
   return (
-    <div className="flex items-center gap-3">
-      <div className="relative grid place-items-center">
-        <ProgressCircle aria-label={`${label} usage`} size="lg" color={color} value={pct}>
-          <ProgressCircle.Track>
-            <ProgressCircle.TrackCircle />
-            <ProgressCircle.FillCircle />
-          </ProgressCircle.Track>
-        </ProgressCircle>
-        <span className="absolute text-xs font-semibold tabular-nums">{Math.round(pct)}%</span>
-      </div>
-      {/* Fixed width so a changing value (e.g. "969 MB" → "1.1 GB") never reflows. */}
-      <div className="w-20">
-        <div className="text-sm font-semibold">{label}</div>
-        <div className="text-muted text-xs tabular-nums">{format(shown)}</div>
-      </div>
-    </div>
+    <Tooltip>
+      <Tooltip.Trigger className="block cursor-help">
+        <div className="flex items-center gap-3">
+          <div className="relative grid place-items-center">
+            <ProgressCircle aria-label={`${label} usage`} size="lg" color={color} value={pct}>
+              <ProgressCircle.Track>
+                <ProgressCircle.TrackCircle />
+                <ProgressCircle.FillCircle />
+              </ProgressCircle.Track>
+            </ProgressCircle>
+            <span className="absolute text-xs font-semibold tabular-nums">{Math.round(pct)}%</span>
+          </div>
+          {/* Fixed width so a changing value (e.g. "969 MB" → "1.1 GB") never reflows. */}
+          <div className="w-20">
+            <div className="text-sm font-semibold">{label}</div>
+            <div className="text-muted text-xs tabular-nums">{format(shown)}</div>
+          </div>
+        </div>
+      </Tooltip.Trigger>
+      <Tooltip.Content showArrow>
+        <Tooltip.Arrow />
+        <div className="min-w-[200px] space-y-1 px-1 py-1.5">
+          <div className="text-sm font-semibold">{label}</div>
+          {detail ? (
+            detail({ value, max, pct: livePct })
+          ) : (
+            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs tabular-nums">
+              <dt className="text-muted">Used</dt>
+              <dd className="text-right">{livePct.toFixed(1)}%</dd>
+            </dl>
+          )}
+        </div>
+      </Tooltip.Content>
+    </Tooltip>
   );
 }
 
@@ -312,18 +383,98 @@ export function DashboardMetrics() {
                 value={usage?.cpuPct ?? 0}
                 max={host ? host.cpus * 100 : 100}
                 format={() => (host ? `${host.cpus} cores` : '')}
+                detail={({ value, max, pct }) => (
+                  <>
+                    <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs tabular-nums">
+                      <dt className="text-muted">Used</dt>
+                      <dd className="text-right">{pct.toFixed(1)}% of host</dd>
+                      <dt className="text-muted">Busy</dt>
+                      <dd className="text-right">
+                        {(value / 100).toFixed(2)} / {(max / 100).toFixed(0)} cores
+                      </dd>
+                    </dl>
+                    {usage && usage.agents.length > 0 && (
+                      <div className="border-separator/40 mt-2 border-t pt-1.5">
+                        <div className="text-muted/80 mb-1 text-[10px] tracking-wide uppercase">
+                          Per agent
+                        </div>
+                        <ul className="space-y-0.5 text-xs tabular-nums">
+                          {[...usage.agents]
+                            .sort((a, b) => b.cpuPct - a.cpuPct)
+                            .map((a) => (
+                              <li key={a.id} className="flex justify-between gap-3">
+                                <span className="truncate">{a.name}</span>
+                                <span
+                                  className={
+                                    a.cpuPct >= 100
+                                      ? 'text-warning'
+                                      : a.cpuPct >= 50
+                                        ? 'text-foreground'
+                                        : 'text-muted'
+                                  }
+                                >
+                                  {a.cpuPct.toFixed(1)}%
+                                </span>
+                              </li>
+                            ))}
+                        </ul>
+                      </div>
+                    )}
+                  </>
+                )}
               />
               <LiveRing
                 label="Memory"
                 value={usage?.memUsed ?? 0}
                 max={host ? host.memoryMb * (1 << 20) : 1}
                 format={(v) => fmtBytes(v)}
+                detail={({ value, max, pct }) => (
+                  <>
+                    <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs tabular-nums">
+                      <dt className="text-muted">Used</dt>
+                      <dd className="text-right">{pct.toFixed(1)}%</dd>
+                      <dt className="text-muted">Total</dt>
+                      <dd className="text-right">
+                        {fmtBytes(value)} / {fmtBytes(max)}
+                      </dd>
+                    </dl>
+                    {usage && usage.agents.length > 0 && (
+                      <div className="border-separator/40 mt-2 border-t pt-1.5">
+                        <div className="text-muted/80 mb-1 text-[10px] tracking-wide uppercase">
+                          Per agent (RSS)
+                        </div>
+                        <ul className="space-y-0.5 text-xs tabular-nums">
+                          {[...usage.agents]
+                            .sort((a, b) => b.memUsed - a.memUsed)
+                            .map((a) => (
+                              <li key={a.id} className="flex justify-between gap-3">
+                                <span className="truncate">{a.name}</span>
+                                <span>{fmtBytes(a.memUsed)}</span>
+                              </li>
+                            ))}
+                        </ul>
+                      </div>
+                    )}
+                  </>
+                )}
               />
               <LiveRing
                 label="Disk"
                 value={host ? host.diskUsedMb * (1 << 20) : 0}
                 max={host ? host.diskTotalMb * (1 << 20) : 1}
                 format={(v) => fmtBytes(v)}
+                detail={({ value, max, pct }) => (
+                  <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs tabular-nums">
+                    <dt className="text-muted">Used</dt>
+                    <dd className="text-right">{pct.toFixed(1)}%</dd>
+                    <dt className="text-muted">Total</dt>
+                    <dd className="text-right">
+                      {fmtBytes(value)} / {fmtBytes(max)}
+                    </dd>
+                    <dt className="text-muted">Free</dt>
+                    <dd className="text-right">{fmtBytes(Math.max(0, max - value))}</dd>
+                  </dl>
+                )}
               />
             </div>
 
@@ -362,7 +513,7 @@ export function DashboardMetrics() {
                         tick={AXIS}
                         stroke="var(--separator)"
                       />
-                      <Tooltip
+                      <RechartsTooltip
                         cursor={{ fill: 'rgba(255,255,255,0.05)' }}
                         contentStyle={TOOLTIP}
                         labelStyle={{ color: 'var(--muted)' }}
@@ -408,7 +559,7 @@ export function DashboardMetrics() {
                       tick={AXIS}
                       stroke="var(--separator)"
                     />
-                    <Tooltip
+                    <RechartsTooltip
                       cursor={{ fill: 'rgba(255,255,255,0.05)' }}
                       contentStyle={TOOLTIP}
                       labelStyle={{ color: 'var(--muted)' }}
@@ -554,7 +705,7 @@ function ResourceChart({
                 tickFormatter={tickFormat ?? format}
                 allowDataOverflow
               />
-              <Tooltip
+              <RechartsTooltip
                 allowEscapeViewBox={{ x: false, y: true }}
                 wrapperStyle={{ zIndex: 50 }}
                 content={<ResourceTooltip format={format} />}

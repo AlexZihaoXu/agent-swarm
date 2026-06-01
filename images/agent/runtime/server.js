@@ -169,21 +169,55 @@ function startRetryProxy() {
 
 // --- System (CPU + memory) sampling ---------------------------------------
 // `docker stats` on a sysbox-runc container only sees its outer cgroup, not
-// the nested per-service cgroups systemd creates inside. So docker stats says
-// "5 MB used" while the agent's actual process tree is using 2-3 GB. Reading
-// /proc from INSIDE the container, via Node's os module, gets the real
-// numbers (the kernel exposes them through the container's user namespace).
+// the nested per-service cgroups systemd creates inside, so it under-reports
+// memory by ~500x (atlas: 5 MB via docker stats vs 2.7 GB of real process
+// RSS). And /proc/stat inside the container is host-wide (every container
+// reads the same numbers), so naive os.cpus() can't distinguish per-agent CPU
+// either. We read both from the container's own cgroup v2 view:
 //
-// CPU%: sum of (user + nice + sys + irq) jiffies across all cores divided by
-// total jiffies, multiplied by core count, between consecutive samples. We
-// sample once per second and serve the most recent reading on /api/system.
-// Memory: os.totalmem() / os.freemem() give the container's seen total and
-// free; `used = total - free`. (Linux's `free` shows buffers/cache as `used`
-// in the traditional view; we follow the same convention for consistency
-// with the existing dashboard ring math.)
-let lastCpuSample = null;
+//   CPU: /sys/fs/cgroup/cpu.stat exposes usage_usec — total microseconds the
+//   cgroup's tasks have spent on-CPU. Delta over wall time → cores busy →
+//   cpu% (1 core fully busy = 100%, scales up to cores*100). Falls back to
+//   /proc/stat if cgroup is unreadable so this still works outside sysbox.
+//
+//   Memory: sum VmRSS from /proc/*/status (the pid namespace scopes it to
+//   this container's process tree). See sumProcessRss below.
+const CGROUP_CPU_STAT = '/sys/fs/cgroup/cpu.stat';
+
+function readCgroupUsec() {
+  try {
+    const s = fs.readFileSync(CGROUP_CPU_STAT, 'utf8');
+    const m = s.match(/^usage_usec\s+(\d+)/m);
+    if (m) return parseInt(m[1], 10);
+  } catch {
+    /* cgroup v1 or unreadable — fall back */
+  }
+  return null;
+}
+
+let lastCpuSample = null; // either {usec, time} (cgroup) or {idle, total} (host)
 let cpuPctCached = 0;
+
 function sampleCpu() {
+  const usec = readCgroupUsec();
+  if (usec !== null) {
+    const now = Date.now();
+    if (lastCpuSample && typeof lastCpuSample.usec === 'number') {
+      const usecDelta = usec - lastCpuSample.usec;
+      const wallUsec = (now - lastCpuSample.time) * 1000;
+      if (wallUsec > 0 && usecDelta >= 0) {
+        // Cores busy this interval = cgroup usec / wall usec. Convert to a
+        // "% of one core" scale (cpu% = cores_busy * 100). A 4-core spinning
+        // load reads 400, capped at cores * 100.
+        const coresBusy = usecDelta / wallUsec;
+        cpuPctCached = Math.max(0, Math.min(os.cpus().length * 100, coresBusy * 100));
+      }
+    }
+    lastCpuSample = { usec, time: now };
+    return;
+  }
+  // Fallback: host-wide /proc/stat (less useful — all containers read the
+  // same numbers — but keeps us alive outside sysbox/cgroup v2 setups).
   const cpus = os.cpus();
   let idle = 0;
   let total = 0;
@@ -192,7 +226,7 @@ function sampleCpu() {
     idle += t.idle;
     total += t.user + t.nice + t.sys + t.idle + t.irq;
   }
-  if (lastCpuSample) {
+  if (lastCpuSample && typeof lastCpuSample.total === 'number') {
     const idleDelta = idle - lastCpuSample.idle;
     const totalDelta = total - lastCpuSample.total;
     if (totalDelta > 0) {
@@ -205,14 +239,54 @@ function sampleCpu() {
 sampleCpu(); // seed
 setInterval(sampleCpu, 1000);
 
+// /proc/meminfo inside the container exposes the HOST's view (same numbers in
+// every container), so os.totalmem() / freemem() can't tell us per-agent
+// memory — every agent would read 9 GB even when one is idle and another is
+// thrashing. Sum VmRSS from /proc/*/status instead: the pid namespace scopes
+// it to the container's own process tree, so we get true per-agent usage.
+function sumProcessRss() {
+  let rss = 0;
+  let pids;
+  try {
+    pids = fs.readdirSync('/proc');
+  } catch {
+    return 0;
+  }
+  for (const name of pids) {
+    if (!/^\d+$/.test(name)) continue;
+    try {
+      const s = fs.readFileSync(`/proc/${name}/status`, 'utf8');
+      const m = s.match(/^VmRSS:\s+(\d+)\s+kB/m);
+      if (m) rss += parseInt(m[1], 10) * 1024;
+    } catch {
+      /* process exited between readdir and read — ignore */
+    }
+  }
+  return rss;
+}
+
+// Memory cap from cgroup v2's memory.max (set by docker --memory at agent
+// creation). Fall back to host total when uncapped or unreadable, so the
+// dashboard ring still has a sensible denominator.
+function cgroupMemLimit() {
+  try {
+    const v = fs.readFileSync('/sys/fs/cgroup/memory.max', 'utf8').trim();
+    if (v && v !== 'max') {
+      const n = parseInt(v, 10);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+  } catch {
+    /* cgroup v1 / unreadable — fall through */
+  }
+  return os.totalmem();
+}
+
 function systemSnapshot() {
-  const total = os.totalmem();
-  const free = os.freemem();
   return {
     cpuPct: Math.round(cpuPctCached * 100) / 100, // 0..(cores*100)
     cores: os.cpus().length,
-    memUsed: total - free,
-    memLimit: total,
+    memUsed: sumProcessRss(),
+    memLimit: cgroupMemLimit(),
   };
 }
 
