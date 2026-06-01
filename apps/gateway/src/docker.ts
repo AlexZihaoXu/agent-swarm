@@ -1539,23 +1539,28 @@ export class AgentManager {
     });
     return containers.map((c) => {
       const id = this.idFromName(c.Names[0] ?? '');
+      const identity = this.readIdentity(id);
       return {
         id,
         name: (c.Names[0] ?? '').replace(/^\//, ''),
         image: c.Image,
         // Display name: the on-disk identity is the editable source of truth;
         // fall back to the seed label, then the id.
-        username: this.readIdentity(id)?.name ?? c.Labels?.[USERNAME_LABEL] ?? id,
+        username: identity?.name ?? c.Labels?.[USERNAME_LABEL] ?? id,
         status: c.State,
         createdAt: c.Created * 1000,
         cpus: c.Labels?.[CPUS_LABEL] ? Number(c.Labels[CPUS_LABEL]) : undefined,
         memoryMb: c.Labels?.[MEMORY_LABEL] ? Number(c.Labels[MEMORY_LABEL]) : undefined,
         timezone: c.Labels?.[TZ_LABEL],
-        autoCompactPct: this.readIdentity(id)?.autoCompactPct ?? null,
-        model: this.readIdentity(id)?.model ?? null,
-        roles: this.readIdentity(id)?.roles ?? [],
-        groups: this.readIdentity(id)?.groups ?? [],
-        avatarSeed: this.readIdentity(id)?.avatarSeed ?? id,
+        autoCompactPct: identity?.autoCompactPct ?? null,
+        provider: identity?.provider ?? 'anthropic',
+        model: identity?.model ?? null,
+        roles: identity?.roles ?? [],
+        groups: identity?.groups ?? [],
+        permissions: identity?.permissions ?? [],
+        compacting: this.isCompacting(id),
+        compactingProgress: this.compactingProgress(id),
+        avatarSeed: identity?.avatarSeed ?? id,
       };
     });
   }
