@@ -970,13 +970,21 @@ export class AgentManager {
     if (elapsed >= AgentManager.COMPACTING_TTL_MS) return 0;
     return elapsed / AgentManager.COMPACTING_TTL_MS;
   }
-  /** Global per-window rate-limit alert latches (limits are account-shared, so the
-   *  state is the same for every agent). Re-armed when the window drops well below
-   *  the threshold (or resets). Avoids re-spamming capable agents each tick. */
-  private readonly usageAlertState = {
-    fiveHour: { warned: false, level: null as 'warning' | 'critical' | null },
-    sevenDay: { warned: false, level: null as 'warning' | 'critical' | null },
+  /** Global per-window rate-limit alert latches with hysteresis. Per the
+   *  operator's stated model: "warn at X%, reset and warn again only after it
+   *  drops back to X-10%". We track the metric that fired (actual % for
+   *  critical, projected % for warning) AND the value it fired at, then
+   *  re-arm only when that same metric drops USAGE_ALERT_HYSTERESIS below
+   *  the firing value. Limits are account-shared so the latch is global,
+   *  not per-agent. */
+  private usageAlertState: {
+    fiveHour: { firedLevel: 'warning' | 'critical' | null; firedAtValue: number };
+    sevenDay: { firedLevel: 'warning' | 'critical' | null; firedAtValue: number };
+  } = {
+    fiveHour: { firedLevel: null, firedAtValue: 0 },
+    sevenDay: { firedLevel: null, firedAtValue: 0 },
   };
+  private static readonly USAGE_ALERT_HYSTERESIS = 10;
 
   /** Memory watchdog with hysteresis: warn once at ≥80% (re-arm after dropping
    *  below 70%) and once at ≥90% (re-arm after dropping below 80%). */
@@ -1106,37 +1114,56 @@ export class AgentManager {
         { key: 'fiveHour', label: '5h' },
         { key: 'sevenDay', label: '7d' },
       ];
-      // Figure out, per window, whether to fire and what message — before touching
-      // the agent list (so we skip the docker call entirely when nothing's due).
+      // Tier order: critical (2) outranks warning (1). We only escalate (never
+      // downgrade) once latched, mirroring checkMemory's hysteresis.
+      const tier = (l: 'warning' | 'critical' | null): number =>
+        l === 'critical' ? 2 : l === 'warning' ? 1 : 0;
+
       const due: { label: string; level: 'warning' | 'critical'; text: string }[] = [];
+      let stateChanged = false;
       for (const { key, label } of windows) {
         const w = rl[key];
         const st = this.usageAlertState[key];
         const actual = w.usedPercent;
         const projected = this.projectWindow(w, AgentManager.WINDOW_MS[key]);
-        // Re-arm once usage eases back below 75% (mirrors checkMemory's reset) and
-        // the projection no longer threatens to blow the window.
-        if (actual < 75 && projected < 100) {
-          st.warned = false;
-          st.level = null;
+
+        // Hysteresis re-arm: the metric that fired (actual for critical,
+        // projected for warning) has to drop USAGE_ALERT_HYSTERESIS below the
+        // value it fired at before we'll consider firing the same window
+        // again. So a window that warned at projected=120% won't re-warn
+        // until projection dips below 110% — a steady 105% projection no
+        // longer spams once warned.
+        if (st.firedLevel) {
+          const curOfFiredMetric = st.firedLevel === 'critical' ? actual : projected;
+          if (curOfFiredMetric < st.firedAtValue - AgentManager.USAGE_ALERT_HYSTERESIS) {
+            st.firedLevel = null;
+            st.firedAtValue = 0;
+            stateChanged = true;
+          }
         }
-        const level: 'warning' | 'critical' | null =
+
+        const nextLevel: 'warning' | 'critical' | null =
           actual >= 90 ? 'critical' : projected >= 100 ? 'warning' : null;
-        if (!level) continue;
-        // Already warned at this (or a higher) level for this window → stay quiet.
-        if (st.warned && (st.level === level || st.level === 'critical')) continue;
-        st.warned = true;
-        st.level = level;
+        if (!nextLevel) continue;
+        // Already fired same-or-higher tier for this window → stay quiet.
+        if (tier(nextLevel) <= tier(st.firedLevel)) continue;
+
+        st.firedLevel = nextLevel;
+        st.firedAtValue = nextLevel === 'critical' ? actual : projected;
+        stateChanged = true;
         const when = resetsInLabel(w.resetsAt);
         const pct = Math.round(actual);
         const text =
-          level === 'critical'
+          nextLevel === 'critical'
             ? `**[sys://usage]** Heads up: the ${label} usage window is at ${pct}% (resets ${when}). ` +
               `You're close to the cap — pace heavy work or pause non-urgent tasks.`
             : `**[sys://usage]** Heads up: at the current burn rate the ${label} usage window is ` +
               `projected to hit 100% before it resets (${when}); currently ${pct}%. Consider slowing down.`;
-        due.push({ label, level, text });
+        due.push({ label, level: nextLevel, text });
       }
+      // Persist the latch across gateway restarts so we don't re-spam every
+      // time the dashboard container is rebuilt.
+      if (stateChanged) this.saveState();
       if (!due.length) return;
       for (const a of await this.list()) {
         if (a.status !== 'running') continue;
@@ -1205,6 +1232,7 @@ export class AgentManager {
           updatedAt: number;
         } | null;
         rateLimitsChangedAt?: number;
+        usageAlertState?: AgentManager['usageAlertState'];
       };
       const cutoff = Date.now() - USAGE_RETAIN_MS;
       this.usageHistory = (s.usage?.points ?? []).filter((p) => p && p.t >= cutoff);
@@ -1212,6 +1240,9 @@ export class AgentManager {
       if (s.rateLimits) this.lastRateLimits = s.rateLimits;
       if (typeof s.rateLimitsChangedAt === 'number')
         this.lastRateLimitsChangedAt = s.rateLimitsChangedAt;
+      // Preserve the hysteresis latch across gateway restarts so a dashboard
+      // rebuild doesn't reset the warning floor and re-spam capable agents.
+      if (s.usageAlertState) this.usageAlertState = s.usageAlertState;
     } catch {
       /* no prior state — start fresh */
     }
@@ -1230,6 +1261,7 @@ export class AgentManager {
             usage: { names: Object.fromEntries(this.usageNames), points: this.usageHistory },
             rateLimits: this.lastRateLimits,
             rateLimitsChangedAt: this.lastRateLimitsChangedAt,
+            usageAlertState: this.usageAlertState,
           }),
         );
       } catch {
