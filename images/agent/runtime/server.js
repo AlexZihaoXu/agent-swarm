@@ -24,6 +24,7 @@ const { WebSocketServer } = require('ws');
 const pty = require('node-pty');
 const { Terminal } = require('@xterm/headless');
 const { SerializeAddon } = require('@xterm/addon-serialize');
+const { createRetryProxy } = require('./retry-proxy');
 
 const PORT = parseInt(process.env.TERMINALS_PORT || '7681', 10);
 const HOME = process.env.AGENT_HOME || '/home/agent';
@@ -40,12 +41,24 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const AUTH_FILE = path.join(HOME, '.swarm', 'auth');
 
-// In-agent opencode-proxy: oc-go-cc (https://github.com/samueltuyizere/oc-go-cc),
-// an Anthropic Messages ↔ OpenCode Go translator. Launched once at supervisor
-// start (below). When the agent's provider is 'opencodeGo' we point
-// ANTHROPIC_BASE_URL at it. The API key + per-agent config (model tier
-// mapping) come from disk so changes propagate on (re)spawn without a recreate.
+// In-agent opencode-proxy stack:
+//   claude  ──HTTP──►  retry-proxy (8765)  ──HTTP──►  oc-go-cc (8766)  ──TLS──►  opencode.ai
+//
+// oc-go-cc (https://github.com/samueltuyizere/oc-go-cc) translates Anthropic
+// Messages requests into OpenCode Go's API. It listens on a private port and
+// has its own model-fallback chain.
+//
+// The retry-proxy in front of it catches the case oc-go-cc surfaces as a 502
+// when ALL fallback models hit a transient upstream error (the same minute, a
+// retry usually succeeds). On 5xx/connection-reset, it replays the request up
+// to RETRY_MAX times with exponential backoff. Streaming SSE bodies are piped
+// straight through once the response status comes back ≤499 — we only swap on
+// the initial status, never mid-stream.
+//
+// ANTHROPIC_BASE_URL is set to the retry-proxy (8765); the swap is invisible
+// to claude.
 const OPENCODE_PROXY_PORT = parseInt(process.env.OPENCODE_PROXY_PORT || '8765', 10);
+const OC_GO_CC_INTERNAL_PORT = parseInt(process.env.OC_GO_CC_INTERNAL_PORT || '8766', 10);
 const OPENCODE_PROXY_BIN = '/usr/local/bin/oc-go-cc';
 const OPENCODE_KEY_FILE = path.join(HOME, '.swarm', 'opencode-go-key');
 const OPENCODE_CONFIG_FILE = path.join(HOME, '.swarm', 'oc-go-cc-config.json');
@@ -117,7 +130,7 @@ function startOpencodeProxy() {
       ...process.env,
       OC_GO_CC_API_KEY: apiKey || 'unset',
       OC_GO_CC_HOST: '127.0.0.1',
-      OC_GO_CC_PORT: String(OPENCODE_PROXY_PORT),
+      OC_GO_CC_PORT: String(OC_GO_CC_INTERNAL_PORT),
       HOME,
     };
     const args = ['serve'];
@@ -134,6 +147,23 @@ function startOpencodeProxy() {
     });
   };
   start();
+}
+
+// Bring up the retry-proxy in front of oc-go-cc. The proxy itself lives in
+// retry-proxy.js so its retry/backoff logic can be unit-tested without booting
+// the rest of the supervisor; we just instantiate + listen here.
+function startRetryProxy() {
+  const server = createRetryProxy({
+    upstreamHost: '127.0.0.1',
+    upstreamPort: OC_GO_CC_INTERNAL_PORT,
+  });
+  server.on('error', (e) => console.error('[retry-proxy] server error:', e));
+  server.listen(OPENCODE_PROXY_PORT, '127.0.0.1', () => {
+    console.log(
+      `[retry-proxy] listening on 127.0.0.1:${OPENCODE_PROXY_PORT} → ` +
+        `127.0.0.1:${OC_GO_CC_INTERNAL_PORT} (oc-go-cc)`,
+    );
+  });
 }
 
 // --- Claude session stats -------------------------------------------------
@@ -1128,9 +1158,12 @@ server.listen(PORT, () => {
   maybeNudgeResume(); // checks the gap BEFORE we overwrite the heartbeat below
   writeHeartbeat();
   setInterval(writeHeartbeat, 15_000);
-  // Start the opencode-proxy BEFORE the first claude session so an
+  // Start the opencode-proxy chain BEFORE the first claude session so an
   // opencodeGo-provider agent's claude finds the proxy already listening.
+  // Order matters: oc-go-cc first (so by the time the retry proxy receives a
+  // request, the upstream is ready), then the retry proxy in front of it.
   startOpencodeProxy();
+  startRetryProxy();
   try {
     createSession({ name: 'claude', command: claudeBootCommand() }); // always-on, from boot
   } catch (e) {

@@ -439,7 +439,11 @@ export class AgentManager {
     const tier = (model_id: string) => ({ provider: 'opencode-go', model_id, temperature: 0.7 });
     const config = {
       host: '127.0.0.1',
-      port: 8765,
+      // oc-go-cc runs on an internal port behind the retry-proxy. The
+      // supervisor (images/agent/runtime/server.js) overrides this anyway via
+      // OC_GO_CC_PORT, but writing it here keeps the file self-consistent if
+      // the operator inspects it.
+      port: 8766,
       models: {
         default: { ...tier(model), max_tokens: 8192 },
         background: { ...tier(model), max_tokens: 4096 },
@@ -926,6 +930,14 @@ export class AgentManager {
   /** Per-agent auto-compact latch: true once we've fired for this fill, re-armed
    *  when context drops back below 50% (so one fill = one /compact). */
   private readonly autoCompactState = new Map<string, boolean>();
+  /** Per-agent "last /compact at" timestamp (epoch ms) for debouncing — claude's
+   *  TUI takes a beat to consume an `Esc + /compact + Enter` injection, and a
+   *  second injection landing mid-receive piles the slash-command text into the
+   *  still-busy input buffer (we've seen `/compact/compact/compact/...` strings
+   *  in the prompt). Compaction itself runs for ~30-60s; we drop any duplicate
+   *  request inside this window since the in-flight compaction is what the
+   *  caller wanted anyway. */
+  private readonly lastCompactAt = new Map<string, number>();
   /** Global per-window rate-limit alert latches (limits are account-shared, so the
    *  state is the same for every agent). Re-armed when the window drops well below
    *  the threshold (or resets). Avoids re-spamming capable agents each tick. */
@@ -1838,12 +1850,24 @@ export class AgentManager {
     return `/home/agent/.swarm/views/${basename(dest)}`;
   }
 
+  /** Minimum gap between back-to-back /compact injections for the same agent.
+   *  Compaction itself takes ~30-60s; anything inside this window is a duplicate
+   *  of the in-flight compaction and would just pile typed text into the TUI
+   *  buffer (the bug we're guarding against). */
+  private static readonly COMPACT_DEBOUNCE_MS = 30_000;
+
   /** Run Claude Code's own native `/compact` slash command in an agent's claude
    *  session (the operator button + the `compact_agents` peer tool + the
    *  auto-compact watchdog all funnel through here). Nothing about Claude Code
    *  is modified — we just type `/compact` into the live TUI, pressing Esc first
-   *  (interrupt=true) so it runs NOW even if the agent is mid-turn. */
-  async compactAgent(id: string): Promise<void> {
+   *  (interrupt=true) so it runs NOW even if the agent is mid-turn.
+   *
+   *  Debounced: if a /compact was already injected for this agent within the
+   *  last COMPACT_DEBOUNCE_MS, the call is a silent no-op. Returns `false` in
+   *  that case so callers can distinguish (the HTTP layer still surfaces
+   *  {ok:true} either way, since the compaction the caller wanted is in
+   *  flight). Always returns `true` after a fresh injection. */
+  async compactAgent(id: string): Promise<boolean> {
     let agent: Agent;
     try {
       agent = await this.getAgent(id);
@@ -1852,7 +1876,17 @@ export class AgentManager {
     }
     if (agent.status !== 'running')
       throw Object.assign(new Error('agent is not running'), { statusCode: 409 });
+    const now = Date.now();
+    const last = this.lastCompactAt.get(id) ?? 0;
+    if (now - last < AgentManager.COMPACT_DEBOUNCE_MS) {
+      console.log(
+        `[compact] ${agent.username || id}: debounced (${Math.round((now - last) / 1000)}s since last)`,
+      );
+      return false;
+    }
+    this.lastCompactAt.set(id, now);
     await this.injectToTerminal(id, '/compact', true);
+    return true;
   }
 
   /** Capability-gated context compaction of a peer (the `compact_agents` role

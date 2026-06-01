@@ -578,8 +578,11 @@ async function handleAgents(
     }
   } else if (action === 'compact') {
     if (method === 'POST') {
-      await manager.compactAgent(id);
-      return (sendJson(res, 200, { ok: true }), true);
+      // `fired` is false when the call was debounced (a /compact for this agent
+      // landed less than 30s ago — the in-flight compaction is what the caller
+      // wanted anyway, so the HTTP outcome is still {ok:true}).
+      const fired = await manager.compactAgent(id);
+      return (sendJson(res, 200, { ok: true, debounced: !fired }), true);
     }
   } else if (method === 'POST') {
     if (action === 'recreate') return (sendJson(res, 200, await manager.recreate(id)), true);

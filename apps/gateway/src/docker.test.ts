@@ -43,3 +43,65 @@ test('ports mode inspects the container and uses the published port', async () =
     port: 32770,
   });
 });
+
+// --- compactAgent debounce -------------------------------------------------
+// The TUI accumulates typed text from rapid Esc+/compact+Enter injections
+// when claude isn't immediately in input mode, producing `/compact/compact/
+// /compact/...` strings in the prompt. The debounce drops duplicate calls
+// inside a fixed window (current default: 30s) so the in-flight compaction
+// runs to completion before a new injection lands.
+
+function stubManager(opts: { running?: boolean } = {}) {
+  const manager = new AgentManager({} as Docker, { ...config, mode: 'network' });
+  const calls: { id: string; text: string; interrupt: boolean }[] = [];
+  // The HTTP fetch in injectToTerminal would otherwise try to reach a real
+  // terminal; stub it to record the call instead.
+  (
+    manager as unknown as {
+      injectToTerminal: (id: string, text: string, interrupt?: boolean) => Promise<void>;
+    }
+  ).injectToTerminal = async (id, text, interrupt = false) => {
+    calls.push({ id, text, interrupt });
+  };
+  // getAgent normally inspects Docker; stub with the requested status.
+  (manager as unknown as { getAgent: (id: string) => Promise<unknown> }).getAgent = async (id) => ({
+    id,
+    name: id,
+    image: 'agent-swarm/agent:test',
+    status: opts.running === false ? 'exited' : 'running',
+    createdAt: 0,
+    username: id,
+  });
+  return { manager, calls };
+}
+
+test('compactAgent injects /compact with interrupt=true on first call', async () => {
+  const { manager, calls } = stubManager();
+  const fired = await manager.compactAgent('alpha');
+  assert.equal(fired, true);
+  assert.deepEqual(calls, [{ id: 'alpha', text: '/compact', interrupt: true }]);
+});
+
+test('compactAgent is debounced: second call inside the window is a no-op', async () => {
+  const { manager, calls } = stubManager();
+  await manager.compactAgent('alpha');
+  const fired = await manager.compactAgent('alpha');
+  assert.equal(fired, false, 'second call should report not fired');
+  assert.equal(calls.length, 1, 'only the first call should have injected');
+});
+
+test('compactAgent debounce is per-agent (alpha + beta both fire)', async () => {
+  const { manager, calls } = stubManager();
+  await manager.compactAgent('alpha');
+  await manager.compactAgent('beta');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0]!.id, 'alpha');
+  assert.equal(calls[1]!.id, 'beta');
+});
+
+test('compactAgent throws 409 when the agent is not running', async () => {
+  const { manager } = stubManager({ running: false });
+  await assert.rejects(manager.compactAgent('alpha'), {
+    message: 'agent is not running',
+  });
+});
