@@ -927,17 +927,43 @@ export class AgentManager {
   private autoCompactTimer: ReturnType<typeof setInterval> | null = null;
   /** Per-agent memory-warning latches for hysteresis (avoid repeat warnings). */
   private readonly memState = new Map<string, { warned80: boolean; warned90: boolean }>();
-  /** Per-agent auto-compact latch: true once we've fired for this fill, re-armed
-   *  when context drops back below 50% (so one fill = one /compact). */
-  private readonly autoCompactState = new Map<string, boolean>();
+  /** Per-agent auto-compact cooldown: epoch ms until which the watchdog is
+   *  suppressed after firing /compact. See AUTO_COMPACT_COOLDOWN_MS. */
+  private readonly autoCompactCooldownUntil = new Map<string, number>();
   /** Per-agent "last /compact at" timestamp (epoch ms) for debouncing — claude's
    *  TUI takes a beat to consume an `Esc + /compact + Enter` injection, and a
    *  second injection landing mid-receive piles the slash-command text into the
    *  still-busy input buffer (we've seen `/compact/compact/compact/...` strings
    *  in the prompt). Compaction itself runs for ~30-60s; we drop any duplicate
    *  request inside this window since the in-flight compaction is what the
-   *  caller wanted anyway. */
+   *  caller wanted anyway. Doubles as the "compacting in progress" signal for
+   *  the dashboard UI: an agent is shown as compacting for COMPACTING_TTL_MS
+   *  after the last successful injection (see isCompacting). */
   private readonly lastCompactAt = new Map<string, number>();
+  /** How long after a /compact injection we report the agent as `compacting`
+   *  in the dashboard UI. Slightly under COMPACT_DEBOUNCE_MS so the UI badge
+   *  clears just before the next click would be allowed. */
+  private static readonly COMPACTING_TTL_MS = 75_000;
+
+  /** Whether an agent is currently compacting (injected /compact within the
+   *  last COMPACTING_TTL_MS). Surfaced as `compacting` on the Agent type so the
+   *  dashboard can show a "Compacting…" chip on the card. */
+  isCompacting(id: string): boolean {
+    const t = this.lastCompactAt.get(id) ?? 0;
+    return t > 0 && Date.now() - t < AgentManager.COMPACTING_TTL_MS;
+  }
+
+  /** Fraction of the compaction TTL elapsed (0..1) so the dashboard can render
+   *  a progress bar. Returns 0 when not compacting. The TTL is an estimate of
+   *  how long /compact takes (Claude doesn't expose actual progress) — the bar
+   *  is a hint, not a precise readout. */
+  compactingProgress(id: string): number {
+    const t = this.lastCompactAt.get(id) ?? 0;
+    if (t === 0) return 0;
+    const elapsed = Date.now() - t;
+    if (elapsed >= AgentManager.COMPACTING_TTL_MS) return 0;
+    return elapsed / AgentManager.COMPACTING_TTL_MS;
+  }
   /** Global per-window rate-limit alert latches (limits are account-shared, so the
    *  state is the same for every agent). Re-armed when the window drops well below
    *  the threshold (or resets). Avoids re-spamming capable agents each tick. */
@@ -979,14 +1005,25 @@ export class AgentManager {
     }
   }
 
+  /** After firing an auto-compact, suppress the watchdog for this long. Five
+   *  minutes is well above a typical /compact's ~30-60s runtime — claude has
+   *  time to actually shrink the context before we consider re-firing. The
+   *  old "re-arm when context < 50%" approach broke for thresholds < 50%:
+   *  46% > 40% threshold would re-fire every tick (the fill < 50% so the
+   *  latch re-armed even though we'd just fired). The cooldown is absolute
+   *  in time, so the threshold value doesn't matter. */
+  private static readonly AUTO_COMPACT_COOLDOWN_MS = 5 * 60 * 1000;
+
   /** Auto-compact watchdog — the swarm's REAL auto-compact (gateway-driven),
-   *  since the in-claude CLAUDE_AUTOCOMPACT_PCT_OVERRIDE env was unreliable. For
-   *  each running agent: read its live context-window fill and, when it crosses
-   *  the agent's threshold (identity.autoCompactPct, default 85; >=100 disables),
-   *  run Claude Code's native `/compact` (Esc + /compact — interrupts a busy turn,
-   *  which is intended). A per-agent latch makes one fill = one /compact; it
-   *  re-arms once context falls back below 50%. Best-effort + per-agent try/catch
-   *  so the timer never throws (a missed tick just retries 60s later). */
+   *  since the in-claude CLAUDE_AUTOCOMPACT_PCT_OVERRIDE env was unreliable.
+   *  For each running agent: read its live context-window fill and, when it
+   *  crosses the agent's threshold (identity.autoCompactPct, default 85;
+   *  >=100 disables), run Claude Code's native `/compact` (Esc + /compact —
+   *  interrupts a busy turn, which is intended). A per-agent cooldown holds
+   *  the watchdog off for AUTO_COMPACT_COOLDOWN_MS after each fire so the
+   *  compaction can complete before the next tick reconsiders. Best-effort +
+   *  per-agent try/catch so the timer never throws (a missed tick just
+   *  retries 60s later). */
   private async checkAutoCompact(): Promise<void> {
     let agents: Agent[];
     try {
@@ -999,9 +1036,13 @@ export class AgentManager {
       try {
         const threshold = this.readIdentity(a.id)?.autoCompactPct ?? 85;
         if (threshold >= 100) {
-          this.autoCompactState.delete(a.id); // "off" — drop any stale latch
+          this.autoCompactCooldownUntil.delete(a.id); // "off" — drop the cooldown
           continue;
         }
+        // Still cooling down from the last fire? Skip this tick.
+        const cooldownUntil = this.autoCompactCooldownUntil.get(a.id) ?? 0;
+        if (Date.now() < cooldownUntil) continue;
+
         const { host, port } = await this.resolveTarget(a.id, 'terminal');
         const resp = await fetch(`http://${host}:${port}/api/stats`);
         if (!resp.ok) continue;
@@ -1013,14 +1054,17 @@ export class AgentManager {
         const contextLimit = typeof s.contextLimit === 'number' ? s.contextLimit : 0;
         const contextPct = contextLimit > 0 ? (context / contextLimit) * 100 : null;
         if (contextPct === null) continue;
-        if (contextPct < 50) this.autoCompactState.set(a.id, false); // re-arm
-        const latched = this.autoCompactState.get(a.id) === true;
-        if (contextPct >= threshold && !latched) {
-          this.autoCompactState.set(a.id, true);
+        if (contextPct >= threshold) {
+          this.autoCompactCooldownUntil.set(
+            a.id,
+            Date.now() + AgentManager.AUTO_COMPACT_COOLDOWN_MS,
+          );
           await this.compactAgent(a.id);
           console.log(
             `[auto-compact] ${a.username || a.id}: context ${Math.round(contextPct)}% ` +
-              `>= ${threshold}% — ran /compact`,
+              `>= ${threshold}% — ran /compact (cooldown ${Math.round(
+                AgentManager.AUTO_COMPACT_COOLDOWN_MS / 1000,
+              )}s)`,
           );
         }
       } catch {
@@ -1851,10 +1895,11 @@ export class AgentManager {
   }
 
   /** Minimum gap between back-to-back /compact injections for the same agent.
-   *  Compaction itself takes ~30-60s; anything inside this window is a duplicate
-   *  of the in-flight compaction and would just pile typed text into the TUI
-   *  buffer (the bug we're guarding against). */
-  private static readonly COMPACT_DEBOUNCE_MS = 30_000;
+   *  Compaction itself takes ~30-60s; we hold off longer than that so two
+   *  injections never overlap and pile typed text into the TUI buffer. This is
+   *  the manual/peer-path gate; the auto-compact watchdog has its own (longer)
+   *  cooldown in AUTO_COMPACT_COOLDOWN_MS. */
+  private static readonly COMPACT_DEBOUNCE_MS = 90_000;
 
   /** Run Claude Code's own native `/compact` slash command in an agent's claude
    *  session (the operator button + the `compact_agents` peer tool + the
@@ -2391,6 +2436,8 @@ export class AgentManager {
       roles: this.readIdentity(id)?.roles ?? [],
       groups: this.readIdentity(id)?.groups ?? [],
       permissions: this.readIdentity(id)?.permissions ?? [],
+      compacting: this.isCompacting(id),
+      compactingProgress: this.compactingProgress(id),
       avatarSeed: this.readIdentity(id)?.avatarSeed ?? id,
     };
   }

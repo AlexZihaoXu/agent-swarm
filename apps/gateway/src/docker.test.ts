@@ -105,3 +105,28 @@ test('compactAgent throws 409 when the agent is not running', async () => {
     message: 'agent is not running',
   });
 });
+
+test('isCompacting flips to true after a successful fire and reads progress', async () => {
+  const { manager } = stubManager();
+  assert.equal(manager.isCompacting('alpha'), false, 'no compaction → false');
+  assert.equal(manager.compactingProgress('alpha'), 0, 'no compaction → 0');
+  await manager.compactAgent('alpha');
+  assert.equal(manager.isCompacting('alpha'), true, 'after fire → true');
+  const p = manager.compactingProgress('alpha');
+  assert.ok(p >= 0 && p < 1, `progress should be in [0,1); got ${p}`);
+});
+
+test('debounced second call does NOT reset the compacting clock', async () => {
+  const { manager } = stubManager();
+  await manager.compactAgent('alpha');
+  const beforeProgress = manager.compactingProgress('alpha');
+  // Wait a beat so progress would advance if we re-clocked
+  await new Promise((r) => setTimeout(r, 10));
+  const fired = await manager.compactAgent('alpha');
+  assert.equal(fired, false, 'debounced');
+  const afterProgress = manager.compactingProgress('alpha');
+  assert.ok(
+    afterProgress >= beforeProgress,
+    'progress should keep advancing forward, never rewind',
+  );
+});

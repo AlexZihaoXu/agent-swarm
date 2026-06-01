@@ -24,6 +24,12 @@ export interface Agent {
   groups?: string[];
   /** Direct per-agent capability grants (union'd with role-based permissions). */
   permissions?: Capability[];
+  /** True while a /compact is presumed still in flight — the dashboard shows a
+   *  "Compacting…" chip on the card. Set when the gateway injects /compact;
+   *  clears after a ~75s TTL (Claude doesn't expose actual progress). */
+  compacting?: boolean;
+  /** Rough progress hint (0..1) for the compacting indicator's bar. */
+  compactingProgress?: number;
   /** Identicon avatar seed (defaults to the id; reshuffleable). */
   avatarSeed?: string;
 }

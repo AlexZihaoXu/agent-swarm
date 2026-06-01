@@ -49,6 +49,13 @@ export interface Agent {
   groups?: string[];
   /** Direct per-agent capability grants (union'd with role-based permissions). */
   permissions?: Capability[];
+  /** True when a /compact has been injected recently and the compaction is
+   *  presumed still in flight (TTL-based — Claude doesn't expose actual state).
+   *  Drives the "Compacting…" indicator on the dashboard's agent card. */
+  compacting?: boolean;
+  /** Fraction (0..1) of the compaction TTL elapsed — a rough progress hint
+   *  for the dashboard; 0 when not compacting. */
+  compactingProgress?: number;
   /** Seed for this agent's identicon avatar. Defaults to the id; reshuffleable. */
   avatarSeed?: string;
 }

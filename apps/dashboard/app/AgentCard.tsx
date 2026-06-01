@@ -30,6 +30,7 @@ import {
 import { Identicon } from '@/lib/identicon';
 import { AgentActivity, AgentStatsInline, useAgentStats } from './AgentStats';
 import { AgentSettingsModal } from './AgentSettingsModal';
+import { CompactingBadge } from './CompactingBadge';
 import { ConfirmActionDialog } from './ConfirmActionDialog';
 import { PackageModal } from './PackageModal';
 import { FileExplorer } from './FileExplorer';
@@ -176,6 +177,11 @@ export function AgentCard({
               lastActivity={stats?.lastActivity}
             />
           </div>
+          {agent.compacting && (
+            <div className="mt-2">
+              <CompactingBadge progress={agent.compactingProgress ?? 0} />
+            </div>
+          )}
         </div>
       </div>
 
