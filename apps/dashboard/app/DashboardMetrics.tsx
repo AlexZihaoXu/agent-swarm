@@ -35,7 +35,9 @@ function fmtBytes(n: number): string {
 }
 function fmtClock(t: number): string {
   const d = new Date(t);
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const h = d.getHours();
+  const hour12 = h % 12 === 0 ? 12 : h % 12;
+  return `${hour12}:${String(d.getMinutes()).padStart(2, '0')}${h < 12 ? 'AM' : 'PM'}`;
 }
 
 function fmtTokens(n: number): string {
@@ -47,7 +49,11 @@ function fmtCost(n: number): string {
   return `$${n < 1 ? n.toFixed(2) : n.toFixed(2)}`;
 }
 function fmtHour(t: number): string {
-  return `${String(new Date(t).getHours()).padStart(2, '0')}:00`;
+  const h = new Date(t).getHours();
+  // 12-hour clock, no zero-pad: 0→12AM, 1-11→1AM-11AM, 12→12PM, 13-23→1PM-11PM.
+  // Compact for the recharts X axis (tick labels are tight).
+  const hour12 = h % 12 === 0 ? 12 : h % 12;
+  return `${hour12}${h < 12 ? 'AM' : 'PM'}`;
 }
 function resetsIn(at: number): string {
   const ms = at - Date.now();
