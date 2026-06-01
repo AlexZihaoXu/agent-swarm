@@ -98,7 +98,7 @@ function UsageRing({
         : 'success';
   return (
     <Tooltip>
-      <Tooltip.Trigger className="block cursor-help">
+      <Tooltip.Trigger className="block">
         <div className="flex items-center gap-3">
           <div className="relative grid place-items-center">
             <ProgressCircle aria-label={`${label} usage`} size="lg" color={color} value={pct}>
@@ -188,6 +188,67 @@ function useLerp(value: number, duration = 0.45): number {
   return shown;
 }
 
+/** A number whose displayed value lerps to each new target — drop-in replacement
+ *  for `{format(value)}`. Used inside the metrics tooltips so changing values
+ *  ease instead of flashing every 500ms-poll cycle. */
+function LerpNum({
+  value,
+  format,
+  duration = 0.6,
+}: {
+  value: number;
+  format: (v: number) => string;
+  duration?: number;
+}) {
+  const shown = useLerp(value, duration);
+  return <>{format(shown)}</>;
+}
+
+/** A per-agent breakdown list with framer-motion `layout` animation: when the
+ *  sort order changes (because an agent's CPU% or memory crosses someone else),
+ *  the rows glide to their new positions instead of snapping. Color tone +
+ *  numeric value also transition smoothly. */
+function PerAgentList<T extends { id: string; name: string }>({
+  items,
+  sortBy,
+  format,
+  tone,
+}: {
+  items: T[];
+  /** Larger first. */
+  sortBy: (item: T) => number;
+  format: (item: T) => React.ReactNode;
+  tone?: (item: T) => string;
+}) {
+  const sorted = [...items].sort((a, b) => sortBy(b) - sortBy(a));
+  return (
+    <motion.ul
+      layout
+      className="space-y-0.5 text-xs tabular-nums"
+      transition={{ layout: { duration: 0.45, ease: [0.22, 1, 0.36, 1] } }}
+    >
+      {sorted.map((a) => (
+        <motion.li
+          key={a.id}
+          layout="position"
+          transition={{ layout: { duration: 0.45, ease: [0.22, 1, 0.36, 1] } }}
+          className="flex justify-between gap-3"
+        >
+          <span className="truncate">{a.name}</span>
+          <motion.span
+            // Animate color smoothly when the agent crosses a tier threshold.
+            // tailwind colors aren't keyframable directly, but switching the
+            // class triggers CSS transitions on `color` — declared below.
+            className={`transition-colors duration-300 ${tone ? tone(a) : 'text-foreground'}`}
+          >
+            {format(a)}
+          </motion.span>
+        </motion.li>
+      ))}
+    </motion.ul>
+  );
+}
+
 /** Live resource ring (CPU / memory): a progress circle filled to value/max with
  *  a lerped %, plus a label + sub-line. Colour tracks utilization. The ring is
  *  wrapped in a HeroUI Tooltip; pass `detail` to render formatted breakdown
@@ -214,7 +275,7 @@ function LiveRing({
   const color = pct >= 85 ? 'danger' : pct >= 60 ? 'warning' : 'success';
   return (
     <Tooltip>
-      <Tooltip.Trigger className="block cursor-help">
+      <Tooltip.Trigger className="block">
         <div className="flex items-center gap-3">
           <div className="relative grid place-items-center">
             <ProgressCircle aria-label={`${label} usage`} size="lg" color={color} value={pct}>
@@ -387,10 +448,13 @@ export function DashboardMetrics() {
                   <>
                     <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs tabular-nums">
                       <dt className="text-muted">Used</dt>
-                      <dd className="text-right">{pct.toFixed(1)}% of host</dd>
+                      <dd className="text-right">
+                        <LerpNum value={pct} format={(v) => `${v.toFixed(1)}% of host`} />
+                      </dd>
                       <dt className="text-muted">Busy</dt>
                       <dd className="text-right">
-                        {(value / 100).toFixed(2)} / {(max / 100).toFixed(0)} cores
+                        <LerpNum value={value} format={(v) => (v / 100).toFixed(2)} /> /{' '}
+                        {(max / 100).toFixed(0)} cores
                       </dd>
                     </dl>
                     {usage && usage.agents.length > 0 && (
@@ -398,26 +462,20 @@ export function DashboardMetrics() {
                         <div className="text-muted/80 mb-1 text-[10px] tracking-wide uppercase">
                           Per agent
                         </div>
-                        <ul className="space-y-0.5 text-xs tabular-nums">
-                          {[...usage.agents]
-                            .sort((a, b) => b.cpuPct - a.cpuPct)
-                            .map((a) => (
-                              <li key={a.id} className="flex justify-between gap-3">
-                                <span className="truncate">{a.name}</span>
-                                <span
-                                  className={
-                                    a.cpuPct >= 100
-                                      ? 'text-warning'
-                                      : a.cpuPct >= 50
-                                        ? 'text-foreground'
-                                        : 'text-muted'
-                                  }
-                                >
-                                  {a.cpuPct.toFixed(1)}%
-                                </span>
-                              </li>
-                            ))}
-                        </ul>
+                        <PerAgentList
+                          items={usage.agents}
+                          sortBy={(a) => a.cpuPct}
+                          format={(a) => (
+                            <LerpNum value={a.cpuPct} format={(v) => `${v.toFixed(1)}%`} />
+                          )}
+                          tone={(a) =>
+                            a.cpuPct >= 100
+                              ? 'text-warning'
+                              : a.cpuPct >= 50
+                                ? 'text-foreground'
+                                : 'text-muted'
+                          }
+                        />
                       </div>
                     )}
                   </>
@@ -432,10 +490,12 @@ export function DashboardMetrics() {
                   <>
                     <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs tabular-nums">
                       <dt className="text-muted">Used</dt>
-                      <dd className="text-right">{pct.toFixed(1)}%</dd>
+                      <dd className="text-right">
+                        <LerpNum value={pct} format={(v) => `${v.toFixed(1)}%`} />
+                      </dd>
                       <dt className="text-muted">Total</dt>
                       <dd className="text-right">
-                        {fmtBytes(value)} / {fmtBytes(max)}
+                        <LerpNum value={value} format={fmtBytes} /> / {fmtBytes(max)}
                       </dd>
                     </dl>
                     {usage && usage.agents.length > 0 && (
@@ -443,16 +503,11 @@ export function DashboardMetrics() {
                         <div className="text-muted/80 mb-1 text-[10px] tracking-wide uppercase">
                           Per agent (RSS)
                         </div>
-                        <ul className="space-y-0.5 text-xs tabular-nums">
-                          {[...usage.agents]
-                            .sort((a, b) => b.memUsed - a.memUsed)
-                            .map((a) => (
-                              <li key={a.id} className="flex justify-between gap-3">
-                                <span className="truncate">{a.name}</span>
-                                <span>{fmtBytes(a.memUsed)}</span>
-                              </li>
-                            ))}
-                        </ul>
+                        <PerAgentList
+                          items={usage.agents}
+                          sortBy={(a) => a.memUsed}
+                          format={(a) => <LerpNum value={a.memUsed} format={fmtBytes} />}
+                        />
                       </div>
                     )}
                   </>
@@ -466,13 +521,17 @@ export function DashboardMetrics() {
                 detail={({ value, max, pct }) => (
                   <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs tabular-nums">
                     <dt className="text-muted">Used</dt>
-                    <dd className="text-right">{pct.toFixed(1)}%</dd>
+                    <dd className="text-right">
+                      <LerpNum value={pct} format={(v) => `${v.toFixed(1)}%`} />
+                    </dd>
                     <dt className="text-muted">Total</dt>
                     <dd className="text-right">
-                      {fmtBytes(value)} / {fmtBytes(max)}
+                      <LerpNum value={value} format={fmtBytes} /> / {fmtBytes(max)}
                     </dd>
                     <dt className="text-muted">Free</dt>
-                    <dd className="text-right">{fmtBytes(Math.max(0, max - value))}</dd>
+                    <dd className="text-right">
+                      <LerpNum value={Math.max(0, max - value)} format={fmtBytes} />
+                    </dd>
                   </dl>
                 )}
               />
