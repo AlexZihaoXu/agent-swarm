@@ -18,6 +18,7 @@
 
 const http = require('http');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const cp = require('child_process');
 const { WebSocketServer } = require('ws');
@@ -164,6 +165,55 @@ function startRetryProxy() {
         `127.0.0.1:${OC_GO_CC_INTERNAL_PORT} (oc-go-cc)`,
     );
   });
+}
+
+// --- System (CPU + memory) sampling ---------------------------------------
+// `docker stats` on a sysbox-runc container only sees its outer cgroup, not
+// the nested per-service cgroups systemd creates inside. So docker stats says
+// "5 MB used" while the agent's actual process tree is using 2-3 GB. Reading
+// /proc from INSIDE the container, via Node's os module, gets the real
+// numbers (the kernel exposes them through the container's user namespace).
+//
+// CPU%: sum of (user + nice + sys + irq) jiffies across all cores divided by
+// total jiffies, multiplied by core count, between consecutive samples. We
+// sample once per second and serve the most recent reading on /api/system.
+// Memory: os.totalmem() / os.freemem() give the container's seen total and
+// free; `used = total - free`. (Linux's `free` shows buffers/cache as `used`
+// in the traditional view; we follow the same convention for consistency
+// with the existing dashboard ring math.)
+let lastCpuSample = null;
+let cpuPctCached = 0;
+function sampleCpu() {
+  const cpus = os.cpus();
+  let idle = 0;
+  let total = 0;
+  for (const c of cpus) {
+    const t = c.times;
+    idle += t.idle;
+    total += t.user + t.nice + t.sys + t.idle + t.irq;
+  }
+  if (lastCpuSample) {
+    const idleDelta = idle - lastCpuSample.idle;
+    const totalDelta = total - lastCpuSample.total;
+    if (totalDelta > 0) {
+      const busyFrac = 1 - idleDelta / totalDelta;
+      cpuPctCached = Math.max(0, Math.min(cpus.length * 100, busyFrac * cpus.length * 100));
+    }
+  }
+  lastCpuSample = { idle, total };
+}
+sampleCpu(); // seed
+setInterval(sampleCpu, 1000);
+
+function systemSnapshot() {
+  const total = os.totalmem();
+  const free = os.freemem();
+  return {
+    cpuPct: Math.round(cpuPctCached * 100) / 100, // 0..(cores*100)
+    cores: os.cpus().length,
+    memUsed: total - free,
+    memLimit: total,
+  };
 }
 
 // --- Claude session stats -------------------------------------------------
@@ -953,6 +1003,14 @@ const server = http.createServer(async (req, res) => {
   // is the noVNC stream). Cached ~1s so multiple viewers don't hammer X.
   if (u.pathname === '/api/screenshot' && req.method === 'GET') {
     return sendScreenshot(res);
+  }
+  // Container-wide CPU% and memory totals computed from /proc as seen INSIDE
+  // the container. The gateway polls this in place of `docker stats` because
+  // sysbox-runc's nested cgroups defeat the outer stats — atlas reads ~5 MB
+  // via `docker stats` while its process tree actually uses ~2.7 GB. Reading
+  // /proc inside the user namespace gets the real numbers.
+  if (u.pathname === '/api/system' && req.method === 'GET') {
+    return sendJson(res, 200, systemSnapshot());
   }
   // Saved computer-use / show_image screenshots (the chat renders these inline).
   const shot = u.pathname.match(/^\/api\/shots\/([\w.\-]+\.jpg)$/);

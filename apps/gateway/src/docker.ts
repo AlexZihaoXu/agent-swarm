@@ -133,10 +133,14 @@ export class AgentManager {
   private building = false;
   /** Receive-side Discord connections, keyed by agent id (apply → connect). */
   private readonly discord = new DiscordBridge();
-  /** Live per-agent resource usage (cpu% + memory), fed by docker stats streams
-   *  (one per running agent), so the dashboard can poll it cheaply/often. */
+  /** Live per-agent resource usage (cpu% + memory). Fed by HTTP polls to each
+   *  agent's in-container `/api/system` endpoint — `docker stats` was unusable
+   *  with sysbox-runc (its nested cgroups defeat outer-cgroup accounting:
+   *  docker reported ~5MB while the agent's process tree actually used ~2.7GB).
+   *  The in-container supervisor reads /proc directly and exposes the real
+   *  numbers; we poll all running agents every USAGE_POLL_MS. */
   private readonly usage = new Map<string, { cpuPct: number; memUsed: number; memLimit: number }>();
-  private readonly usageStreams = new Map<string, Readable>();
+  private usagePollTimer: ReturnType<typeof setInterval> | null = null;
   /** 12h per-agent cpu/mem history (sampled ~1/min) for the dashboard graphs,
    *  plus id→name for the line labels. In-memory (resets on gateway restart). */
   private usageHistory: { t: number; cpu: Record<string, number>; mem: Record<string, number> }[] =
@@ -791,57 +795,68 @@ export class AgentManager {
   } | null = null;
   private lastRateLimitsChangedAt = 0;
 
-  /** Start a docker stats stream for one agent (idempotent), parsing each frame
-   *  into a cached cpu%/memory snapshot. Docker emits ~1 frame/s and includes
-   *  precpu_stats for the CPU delta, so we don't have to sample ourselves. */
-  private ensureUsageStream(id: string): void {
-    if (this.usageStreams.has(id)) return;
-    void this.docker
-      .getContainer(this.containerName(id))
-      .stats({ stream: true })
-      .then((stream) => {
-        const s = stream as unknown as Readable;
-        this.usageStreams.set(id, s);
-        let buf = '';
-        s.on('data', (chunk: Buffer) => {
-          buf += chunk.toString();
-          let nl: number;
-          while ((nl = buf.indexOf('\n')) >= 0) {
-            const line = buf.slice(0, nl);
-            buf = buf.slice(nl + 1);
-            if (!line.trim()) continue;
-            try {
-              const d = JSON.parse(line);
-              const cpuDelta =
-                (d.cpu_stats?.cpu_usage?.total_usage ?? 0) -
-                (d.precpu_stats?.cpu_usage?.total_usage ?? 0);
-              const sysDelta =
-                (d.cpu_stats?.system_cpu_usage ?? 0) - (d.precpu_stats?.system_cpu_usage ?? 0);
-              const cores =
-                d.cpu_stats?.online_cpus || d.cpu_stats?.cpu_usage?.percpu_usage?.length || 1;
-              const cpuPct = sysDelta > 0 && cpuDelta > 0 ? (cpuDelta / sysDelta) * cores * 100 : 0;
-              const memUsed =
-                (d.memory_stats?.usage ?? 0) - (d.memory_stats?.stats?.inactive_file ?? 0);
-              const memLimit = d.memory_stats?.limit ?? 0;
-              this.usage.set(id, { cpuPct, memUsed, memLimit });
-            } catch {
-              /* skip a malformed frame */
-            }
-          }
-        });
-        const drop = () => {
-          this.usageStreams.delete(id);
-          this.usage.delete(id);
-        };
-        s.on('error', drop);
-        s.on('close', drop);
-        s.on('end', drop);
-      })
-      .catch(() => {});
+  /** How often the gateway polls each agent's /api/system endpoint. The
+   *  endpoint already samples /proc at 1Hz internally, so 2s here keeps the
+   *  cache fresh without unnecessary HTTP traffic. */
+  private static readonly USAGE_POLL_MS = 2_000;
+
+  /** Poll one agent's in-container /api/system (set by images/agent/runtime/
+   *  server.js). The supervisor reads /proc from inside the container's user
+   *  namespace, so the numbers reflect EVERY process in the agent's tree —
+   *  unlike `docker stats`, which on sysbox-runc only sees the outer cgroup
+   *  and reports a fraction of true usage. Returns null on any failure (we
+   *  keep the previous reading rather than zeroing it out). */
+  private async pollAgentUsage(
+    id: string,
+  ): Promise<{ cpuPct: number; memUsed: number; memLimit: number } | null> {
+    try {
+      const { host, port } = await this.resolveTarget(id, 'terminal');
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), 2000);
+      const resp = await fetch(`http://${host}:${port}/api/system`, { signal: ac.signal });
+      clearTimeout(timer);
+      if (!resp.ok) return null;
+      const d = (await resp.json()) as {
+        cpuPct?: number;
+        memUsed?: number;
+        memLimit?: number;
+      };
+      return {
+        cpuPct: typeof d.cpuPct === 'number' ? d.cpuPct : 0,
+        memUsed: typeof d.memUsed === 'number' ? d.memUsed : 0,
+        memLimit: typeof d.memLimit === 'number' ? d.memLimit : 0,
+      };
+    } catch {
+      return null;
+    }
   }
 
-  /** Live resource usage across running agents (cpu% = cores×100, memory bytes).
-   *  Lazily starts/stops the per-agent stats streams to match the fleet. */
+  /** One sweep: poll every running agent in parallel, update the usage Map,
+   *  and forget agents that have stopped. */
+  private async refreshUsage(): Promise<void> {
+    let all: Agent[];
+    try {
+      all = await this.list();
+    } catch {
+      return;
+    }
+    const running = all.filter((a) => a.status === 'running');
+    const live = new Set(running.map((a) => a.id));
+    // Forget stopped agents so the Map doesn't accumulate stale entries.
+    for (const id of [...this.usage.keys()]) {
+      if (!live.has(id)) this.usage.delete(id);
+    }
+    await Promise.all(
+      running.map(async (a) => {
+        const u = await this.pollAgentUsage(a.id);
+        if (u) this.usage.set(a.id, u);
+      }),
+    );
+  }
+
+  /** Live resource usage across running agents (cpu% = cores×100, memory
+   *  bytes). Returns the cached usage Map snapshot — refreshed by the
+   *  USAGE_POLL_MS background timer (started by startUsageSampling). */
   async usageSnapshot(): Promise<{
     cpuPct: number;
     memUsed: number;
@@ -850,20 +865,6 @@ export class AgentManager {
   }> {
     const all = await this.list();
     const running = all.filter((a) => a.status === 'running');
-    const live = new Set(running.map((a) => a.id));
-    for (const a of running) this.ensureUsageStream(a.id);
-    // Tear down streams for agents that are no longer running.
-    for (const id of [...this.usageStreams.keys()]) {
-      if (!live.has(id)) {
-        try {
-          this.usageStreams.get(id)?.destroy();
-        } catch {
-          /* ignore */
-        }
-        this.usageStreams.delete(id);
-        this.usage.delete(id);
-      }
-    }
     const agents = running.map((a) => {
       const u = this.usage.get(a.id) ?? { cpuPct: 0, memUsed: 0, memLimit: 0 };
       return { id: a.id, name: a.username || a.id, ...u };
@@ -902,13 +903,18 @@ export class AgentManager {
   startUsageSampling(): void {
     if (this.samplingTimer) return;
     this.loadState();
+    // Live (~2s) per-agent CPU+memory poll via the in-container /api/system.
+    // Replaces the old docker.stats stream, which under-reported by ~500x on
+    // sysbox-runc (nested cgroups not visible to the outer-container view).
+    void this.refreshUsage();
+    this.usagePollTimer = setInterval(() => void this.refreshUsage(), AgentManager.USAGE_POLL_MS);
     void this.sampleUsage();
     this.samplingTimer = setInterval(() => void this.sampleUsage(), 60_000);
     // Disk watch: prune transient inboxes + warn the agent when its home > 1GB.
     this.diskTimer = setInterval(() => void this.checkDisks(), 5 * 60_000);
     void this.checkDisks();
     // Memory watchdog: warn at 80%/90% of the cap with hysteresis (reads the
-    // live per-agent usage the stats streams already provide — cheap).
+    // live per-agent usage the /api/system poll already keeps fresh).
     this.memTimer = setInterval(() => this.checkMemory(), 10_000);
     // Usage watchdog: warn capable agents when a rate-limit window is projected
     // to hit 100% (or actually reaches 90%). Limits change slowly, so 60s is plenty.
