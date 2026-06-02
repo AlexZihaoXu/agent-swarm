@@ -7,34 +7,60 @@ import { config } from './config.js';
 import type { Capability, Role } from './types.js';
 
 /** Catalog of special capabilities a role can grant, with human-readable copy
- *  for the role editor and the agent's roles.md doc. */
-export const CAPABILITIES: { key: Capability; label: string; description: string }[] = [
+ *  for the role editor + the agent's roles.md doc. `mcpHelp` is the exact
+ *  behavior of the agent-side MCP tool that capability unlocks — surfaced in
+ *  the dashboard's "?" popover next to each switch so the operator can read,
+ *  before flipping, what the agent will actually be able to do. */
+export const CAPABILITIES: {
+  key: Capability;
+  label: string;
+  description: string;
+  mcpHelp: string;
+}[] = [
   {
     key: 'manage_agents',
     label: 'Manage agents',
     description: 'Start and stop other agents in the swarm (cannot remove them).',
+    mcpHelp:
+      "Tool: swarm_manage_agent(agent, action). `agent` = the peer's id or display name; `action` = 'start' or 'stop'. The gateway resolves the peer, verifies you share a group, and dispatches docker start/stop on its container. Scope: peers only — you can't manage yourself or agents you don't share a group with. The agent's persistent disk is untouched; removing an agent is operator-only.",
   },
   {
     key: 'view_screen',
     label: 'View screens',
     description: "Capture and view another agent's live screen image.",
+    mcpHelp:
+      "Tool: swarm_view_agent(agent). Captures the peer's noVNC desktop as a JPEG, writes it into your ~/.swarm/views/<peer>-<ts>.jpg, and returns the path so you can Read it. Scope: peers in a shared group. No side effect on the peer beyond a brief X server screenshot grab.",
   },
   {
     key: 'compact_agents',
     label: 'Compact agents',
     description: 'Trigger context compaction (/compact) on other agents that share a group.',
+    mcpHelp:
+      "Tool: swarm_compact_agent(agent). Runs Claude Code's native /compact slash command on the peer (Esc + /compact + Enter, interrupting any mid-turn). Debounced 90s per peer to avoid pile-up. Scope: peers in a shared group. The peer's transcript is preserved; only its context is compacted.",
   },
   {
     key: 'view_stats',
     label: 'Read agent stats',
     description:
       "Read other agents' live stats (context-window usage, tokens, activity) for agents that share a group.",
+    mcpHelp:
+      "Tool: swarm_agent_stats(agent). Returns the peer's current model, status (idle/busy/waiting), context-window fill, total tokens (input/output/cache), and last activity timestamp. Read-only. Scope: peers in a shared group.",
   },
   {
     key: 'dashboard_alerts',
     label: 'Dashboard usage alerts',
     description:
       'Read the swarm dashboard usage (5h/7d rate-limit windows, tokens, cost) and receive proactive warnings when usage is projected to hit 100% or actually reaches 90% of a window.',
+    mcpHelp:
+      'Tool: swarm_dashboard_usage(). Returns the current 5h + 7d rate-limit windows (used %, projected %, reset time) and the 12h token/cost totals across the swarm. Read-only. Also makes you eligible for proactive sys://usage warnings the gateway pushes when a window is projected to hit 100% or actually reaches 90%.',
+  },
+  {
+    key: 'toggle_desktop',
+    label: 'Toggle own desktop',
+    description:
+      "Turn this agent's own GNOME + noVNC desktop on or off (e.g., to free ~2 GB RSS when not needed).",
+    mcpHelp:
+      "Tool: swarm_toggle_desktop(enabled). `enabled` = true to bring the GNOME + noVNC stack up, false to stop it (saves ~2 GB RSS — gnome-shell, mutter, chrome, etc.). Scope: self only — you can't toggle a peer's desktop. The change takes effect immediately via systemctl start/stop tigervncserver@:1 novnc, and the marker on disk also gates the next boot. Your claude TUI session keeps running through the toggle.",
   },
 ];
 

@@ -11,10 +11,11 @@ import {
   Switch,
   Tabs,
   TextField,
+  Tooltip,
   toast,
 } from '@heroui/react';
 import { useEffect, useState } from 'react';
-import { LuDices, LuDownload, LuShuffle } from 'react-icons/lu';
+import { LuCircleHelp, LuDices, LuDownload, LuShuffle } from 'react-icons/lu';
 import { Identicon, downloadIdenticon, randomSeed } from '@/lib/identicon';
 import {
   getAgent,
@@ -392,23 +393,48 @@ export function AgentSettingsModal({
                           </p>
                           <div className="space-y-2">
                             {allCaps.map((c) => (
-                              <Switch
-                                key={c.key}
-                                isSelected={permissions.includes(c.key)}
-                                onChange={(on) =>
-                                  setPermissions((prev) =>
-                                    on ? [...prev, c.key] : prev.filter((p) => p !== c.key),
-                                  )
-                                }
-                              >
-                                <Switch.Control>
-                                  <Switch.Thumb />
-                                </Switch.Control>
-                                <Switch.Content>
-                                  <Label className="text-sm">{c.label}</Label>
-                                  <p className="text-muted text-xs">{c.description}</p>
-                                </Switch.Content>
-                              </Switch>
+                              <div key={c.key} className="flex items-start gap-2">
+                                <Switch
+                                  className="flex-1"
+                                  isSelected={permissions.includes(c.key)}
+                                  onChange={(on) =>
+                                    setPermissions((prev) =>
+                                      on ? [...prev, c.key] : prev.filter((p) => p !== c.key),
+                                    )
+                                  }
+                                >
+                                  <Switch.Control>
+                                    <Switch.Thumb />
+                                  </Switch.Control>
+                                  <Switch.Content>
+                                    <Label className="text-sm">{c.label}</Label>
+                                    <p className="text-muted text-xs">{c.description}</p>
+                                  </Switch.Content>
+                                </Switch>
+                                {c.mcpHelp && (
+                                  <Tooltip>
+                                    <Tooltip.Trigger
+                                      aria-label={`Help for ${c.label}`}
+                                      className="text-muted hover:text-foreground focus-visible:text-foreground mt-0.5 shrink-0 rounded-full p-1 focus-visible:outline-none"
+                                    >
+                                      <LuCircleHelp className="size-4" aria-hidden />
+                                    </Tooltip.Trigger>
+                                    <Tooltip.Content
+                                      showArrow
+                                      placement="left"
+                                      className="max-w-[360px]"
+                                    >
+                                      <Tooltip.Arrow />
+                                      <div className="space-y-1 px-1 py-1.5">
+                                        <div className="text-xs font-semibold">
+                                          What this lets the agent do
+                                        </div>
+                                        <p className="text-xs leading-relaxed">{c.mcpHelp}</p>
+                                      </div>
+                                    </Tooltip.Content>
+                                  </Tooltip>
+                                )}
+                              </div>
                             ))}
                           </div>
                         </div>

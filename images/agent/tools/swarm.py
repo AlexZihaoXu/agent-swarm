@@ -237,6 +237,37 @@ def compact_agent(args: dict) -> dict:
     return _ok(f"ran /compact on {name} (its context window is being compacted now)")
 
 
+def toggle_desktop(args: dict) -> dict:
+    raw = args.get("enabled")
+    if isinstance(raw, str):
+        enabled = raw.strip().lower() in ("true", "1", "yes", "on")
+    elif isinstance(raw, bool):
+        enabled = raw
+    else:
+        return _err("'enabled' (bool) is required: true to turn the desktop ON, false to turn it OFF")
+    me = _identity()
+    try:
+        r = _http("POST", "/api/swarm/desktop", {"fromId": me["id"], "desktop": enabled})
+    except urllib.error.HTTPError as e:
+        if e.code == 403:
+            return _err(
+                "your role lacks the 'toggle own desktop' capability — ask the operator to grant "
+                "it to one of your roles."
+            )
+        return _err(f"HTTP {e.code}: {e.read().decode()[:200]}")
+    except Exception as e:  # noqa: BLE001
+        return _err(str(e))
+    state = "ON" if (r or {}).get("desktop") else "OFF"
+    return _ok(
+        f"desktop is now {state}. "
+        + (
+            "The GNOME + noVNC stack is running again."
+            if enabled
+            else "The GNOME + noVNC stack is stopped — saves ~2 GB RSS. Your claude TUI is unaffected."
+        )
+    )
+
+
 def agent_stats(args: dict) -> dict:
     to = str(args.get("agent") or "").strip()
     if not to:
@@ -438,6 +469,24 @@ TOOLS = [
         {},
         [],
         swarm_usage,
+    ),
+    (
+        "swarm_toggle_desktop",
+        "Turn YOUR OWN GNOME + noVNC desktop on or off. Off saves ~2 GB of RSS "
+        "(gnome-shell, mutter, chrome). On brings the desktop back so it's reachable "
+        "via the dashboard's Desktop tab. Takes effect immediately (systemctl "
+        "start|stop tigervncserver@:1 + novnc) and persists across restarts via a "
+        "marker file. Your claude TUI keeps running through the toggle. "
+        "Self-only — cannot toggle a peer's desktop. Requires a role with the "
+        "'toggle own desktop' permission (403 otherwise).",
+        {
+            "enabled": {
+                "type": "boolean",
+                "description": "true = turn the desktop ON, false = turn the desktop OFF",
+            },
+        },
+        ["enabled"],
+        toggle_desktop,
     ),
 ]
 HANDLERS = {name: fn for name, _d, _p, _r, fn in TOOLS}

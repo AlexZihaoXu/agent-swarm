@@ -195,6 +195,15 @@ export async function handleApi(
       const body = await readJson(req);
       return (sendJson(res, 200, await manager.usageForAgent(body.fromId ?? '')), true);
     }
+    if (pathname === '/api/swarm/desktop') {
+      if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+      const body = await readJson(req);
+      const enabled = body.desktop !== false; // any non-explicit-false = enable
+      return (
+        sendJson(res, 200, await manager.toggleDesktopSelf(body.fromId ?? '', enabled)),
+        true
+      );
+    }
     if (pathname === '/api/swarm/group-send') {
       if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
       const body = await readJson(req);
@@ -852,6 +861,7 @@ async function readJson(req: IncomingMessage): Promise<{
   description?: string;
   permissions?: string[];
   desktop?: boolean;
+  enabled?: boolean;
   action?: string;
   group?: string;
   avatarSeed?: string;

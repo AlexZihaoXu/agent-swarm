@@ -86,7 +86,8 @@ export type Capability =
   | 'view_screen'
   | 'compact_agents'
   | 'view_stats'
-  | 'dashboard_alerts';
+  | 'dashboard_alerts'
+  | 'toggle_desktop';
 
 /** Which upstream the agent's claude session uses. 'anthropic' = direct OAuth
  *  to Anthropic (Claude); 'opencodeGo' = the OpenCode Go subscription routed

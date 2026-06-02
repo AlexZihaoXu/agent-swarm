@@ -46,7 +46,8 @@ export type Capability =
   | 'view_screen'
   | 'compact_agents'
   | 'view_stats'
-  | 'dashboard_alerts';
+  | 'dashboard_alerts'
+  | 'toggle_desktop';
 
 export interface Role {
   id: string;
@@ -62,6 +63,11 @@ export interface CapabilityInfo {
   key: Capability;
   label: string;
   description: string;
+  /** Verbose description of the exact agent-side MCP tool this capability
+   *  unlocks — surfaced behind a "?" popover next to the toggle so the
+   *  operator can read, before granting, what the agent will actually be
+   *  able to do. */
+  mcpHelp?: string;
 }
 export const listCapabilities = () => api<CapabilityInfo[]>('/api/capabilities');
 

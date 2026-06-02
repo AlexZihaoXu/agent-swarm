@@ -2057,6 +2057,25 @@ export class AgentManager {
     return { ok: true, name: target.username || target.id };
   }
 
+  /** Capability-gated SELF desktop toggle (the `toggle_desktop` role
+   *  permission). Unlike the other peer-targeted swarm actions, this targets
+   *  the caller only — an agent can flip its own GNOME + noVNC stack to free
+   *  ~2 GB RSS when it doesn't need a browser. Operator-side this lives in
+   *  the per-agent Switch in Settings; agent-side it's swarm_toggle_desktop. */
+  async toggleDesktopSelf(
+    fromId: string,
+    enabled: boolean,
+  ): Promise<{ ok: true; desktop: boolean }> {
+    if (!this.agentCan(fromId, 'toggle_desktop'))
+      throw Object.assign(new Error('your role does not permit toggling the desktop'), {
+        statusCode: 403,
+      });
+    // Funnel through patchAgent so the identity write + marker + live
+    // systemctl flip all happen in the same place the operator's UI uses.
+    await this.patchAgent(fromId, { desktop: enabled });
+    return { ok: true, desktop: enabled };
+  }
+
   /** Capability-gated live-stats read of a peer (the `view_stats` role
    *  permission), scoped to agents that share a group with the caller. Returns a
    *  compact summary of the target's session (context-window usage, model,
