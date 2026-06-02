@@ -133,12 +133,16 @@ export function AgentCard({
           aria-label={`Open ${agent.id}`}
           className="border-separator group relative block aspect-video w-full shrink-0 overflow-hidden border bg-black sm:w-44"
         >
-          {running ? (
-            <PreviewImage agentId={agent.id} />
-          ) : (
+          {!running ? (
             <span className="text-muted absolute inset-0 flex items-center justify-center text-xs">
               stopped
             </span>
+          ) : agent.desktop === false ? (
+            <span className="text-muted absolute inset-0 flex items-center justify-center text-xs">
+              desktop off
+            </span>
+          ) : (
+            <PreviewImage agentId={agent.id} />
           )}
           <span className="absolute inset-0 transition-colors group-hover:bg-white/5" />
         </Link>

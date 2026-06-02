@@ -1,5 +1,8 @@
 'use client';
 
+import { LuMonitorOff } from 'react-icons/lu';
+import { useEffect, useState } from 'react';
+import { getAgent } from '@/lib/gateway';
 import { useDesktopLock } from '../DesktopLock';
 
 /**
@@ -8,9 +11,49 @@ import { useDesktopLock } from '../DesktopLock';
  * because clicks never reach the iframe it never takes focus — so keyboard input
  * doesn't route into noVNC either. The lock toggle lives in the header
  * (see DesktopLock); this panel just consumes the shared state.
+ *
+ * If the agent's `desktop` flag is off (operator disabled it via settings →
+ * tigervncserver + novnc condition-fail at boot, no stream to render), show a
+ * matching placeholder instead of an iframe that would hang on "connecting…".
  */
-export function DesktopPanel({ src, title }: { src: string; title: string }) {
+export function DesktopPanel({
+  agentId,
+  src,
+  title,
+}: {
+  agentId: string;
+  src: string;
+  title: string;
+}) {
   const { locked } = useDesktopLock();
+  const [desktopOn, setDesktopOn] = useState<boolean | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      getAgent(agentId)
+        .then((a) => alive && setDesktopOn(a.desktop !== false))
+        .catch(() => {});
+    void load();
+    // Re-poll so toggling desktop from Settings flips this view without a refresh.
+    const t = setInterval(load, 4000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [agentId]);
+
+  if (desktopOn === false) {
+    return (
+      <div className="bg-surface-secondary text-muted flex h-full w-full flex-col items-center justify-center gap-3 p-6 text-center">
+        <LuMonitorOff className="size-10 opacity-50" aria-hidden />
+        <div className="text-foreground text-sm font-semibold">Desktop is off</div>
+        <p className="max-w-sm text-xs">
+          The desktop service is disabled for this agent (saves ~2 GB RAM). Enable it from agent
+          settings — tigervnc + novnc start on the next toggle.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="relative h-full w-full">

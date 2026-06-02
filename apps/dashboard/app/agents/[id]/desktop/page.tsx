@@ -6,7 +6,7 @@ export default async function DesktopView({ params }: { params: Promise<{ id: st
   const { id } = await params;
   return (
     <MotionPanel from="left">
-      <DesktopPanel src={desktopUrl(id)} title={`${id} desktop`} />
+      <DesktopPanel agentId={id} src={desktopUrl(id)} title={`${id} desktop`} />
     </MotionPanel>
   );
 }
