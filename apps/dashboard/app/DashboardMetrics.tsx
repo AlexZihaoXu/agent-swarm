@@ -416,18 +416,41 @@ export function DashboardMetrics() {
   const totalTokens = m.agents.reduce((s, a) => s + a.tokens, 0);
   const totalCost = m.agents.reduce((s, a) => s + a.cost, 0);
 
-  // Per-agent 12h resource series → recharts rows keyed by agent name.
+  // Per-agent series → recharts rows keyed by agent name. We also walk the
+  // points to find the actual per-series peak so the Y axis can scale to the
+  // data instead of the host ceiling — no single agent uses 16 cores or 24 GB,
+  // so a host-pegged axis leaves the lines hugging the floor.
   const series = m.usage.series;
+  let cpuPeak = 0;
+  let memPeak = 0; // MB
   const cpuData = m.usage.points.map((p) => {
     const row: Record<string, number> = { t: p.t };
-    for (const s of series) row[s.name] = p.cpu[s.id] ?? 0;
+    for (const s of series) {
+      const v = p.cpu[s.id] ?? 0;
+      row[s.name] = v;
+      if (v > cpuPeak) cpuPeak = v;
+    }
     return row;
   });
   const memData = m.usage.points.map((p) => {
     const row: Record<string, number> = { t: p.t };
-    for (const s of series) row[s.name] = Math.round((p.mem[s.id] ?? 0) / (1 << 20)); // MB
+    for (const s of series) {
+      const mb = Math.round((p.mem[s.id] ?? 0) / (1 << 20));
+      row[s.name] = mb;
+      if (mb > memPeak) memPeak = mb;
+    }
     return row;
   });
+  // Round each peak up to the next integer step (100% for CPU, 1 GB for
+  // memory) so the Y axis ticks are clean whole values: 100/200/300% or
+  // 1/2/3/4 GB. Always at least one full step so the axis isn't flat.
+  const cpuMax = Math.max(100, Math.ceil(cpuPeak / 100) * 100);
+  const cpuTicks: number[] = [];
+  for (let v = 0; v <= cpuMax; v += 100) cpuTicks.push(v);
+  const memMaxGb = Math.max(1, Math.ceil(memPeak / 1024));
+  const memMax = memMaxGb * 1024;
+  const memTicks: number[] = [];
+  for (let g = 0; g <= memMaxGb; g++) memTicks.push(g * 1024);
 
   return (
     <motion.div
@@ -690,7 +713,8 @@ export function DashboardMetrics() {
               data={cpuData}
               series={series}
               format={(v) => `${Math.round(v)}%`}
-              max={host ? host.cpus * 100 : undefined}
+              max={cpuMax}
+              ticks={cpuTicks}
               smooth={smoothResource}
               timeTick={resourceTick}
             />
@@ -702,7 +726,8 @@ export function DashboardMetrics() {
               // axis uses whole GB so labels stay short and don't wrap.
               format={(v) => (v >= 1024 ? `${(v / 1024).toFixed(1)} GB` : `${Math.round(v)} MB`)}
               tickFormat={(v) => `${Math.round(v / 1024)} GB`}
-              max={host ? host.memoryMb : undefined}
+              max={memMax}
+              ticks={memTicks}
               smooth={smoothResource}
               timeTick={resourceTick}
             />
@@ -771,6 +796,7 @@ function ResourceChart({
   format,
   tickFormat,
   max,
+  ticks,
   smooth = true,
   timeTick = fmtClock,
 }: {
@@ -782,8 +808,11 @@ function ResourceChart({
   /** Formats a Y-axis tick; falls back to `format`. Used to keep axis labels
    *  short/whole (e.g. "23 GB") while the tooltip stays precise. */
   tickFormat?: (v: number) => string;
-  /** Fixed Y-axis ceiling (max resources exposed); auto-scales if undefined. */
+  /** Fixed Y-axis ceiling; auto-scales if undefined. */
   max?: number;
+  /** Explicit tick stops on the Y axis (e.g. [0,100,200,300] for CPU%). When
+   *  set, the axis renders exactly these — no recharts auto-stops. */
+  ticks?: number[];
   /** When true the lines use recharts' "monotone" interpolation; when false
    *  they're straight segments — operator's pick from the context menu. */
   smooth?: boolean;
@@ -815,6 +844,7 @@ function ResourceChart({
                 tick={AXIS}
                 stroke="var(--separator)"
                 domain={max ? [0, max] : [0, 'auto']}
+                ticks={ticks}
                 tickFormatter={tickFormat ?? format}
                 allowDataOverflow
               />
