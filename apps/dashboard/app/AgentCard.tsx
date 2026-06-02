@@ -170,19 +170,19 @@ export function AgentCard({
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
             <AgentStatsInline stats={stats} />
           </div>
-          <div className="mt-1">
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
             <AgentActivity
               containerStatus={agent.status}
               sessionStatus={stats?.status}
               lastActivity={stats?.lastActivity}
             />
+            {agent.desktop === false && (
+              <span className="text-muted inline-flex items-center gap-1 text-[11px]">
+                <span aria-hidden className="bg-muted/60 inline-block size-1.5 rounded-full" />
+                Desktop off
+              </span>
+            )}
           </div>
-          {agent.desktop === false && (
-            <div className="text-muted mt-1 inline-flex items-center gap-1 text-[11px]">
-              <span aria-hidden className="bg-muted/60 inline-block size-1.5 rounded-full" />
-              Desktop off
-            </div>
-          )}
           {agent.compacting && (
             <div className="mt-2">
               <CompactingBadge progress={agent.compactingProgress ?? 0} />
