@@ -678,7 +678,7 @@ export class AgentManager {
    *  - the account-level 5h / 7d rate-limit windows (from any agent's
    *    statusline.json — they're shared across agents on one account).
    */
-  async metrics(): Promise<{
+  async metrics(opts: { hours?: number } = {}): Promise<{
     rateLimits: {
       fiveHour: { usedPercent: number; resetsAt: number };
       sevenDay: { usedPercent: number; resetsAt: number };
@@ -686,19 +686,32 @@ export class AgentManager {
        *  dashboard greys the rings as "outdated" when this is >5m old. */
       updatedAt: number;
     } | null;
+    /** The window in hours the response covers (1..168). The dashboard echoes
+     *  this in titles so the user can see what they asked for round-tripped. */
+    rangeHours: number;
     agents: { id: string; name: string; tokens: number; cost: number }[];
     buckets: { t: number; tokens: number; cost: number }[];
-    /** Per-agent live-resource history over the last 12h (cpu% + memory bytes). */
+    /** Per-agent live-resource history over the requested window (cpu% +
+     *  memory bytes). Downsampled to ≤300 points for any range. */
     usage: {
       series: { id: string; name: string }[];
       points: { t: number; cpu: Record<string, number>; mem: Record<string, number> }[];
     };
   }> {
     const HOUR = 3_600_000;
-    const WINDOW_H = 12;
-    const base = Math.floor(Date.now() / HOUR) * HOUR - (WINDOW_H - 1) * HOUR;
-    const buckets = Array.from({ length: WINDOW_H }, (_, i) => ({
-      t: base + i * HOUR,
+    // Clamp to the data we actually keep (usage history retains 7d; transcripts
+    // go further back but the bar chart loses meaning past a week).
+    const requested = Math.max(1, Math.min(168, opts.hours ?? 12));
+    const WINDOW_H = requested;
+    // Bucket size: target ≤24 bars so the chart stays readable as the range
+    // grows. 12h → 1h × 12; 24h → 1h × 24; 3d (72h) → 3h × 24; 7d (168h) →
+    // 6h × 28. Always at least 1h.
+    const BUCKET_H = Math.max(1, Math.ceil(WINDOW_H / 24));
+    const BUCKET_MS = BUCKET_H * HOUR;
+    const bucketCount = Math.ceil(WINDOW_H / BUCKET_H);
+    const base = Math.floor(Date.now() / BUCKET_MS) * BUCKET_MS - (bucketCount - 1) * BUCKET_MS;
+    const buckets = Array.from({ length: bucketCount }, (_, i) => ({
+      t: base + i * BUCKET_MS,
       tokens: 0,
       cost: 0,
     }));
@@ -751,8 +764,8 @@ export class AgentManager {
           // cache_read is the SAME context re-read every turn — summing it over
           // turns wildly over-counts — but it IS billed, so cost below keeps it.
           const tk = inp + out + cc;
-          const idx = Math.floor((ts - base) / HOUR);
-          if (idx < 0 || idx >= WINDOW_H) continue;
+          const idx = Math.floor((ts - base) / BUCKET_MS);
+          if (idx < 0 || idx >= bucketCount) continue;
           const r = modelRates(o.message?.model, inp + cr + cc);
           const c = (inp * r.in + out * r.out + cc * r.cw + cr * r.cr) / 1_000_000;
           tokens += tk;
@@ -820,9 +833,18 @@ export class AgentManager {
     } else {
       result = this.lastRateLimits;
     }
-    // Graphs show the last 12h; the full history (up to 7d) stays on disk.
-    const graphCutoff = Date.now() - 12 * 3_600_000;
-    const points = this.usageHistory.filter((p) => p.t >= graphCutoff);
+    // Resource graphs show the requested window. usageHistory is retained for
+    // 7d (see USAGE_RETAIN_MS) so any range up to 168h is satisfiable; longer
+    // requests just return whatever data we have.
+    const graphCutoff = Date.now() - WINDOW_H * HOUR;
+    const fullPoints = this.usageHistory.filter((p) => p.t >= graphCutoff);
+    // Downsample to keep recharts responsive at long ranges (10080 1-min
+    // samples over 7d would otherwise smear the chart and slow the page).
+    // Take every Nth point; when N>1 we lose precision but the trend lines
+    // remain accurate enough for an at-a-glance fleet view.
+    const TARGET_POINTS = 300;
+    const step = Math.max(1, Math.ceil(fullPoints.length / TARGET_POINTS));
+    const points = step === 1 ? fullPoints : fullPoints.filter((_, i) => i % step === 0);
     // Build the line series from ids that actually have data in the window, and
     // collapse same-named ids into one line. An agent deleted then recreated
     // under the same display name leaves two ids in usageNames; without this the
@@ -841,6 +863,7 @@ export class AgentManager {
     }
     return {
       rateLimits: result,
+      rangeHours: WINDOW_H,
       agents,
       buckets,
       usage: { series: [...byName.values()], points },

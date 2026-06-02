@@ -19,11 +19,13 @@ import {
   getHostInfo,
   getMetrics,
   getUsage,
+  METRICS_RANGES,
   type HostInfo,
   type Metrics,
   type RateWindow,
   type Usage,
 } from '@/lib/gateway';
+import { GraphContextMenu, type GraphContextSection } from './GraphContextMenu';
 
 /** Distinct line colors for per-agent resource graphs (cycled by index). */
 const LINE_COLORS = ['#e0a55e', '#7aa2f7', '#9ece6a', '#bb9af7', '#f7768e', '#7dcfff', '#e0af68'];
@@ -325,6 +327,15 @@ export function DashboardMetrics() {
   const [m, setM] = useState<Metrics | null>(null);
   const [usage, setUsage] = useState<Usage | null>(null);
   const [host, setHost] = useState<HostInfo | null>(null);
+  // Right-click → graph context menu state. The time range is shared across
+  // ALL four graphs so the "last 24h" / "last 7d" lens stays consistent; the
+  // per-graph options are graph-local. Defaults match the previous behavior.
+  const [rangeKey, setRangeKey] = useState<string>('12h');
+  const [tokensSortBy, setTokensSortBy] = useState<'tokens' | 'name'>('tokens');
+  const [showCostLine, setShowCostLine] = useState<boolean>(true);
+  const [smoothResource, setSmoothResource] = useState<boolean>(true);
+  const rangeHours = METRICS_RANGES.find((r) => r.key === rangeKey)?.hours ?? 12;
+  const rangeLabel = METRICS_RANGES.find((r) => r.key === rangeKey)?.label ?? '12 hours';
 
   // Host capacity = the ceiling for the resource graphs. CPU/RAM are fixed, but
   // disk usage drifts, so re-poll (slowly — it changes gradually).
@@ -345,7 +356,7 @@ export function DashboardMetrics() {
   useEffect(() => {
     let alive = true;
     const load = () =>
-      getMetrics()
+      getMetrics(rangeHours)
         .then((d) => alive && setM(d))
         .catch(() => {});
     void load();
@@ -354,7 +365,7 @@ export function DashboardMetrics() {
       alive = false;
       clearInterval(t);
     };
-  }, []);
+  }, [rangeHours]);
 
   // Live resource usage refreshes fast (cheap snapshot) for the headline numbers.
   useEffect(() => {
@@ -383,8 +394,26 @@ export function DashboardMetrics() {
       cur.cost += a.cost;
     } else tokenByName.set(a.name, { name: a.name, tokens: a.tokens, cost: a.cost });
   }
-  const perAgent = [...tokenByName.values()].sort((a, b) => b.tokens - a.tokens);
+  const perAgent = [...tokenByName.values()].sort((a, b) =>
+    tokensSortBy === 'name' ? a.name.localeCompare(b.name) : b.tokens - a.tokens,
+  );
   const overTime = m.buckets.map((b) => ({ label: fmtHour(b.t), tokens: b.tokens, cost: b.cost }));
+
+  // Shared "time range" section the four graphs each include in their menu so
+  // the user can flip the lens from any chart. Other per-graph options
+  // (sort/series toggles) are appended after this block per-graph.
+  const rangeSection: GraphContextSection = {
+    key: 'range',
+    heading: 'Time range',
+    selectedKey: rangeKey,
+    items: METRICS_RANGES.map((r) => ({ key: r.key, label: r.label, hint: r.key })),
+  };
+  const onMenuSelect = (sectionKey: string, itemKey: string) => {
+    if (sectionKey === 'range') setRangeKey(itemKey);
+    else if (sectionKey === 'sort') setTokensSortBy(itemKey === 'name' ? 'name' : 'tokens');
+    else if (sectionKey === 'cost') setShowCostLine(itemKey === 'on');
+    else if (sectionKey === 'smooth') setSmoothResource(itemKey === 'on');
+  };
   const totalTokens = m.agents.reduce((s, a) => s + a.tokens, 0);
   const totalCost = m.agents.reduce((s, a) => s + a.cost, 0);
 
@@ -554,11 +583,27 @@ export function DashboardMetrics() {
             </div>
           </div>
 
-          {/* Charts */}
+          {/* Charts. Each chart's title carries the current range (e.g.,
+              "Tokens per agent · 7 days"); right-click any chart to flip the
+              range or the per-graph option. */}
           <div className="grid gap-6 lg:grid-cols-2">
-            <div>
+            <GraphContextMenu
+              sections={[
+                rangeSection,
+                {
+                  key: 'sort',
+                  heading: 'Sort bars',
+                  selectedKey: tokensSortBy,
+                  items: [
+                    { key: 'tokens', label: 'By tokens (high→low)' },
+                    { key: 'name', label: 'By name (A→Z)' },
+                  ],
+                },
+              ]}
+              onSelect={onMenuSelect}
+            >
               <div className="text-muted mb-2 text-xs font-semibold tracking-wide uppercase">
-                Tokens per agent · 12h
+                Tokens per agent · {rangeLabel}
               </div>
               <div className="h-28 w-full">
                 {perAgent.length === 0 ? (
@@ -594,11 +639,25 @@ export function DashboardMetrics() {
                   </ResponsiveContainer>
                 )}
               </div>
-            </div>
+            </GraphContextMenu>
 
-            <div>
+            <GraphContextMenu
+              sections={[
+                rangeSection,
+                {
+                  key: 'cost',
+                  heading: 'Cost overlay',
+                  selectedKey: showCostLine ? 'on' : 'off',
+                  items: [
+                    { key: 'on', label: 'Show cost line' },
+                    { key: 'off', label: 'Hide cost line' },
+                  ],
+                },
+              ]}
+              onSelect={onMenuSelect}
+            >
               <div className="text-muted mb-2 text-xs font-semibold tracking-wide uppercase">
-                Total tokens &amp; cost · 12h
+                Total tokens &amp; cost · {rangeLabel}
               </div>
               <div className="h-28 w-full">
                 <ResponsiveContainer width="100%" height="100%">
@@ -616,14 +675,16 @@ export function DashboardMetrics() {
                       tick={AXIS}
                       stroke="var(--separator)"
                     />
-                    <YAxis
-                      yAxisId="c"
-                      orientation="right"
-                      tickFormatter={(v) => fmtCost(Number(v) || 0)}
-                      width={48}
-                      tick={AXIS}
-                      stroke="var(--separator)"
-                    />
+                    {showCostLine && (
+                      <YAxis
+                        yAxisId="c"
+                        orientation="right"
+                        tickFormatter={(v) => fmtCost(Number(v) || 0)}
+                        width={48}
+                        tick={AXIS}
+                        stroke="var(--separator)"
+                      />
+                    )}
                     <RechartsTooltip
                       cursor={{ fill: 'rgba(255,255,255,0.05)' }}
                       contentStyle={TOOLTIP}
@@ -635,31 +696,47 @@ export function DashboardMetrics() {
                       }
                     />
                     <Bar yAxisId="t" dataKey="tokens" fill="#7aa2f7" radius={[2, 2, 0, 0]} />
-                    <Line
-                      yAxisId="c"
-                      type="monotone"
-                      dataKey="cost"
-                      stroke="#9ece6a"
-                      strokeWidth={2}
-                      dot={false}
-                    />
+                    {showCostLine && (
+                      <Line
+                        yAxisId="c"
+                        type="monotone"
+                        dataKey="cost"
+                        stroke="#9ece6a"
+                        strokeWidth={2}
+                        dot={false}
+                      />
+                    )}
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
-            </div>
+            </GraphContextMenu>
           </div>
 
-          {/* Per-agent resource graphs over the last 12h (one line per agent). */}
+          {/* Per-agent resource graphs over the requested window (one line per agent). */}
           <div className="grid gap-6 lg:grid-cols-2">
             <ResourceChart
-              title="CPU per agent · 12h"
+              title={`CPU per agent · ${rangeLabel}`}
               data={cpuData}
               series={series}
               format={(v) => `${Math.round(v)}%`}
               max={host ? host.cpus * 100 : undefined}
+              smooth={smoothResource}
+              menuSections={[
+                rangeSection,
+                {
+                  key: 'smooth',
+                  heading: 'Line style',
+                  selectedKey: smoothResource ? 'on' : 'off',
+                  items: [
+                    { key: 'on', label: 'Smooth (monotone)' },
+                    { key: 'off', label: 'Straight (linear)' },
+                  ],
+                },
+              ]}
+              onMenuSelect={onMenuSelect}
             />
             <ResourceChart
-              title="Memory per agent · 12h"
+              title={`Memory per agent · ${rangeLabel}`}
               data={memData}
               series={series}
               // Data is in MB. Tooltip stays precise (GB ≥1 GB, else MB); the
@@ -667,6 +744,20 @@ export function DashboardMetrics() {
               format={(v) => (v >= 1024 ? `${(v / 1024).toFixed(1)} GB` : `${Math.round(v)} MB`)}
               tickFormat={(v) => `${Math.round(v / 1024)} GB`}
               max={host ? host.memoryMb : undefined}
+              smooth={smoothResource}
+              menuSections={[
+                rangeSection,
+                {
+                  key: 'smooth',
+                  heading: 'Line style',
+                  selectedKey: smoothResource ? 'on' : 'off',
+                  items: [
+                    { key: 'on', label: 'Smooth (monotone)' },
+                    { key: 'off', label: 'Straight (linear)' },
+                  ],
+                },
+              ]}
+              onMenuSelect={onMenuSelect}
             />
           </div>
         </Card.Content>
@@ -731,6 +822,9 @@ function ResourceChart({
   format,
   tickFormat,
   max,
+  smooth = true,
+  menuSections,
+  onMenuSelect,
 }: {
   title: string;
   data: Record<string, number>[];
@@ -742,9 +836,15 @@ function ResourceChart({
   tickFormat?: (v: number) => string;
   /** Fixed Y-axis ceiling (max resources exposed); auto-scales if undefined. */
   max?: number;
+  /** When true the lines use recharts' "monotone" interpolation; when false
+   *  they're straight segments — operator's pick from the context menu. */
+  smooth?: boolean;
+  /** Sections passed through to the chart's right-click GraphContextMenu. */
+  menuSections?: GraphContextSection[];
+  onMenuSelect?: (sectionKey: string, itemKey: string) => void;
 }) {
-  return (
-    <div>
+  const inner = (
+    <>
       <div className="text-muted mb-2 text-xs font-semibold tracking-wide uppercase">{title}</div>
       <div className="h-28 w-full">
         {data.length === 0 || series.length === 0 ? (
@@ -778,7 +878,7 @@ function ResourceChart({
               {series.map((s, i) => (
                 <Line
                   key={s.id}
-                  type="monotone"
+                  type={smooth ? 'monotone' : 'linear'}
                   dataKey={s.name}
                   stroke={LINE_COLORS[i % LINE_COLORS.length]}
                   strokeWidth={2}
@@ -790,6 +890,14 @@ function ResourceChart({
           </ResponsiveContainer>
         )}
       </div>
-    </div>
+    </>
   );
+  if (menuSections && onMenuSelect) {
+    return (
+      <GraphContextMenu sections={menuSections} onSelect={onMenuSelect}>
+        {inner}
+      </GraphContextMenu>
+    );
+  }
+  return <div>{inner}</div>;
 }

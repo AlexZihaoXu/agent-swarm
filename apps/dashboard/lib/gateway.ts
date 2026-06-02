@@ -475,18 +475,32 @@ export interface Metrics {
    *  when the values last changed (= last API activity); used to mark the rings
    *  outdated when the account has been idle for >5m. */
   rateLimits: { fiveHour: RateWindow; sevenDay: RateWindow; updatedAt: number } | null;
-  /** Per-agent 12h totals (tokens + computed cost). */
+  /** Window length in hours the rest of this payload covers (echoes the
+   *  requested ?hours, clamped to [1..168]). */
+  rangeHours: number;
+  /** Per-agent totals (tokens + computed cost) over the requested window. */
   agents: { id: string; name: string; tokens: number; cost: number }[];
-  /** 12 hourly buckets (oldest→newest) summed across agents. */
+  /** Aggregate (oldest→newest) buckets summed across agents. Bucket width
+   *  scales with the range so the chart stays around 24 bars. */
   buckets: { t: number; tokens: number; cost: number }[];
-  /** Per-agent cpu%/memory history over the last 12h, for the resource graphs. */
+  /** Per-agent cpu%/memory history over the requested window. Downsampled to
+   *  ≤300 points server-side so long ranges stay responsive. */
   usage: {
     series: { id: string; name: string }[];
     points: { t: number; cpu: Record<string, number>; mem: Record<string, number> }[];
   };
 }
-/** Global usage metrics (per-agent 24h tokens/cost, hourly totals, rate limits). */
-export const getMetrics = () => api<Metrics>('/api/metrics');
+/** Time-range options offered in the graph context menus. Drives the
+ *  rangeHours state at the top of DashboardMetrics; the gateway clamps to
+ *  [1..168] so a bogus value just falls back to 12h. */
+export const METRICS_RANGES: { key: string; label: string; hours: number }[] = [
+  { key: '12h', label: '12 hours', hours: 12 },
+  { key: '24h', label: '24 hours', hours: 24 },
+  { key: '3d', label: '3 days', hours: 72 },
+  { key: '7d', label: '7 days', hours: 168 },
+];
+/** Global usage metrics over the requested window (defaults to 12h). */
+export const getMetrics = (hours = 12) => api<Metrics>(`/api/metrics?hours=${hours}`);
 
 export interface Usage {
   /** Total CPU across running agents (cores × 100, like `docker stats` %). */

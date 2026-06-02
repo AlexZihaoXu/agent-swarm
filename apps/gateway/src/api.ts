@@ -130,7 +130,7 @@ export async function handleApi(
     }
     if (pathname === '/api/providers') return await handleProviders(req, res, manager, method);
     if (pathname === '/api/host') return await handleHost(res, manager, method);
-    if (pathname === '/api/metrics') return await handleMetrics(res, manager, method);
+    if (pathname === '/api/metrics') return await handleMetrics(req, res, manager, method);
     if (pathname === '/api/roles' || pathname.startsWith('/api/roles/'))
       return await handleRoles(req, res, manager, method);
     if (pathname === '/api/groups' || pathname.startsWith('/api/groups/'))
@@ -787,12 +787,19 @@ async function handleHost(
 }
 
 async function handleMetrics(
+  req: IncomingMessage,
   res: ServerResponse,
   manager: AgentManager,
   method: string,
 ): Promise<boolean> {
   if (method !== 'GET') return (sendJson(res, 405, { error: 'method not allowed' }), true);
-  sendJson(res, 200, await manager.metrics());
+  // ?hours=N picks the window the bar chart + resource history cover. Clamped
+  // server-side so a bogus value just falls back to the 12h default.
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const raw = url.searchParams.get('hours');
+  const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+  const hours = Number.isFinite(parsed) ? parsed : undefined;
+  sendJson(res, 200, await manager.metrics({ hours }));
   return true;
 }
 
