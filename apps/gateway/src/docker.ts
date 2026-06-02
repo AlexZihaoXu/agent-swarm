@@ -79,6 +79,10 @@ interface AgentIdentity {
   groups?: string[];
   /** Direct per-agent capability grants (union'd with role-based permissions). */
   permissions?: Capability[];
+  /** Whether the GNOME desktop + noVNC stack should be running. Default true.
+   *  When false, the gateway writes a marker file the systemd unit conditions
+   *  on — tigervnc + novnc skip start, saving ~2 GB of RSS per agent. */
+  desktop?: boolean;
   /** Identicon avatar seed (defaults to the id; reshuffleable from the UI). */
   avatarSeed?: string;
 }
@@ -207,6 +211,7 @@ export class AgentManager {
       roles: patch.roles !== undefined ? patch.roles : (cur?.roles ?? []),
       groups: patch.groups !== undefined ? patch.groups : (cur?.groups ?? []),
       permissions: patch.permissions !== undefined ? patch.permissions : (cur?.permissions ?? []),
+      desktop: patch.desktop !== undefined ? patch.desktop : (cur?.desktop ?? true),
       avatarSeed: patch.avatarSeed !== undefined ? patch.avatarSeed : cur?.avatarSeed,
     };
     mkdirSync(dirname(this.identityFile(id)), { recursive: true });
@@ -236,6 +241,7 @@ export class AgentManager {
       roles?: string[];
       groups?: string[];
       permissions?: Capability[];
+      desktop?: boolean;
       avatarSeed?: string;
     },
   ): Promise<Agent> {
@@ -269,10 +275,12 @@ export class AgentManager {
     if (Array.isArray(patch.roles)) idPatch.roles = patch.roles;
     if (Array.isArray(patch.groups)) idPatch.groups = patch.groups;
     if (Array.isArray(patch.permissions)) idPatch.permissions = patch.permissions as Capability[];
+    if (patch.desktop !== undefined) idPatch.desktop = patch.desktop;
     // Empty string explicitly resets the avatar to the default (id-seeded).
     if (patch.avatarSeed !== undefined) idPatch.avatarSeed = patch.avatarSeed.trim() || id;
     const prevModel = this.readIdentity(id)?.model ?? null;
     const prevProvider = this.readIdentity(id)?.provider ?? 'anthropic';
+    const prevDesktop = this.readIdentity(id)?.desktop !== false;
     const prevRoles = JSON.stringify(this.readIdentity(id)?.roles ?? []);
     this.writeIdentity(id, idPatch);
     const info = await this.docker.getContainer(this.containerName(id)).inspect();
@@ -311,6 +319,13 @@ export class AgentManager {
     // for the next fresh boot / recreate.)
     if (patch.model !== undefined && idPatch.model !== prevModel && info.State.Running) {
       void this.injectToTerminal(id, `/model ${idPatch.model || 'default'}`).catch(() => {});
+    }
+    // Desktop toggle: sync the on-disk marker (boot-time gate) and, when the
+    // agent is running, also live-stop/-start the desktop units via docker
+    // exec so the operator's flip takes effect immediately.
+    if (patch.desktop !== undefined && (idPatch.desktop !== false) !== prevDesktop) {
+      this.writeDesktopMarker(id);
+      if (info.State.Running) void this.applyDesktopState(id);
     }
     return this.toAgent(info);
   }
@@ -419,6 +434,49 @@ export class AgentManager {
       /* best-effort */
     }
     this.writeOpencodeGoConfig(id);
+  }
+
+  /** Sync the desktop-disabled marker. When identity.desktop is false, write
+   *  `.swarm/desktop-disabled` so the systemd drop-in conf on tigervncserver +
+   *  novnc trips its `ConditionPathExists=!…` and the units skip start. When
+   *  true, remove the marker so the desktop comes up. Called from create,
+   *  start, and patchAgent (and the runtime checks it on each (re)boot). */
+  private writeDesktopMarker(id: string): void {
+    const dir = this.ensureSwarmDir(id);
+    const file = join(dir, 'desktop-disabled');
+    const ident = this.readIdentity(id);
+    const enabled = ident?.desktop !== false; // default = on for backwards-compat
+    try {
+      if (enabled) {
+        rmSync(file, { force: true });
+      } else {
+        writeFileSync(file, '', { mode: 0o644 });
+        chownSync(file, 1000, 1000);
+      }
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  /** Live-toggle the desktop stack on a running agent without a recreate.
+   *  After writeDesktopMarker (which updates the boot-time gate), the running
+   *  systemd units don't actually stop/start — they only check the condition
+   *  at unit start. Issue an explicit start/stop via docker exec so the
+   *  operator's switch flip takes effect immediately. */
+  private async applyDesktopState(id: string): Promise<void> {
+    const ident = this.readIdentity(id);
+    const enabled = ident?.desktop !== false;
+    const cmd = enabled
+      ? 'systemctl start tigervncserver@:1.service novnc.service'
+      : // stop novnc first so it doesn't restart while tigervnc is going down
+        'systemctl stop novnc.service tigervncserver@:1.service; pkill -KILL -u agent gnome-shell mutter Xtigervnc 2>/dev/null; true';
+    try {
+      const container = this.docker.getContainer(this.containerName(id));
+      const exec = await container.exec({ Cmd: ['sh', '-c', cmd], AttachStdout: false });
+      await exec.start({ Detach: true });
+    } catch {
+      /* best-effort — a missed live-toggle still takes effect on next boot */
+    }
   }
 
   /** Write the per-agent oc-go-cc config (`.swarm/oc-go-cc-config.json`),
@@ -1417,10 +1475,12 @@ export class AgentManager {
       model: model ?? null,
       roles: Array.isArray(opts.roles) ? opts.roles : [],
       groups: Array.isArray(opts.groups) ? opts.groups : [],
+      desktop: opts.desktop !== false,
       avatarSeed: opts.avatarSeed?.trim() || undefined,
     });
     this.writeAuthToken(id);
     this.writeOpencodeGoKey(id);
+    this.writeDesktopMarker(id);
     this.writeSwarmToken(id);
     this.writeRolesDoc(id);
 
@@ -1565,6 +1625,7 @@ export class AgentManager {
     this.writeAuthToken(id);
     this.writeSwarmToken(id);
     this.writeOpencodeGoKey(id);
+    this.writeDesktopMarker(id);
     this.writeRolesDoc(id);
     this.markDeliberateRestart(id); // → [sys://restart] notice once the new container boots
     return this.spawnContainer(id, name, labels, cpus, memoryMb, timezone);
@@ -1596,6 +1657,7 @@ export class AgentManager {
         roles: identity?.roles ?? [],
         groups: identity?.groups ?? [],
         permissions: identity?.permissions ?? [],
+        desktop: identity?.desktop !== false,
         compacting: this.isCompacting(id),
         compactingProgress: this.compactingProgress(id),
         avatarSeed: identity?.avatarSeed ?? id,
@@ -1609,6 +1671,7 @@ export class AgentManager {
     this.writeAuthToken(id);
     this.writeSwarmToken(id);
     this.writeOpencodeGoKey(id);
+    this.writeDesktopMarker(id);
     this.writeRolesDoc(id);
     this.markDeliberateRestart(id); // → [sys://restart] notice once it boots
     await this.docker.getContainer(this.containerName(id)).start();
@@ -2479,6 +2542,7 @@ export class AgentManager {
       roles: this.readIdentity(id)?.roles ?? [],
       groups: this.readIdentity(id)?.groups ?? [],
       permissions: this.readIdentity(id)?.permissions ?? [],
+      desktop: this.readIdentity(id)?.desktop !== false,
       compacting: this.isCompacting(id),
       compactingProgress: this.compactingProgress(id),
       avatarSeed: this.readIdentity(id)?.avatarSeed ?? id,

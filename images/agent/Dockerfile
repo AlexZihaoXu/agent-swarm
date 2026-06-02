@@ -270,6 +270,19 @@ RUN chmod +x /usr/local/bin/swarm-statusline \
     && chown -R agent:agent /home/agent/.claude
 COPY --chown=agent:agent claude-settings.json /home/agent/.claude/settings.json
 
+# Desktop toggle: drop-in conf that gates tigervnc + novnc on the absence of
+# `~/.swarm/desktop-disabled`. The gateway touches that marker when the
+# operator turns the desktop off in the agent settings → next systemd start
+# sees the failed condition and skips. Removing the marker re-enables. We do
+# this in a drop-in rather than editing the unit so distro updates can change
+# the upstream unit without colliding.
+RUN install -d /etc/systemd/system/tigervncserver@:1.service.d \
+    && printf '[Unit]\nConditionPathExists=!/home/agent/.swarm/desktop-disabled\n' \
+       > /etc/systemd/system/tigervncserver@:1.service.d/50-desktop-toggle.conf \
+    && install -d /etc/systemd/system/novnc.service.d \
+    && printf '[Unit]\nConditionPathExists=!/home/agent/.swarm/desktop-disabled\n' \
+       > /etc/systemd/system/novnc.service.d/50-desktop-toggle.conf
+
 # Boot to multi-user (no gdm greeter — the session comes up via TigerVNC),
 # and enable our services.
 RUN systemctl set-default multi-user.target \

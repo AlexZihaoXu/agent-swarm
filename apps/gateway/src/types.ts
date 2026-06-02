@@ -49,6 +49,11 @@ export interface Agent {
   groups?: string[];
   /** Direct per-agent capability grants (union'd with role-based permissions). */
   permissions?: Capability[];
+  /** Whether the in-container GNOME desktop + noVNC stack is enabled. Default
+   *  true; turning it off saves ~2 GB of RSS (gnome-shell, mutter, etc.) for
+   *  agents that don't need a browser/desktop UI. The terminal supervisor +
+   *  claude TUI keep running either way. */
+  desktop?: boolean;
   /** True when a /compact has been injected recently and the compaction is
    *  presumed still in flight (TTL-based — Claude doesn't expose actual state).
    *  Drives the "Compacting…" indicator on the dashboard's agent card. */
@@ -214,6 +219,8 @@ export interface CreateAgentOptions {
   timezone?: string;
   /** Initial provider ('anthropic' default; 'opencodeGo' routes via the proxy). */
   provider?: Provider;
+  /** Start with the GNOME desktop disabled to save memory. Default true (on). */
+  desktop?: boolean;
   /** Initial model override (ANTHROPIC_MODEL: alias/full id). Applied at first
    *  boot (a fresh session, so the env takes effect). Omit for the default. */
   model?: string;

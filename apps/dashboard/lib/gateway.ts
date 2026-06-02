@@ -24,6 +24,10 @@ export interface Agent {
   groups?: string[];
   /** Direct per-agent capability grants (union'd with role-based permissions). */
   permissions?: Capability[];
+  /** Whether the in-container GNOME desktop + noVNC stack is on. Default true.
+   *  Turning it off saves ~2 GB RSS per agent; the terminal supervisor + claude
+   *  TUI keep running either way. */
+  desktop?: boolean;
   /** True while a /compact is presumed still in flight — the dashboard shows a
    *  "Compacting…" chip on the card. Set when the gateway injects /compact;
    *  clears after a ~75s TTL (Claude doesn't expose actual progress). */
@@ -136,6 +140,9 @@ export interface CreateAgentOptions {
   /** Role + group ids to assign at creation. */
   roles?: string[];
   groups?: string[];
+  /** Start with the GNOME desktop on (default true). Set false to save ~2GB
+   *  RSS for agents that don't need a browser. */
+  desktop?: boolean;
   /** Initial identicon avatar seed; omit to default to the agent id. */
   avatarSeed?: string;
 }
@@ -568,6 +575,7 @@ export const updateAgent = (
     roles?: string[];
     groups?: string[];
     permissions?: Capability[];
+    desktop?: boolean;
     avatarSeed?: string;
   },
 ) =>

@@ -76,6 +76,7 @@ export function AgentSettingsModal({
   const [groups, setGroups] = useState<string[]>([]);
   const [avatarSeed, setAvatarSeed] = useState('');
   const [permissions, setPermissions] = useState<Capability[]>([]);
+  const [desktop, setDesktop] = useState(true);
   const [allRoles, setAllRoles] = useState<Role[]>([]);
   const [allGroups, setAllGroups] = useState<Role[]>([]);
   const [allCaps, setAllCaps] = useState<CapabilityInfo[]>([]);
@@ -120,6 +121,7 @@ export function AgentSettingsModal({
         setRoles(a.roles ?? []);
         setGroups(a.groups ?? []);
         setPermissions(a.permissions ?? []);
+        setDesktop(a.desktop !== false);
         setAvatarSeed(a.avatarSeed || a.id);
       })
       .catch(() => {});
@@ -161,6 +163,7 @@ export function AgentSettingsModal({
         roles,
         groups,
         permissions,
+        desktop,
         avatarSeed,
       });
       onChanged?.();
@@ -410,6 +413,22 @@ export function AgentSettingsModal({
                           </div>
                         </div>
                       )}
+
+                      <div className="space-y-3">
+                        <Switch isSelected={desktop} onChange={setDesktop}>
+                          <Switch.Control>
+                            <Switch.Thumb />
+                          </Switch.Control>
+                          <Switch.Content>
+                            <Label className="text-sm">Desktop (noVNC + GNOME)</Label>
+                            <p className="text-muted text-xs">
+                              On = the in-container desktop is reachable via the Desktop tab. Off
+                              saves ~2 GB of RSS (gnome-shell, mutter, chrome) — the claude TUI
+                              keeps working. Takes effect immediately on a running agent.
+                            </p>
+                          </Switch.Content>
+                        </Switch>
+                      </div>
 
                       <div className="space-y-3">
                         <Switch isSelected={override} onChange={setOverride}>

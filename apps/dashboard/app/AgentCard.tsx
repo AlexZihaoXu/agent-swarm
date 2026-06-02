@@ -177,6 +177,12 @@ export function AgentCard({
               lastActivity={stats?.lastActivity}
             />
           </div>
+          {agent.desktop === false && (
+            <div className="text-muted mt-1 inline-flex items-center gap-1 text-[11px]">
+              <span aria-hidden className="bg-muted/60 inline-block size-1.5 rounded-full" />
+              Desktop off
+            </div>
+          )}
           {agent.compacting && (
             <div className="mt-2">
               <CompactingBadge progress={agent.compactingProgress ?? 0} />

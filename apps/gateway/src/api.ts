@@ -535,6 +535,7 @@ async function handleAgents(
         model: body.model ?? undefined,
         roles: body.roles,
         groups: body.groups,
+        desktop: body.desktop,
         avatarSeed: body.avatarSeed,
       });
       return (sendJson(res, 201, created), true);
@@ -553,6 +554,7 @@ async function handleAgents(
         roles?: string[];
         groups?: string[];
         permissions?: Capability[];
+        desktop?: boolean;
         avatarSeed?: string;
       } = {};
       if (body.username !== undefined) patch.username = body.username;
@@ -562,6 +564,7 @@ async function handleAgents(
       if (body.roles !== undefined) patch.roles = body.roles;
       if (body.groups !== undefined) patch.groups = body.groups;
       if (Array.isArray(body.permissions)) patch.permissions = body.permissions as Capability[];
+      if (typeof body.desktop === 'boolean') patch.desktop = body.desktop;
       if (body.avatarSeed !== undefined) patch.avatarSeed = body.avatarSeed;
       return (sendJson(res, 200, await manager.patchAgent(id, patch)), true);
     }
@@ -848,6 +851,7 @@ async function readJson(req: IncomingMessage): Promise<{
   name?: string;
   description?: string;
   permissions?: string[];
+  desktop?: boolean;
   action?: string;
   group?: string;
   avatarSeed?: string;
