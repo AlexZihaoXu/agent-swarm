@@ -19,13 +19,12 @@ import {
   getHostInfo,
   getMetrics,
   getUsage,
-  METRICS_RANGES,
   type HostInfo,
   type Metrics,
   type RateWindow,
   type Usage,
 } from '@/lib/gateway';
-import { GraphContextMenu, type GraphContextSection } from './GraphContextMenu';
+import { useDashboardSettings } from './DashboardSettings';
 
 /** Distinct line colors for per-agent resource graphs (cycled by index). */
 const LINE_COLORS = ['#e0a55e', '#7aa2f7', '#9ece6a', '#bb9af7', '#f7768e', '#7dcfff', '#e0af68'];
@@ -327,15 +326,11 @@ export function DashboardMetrics() {
   const [m, setM] = useState<Metrics | null>(null);
   const [usage, setUsage] = useState<Usage | null>(null);
   const [host, setHost] = useState<HostInfo | null>(null);
-  // Right-click → graph context menu state. The time range is shared across
-  // ALL four graphs so the "last 24h" / "last 7d" lens stays consistent; the
-  // per-graph options are graph-local. Defaults match the previous behavior.
-  const [rangeKey, setRangeKey] = useState<string>('12h');
-  const [tokensSortBy, setTokensSortBy] = useState<'tokens' | 'name'>('tokens');
-  const [showCostLine, setShowCostLine] = useState<boolean>(true);
-  const [smoothResource, setSmoothResource] = useState<boolean>(true);
-  const rangeHours = METRICS_RANGES.find((r) => r.key === rangeKey)?.hours ?? 12;
-  const rangeLabel = METRICS_RANGES.find((r) => r.key === rangeKey)?.label ?? '12 hours';
+  // Right-click settings (range + per-chart toggles) live on the page-level
+  // provider so the same menu opens anywhere on the dashboard, not just over
+  // a chart. Each chart reads its preferences from this hook.
+  const { rangeHours, rangeLabel, tokensSortBy, showCostLine, smoothResource } =
+    useDashboardSettings();
 
   // Host capacity = the ceiling for the resource graphs. CPU/RAM are fixed, but
   // disk usage drifts, so re-poll (slowly — it changes gradually).
@@ -399,21 +394,6 @@ export function DashboardMetrics() {
   );
   const overTime = m.buckets.map((b) => ({ label: fmtHour(b.t), tokens: b.tokens, cost: b.cost }));
 
-  // Shared "time range" section the four graphs each include in their menu so
-  // the user can flip the lens from any chart. Other per-graph options
-  // (sort/series toggles) are appended after this block per-graph.
-  const rangeSection: GraphContextSection = {
-    key: 'range',
-    heading: 'Time range',
-    selectedKey: rangeKey,
-    items: METRICS_RANGES.map((r) => ({ key: r.key, label: r.label, hint: r.key })),
-  };
-  const onMenuSelect = (sectionKey: string, itemKey: string) => {
-    if (sectionKey === 'range') setRangeKey(itemKey);
-    else if (sectionKey === 'sort') setTokensSortBy(itemKey === 'name' ? 'name' : 'tokens');
-    else if (sectionKey === 'cost') setShowCostLine(itemKey === 'on');
-    else if (sectionKey === 'smooth') setSmoothResource(itemKey === 'on');
-  };
   const totalTokens = m.agents.reduce((s, a) => s + a.tokens, 0);
   const totalCost = m.agents.reduce((s, a) => s + a.cost, 0);
 
@@ -584,24 +564,10 @@ export function DashboardMetrics() {
           </div>
 
           {/* Charts. Each chart's title carries the current range (e.g.,
-              "Tokens per agent · 7 days"); right-click any chart to flip the
-              range or the per-graph option. */}
+              "Tokens per agent · 7 days"); right-click anywhere on the
+              dashboard to flip the range or any per-chart toggle. */}
           <div className="grid gap-6 lg:grid-cols-2">
-            <GraphContextMenu
-              sections={[
-                rangeSection,
-                {
-                  key: 'sort',
-                  heading: 'Sort bars',
-                  selectedKey: tokensSortBy,
-                  items: [
-                    { key: 'tokens', label: 'By tokens (high→low)' },
-                    { key: 'name', label: 'By name (A→Z)' },
-                  ],
-                },
-              ]}
-              onSelect={onMenuSelect}
-            >
+            <div>
               <div className="text-muted mb-2 text-xs font-semibold tracking-wide uppercase">
                 Tokens per agent · {rangeLabel}
               </div>
@@ -639,23 +605,9 @@ export function DashboardMetrics() {
                   </ResponsiveContainer>
                 )}
               </div>
-            </GraphContextMenu>
+            </div>
 
-            <GraphContextMenu
-              sections={[
-                rangeSection,
-                {
-                  key: 'cost',
-                  heading: 'Cost overlay',
-                  selectedKey: showCostLine ? 'on' : 'off',
-                  items: [
-                    { key: 'on', label: 'Show cost line' },
-                    { key: 'off', label: 'Hide cost line' },
-                  ],
-                },
-              ]}
-              onSelect={onMenuSelect}
-            >
+            <div>
               <div className="text-muted mb-2 text-xs font-semibold tracking-wide uppercase">
                 Total tokens &amp; cost · {rangeLabel}
               </div>
@@ -709,7 +661,7 @@ export function DashboardMetrics() {
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
-            </GraphContextMenu>
+            </div>
           </div>
 
           {/* Per-agent resource graphs over the requested window (one line per agent). */}
@@ -721,19 +673,6 @@ export function DashboardMetrics() {
               format={(v) => `${Math.round(v)}%`}
               max={host ? host.cpus * 100 : undefined}
               smooth={smoothResource}
-              menuSections={[
-                rangeSection,
-                {
-                  key: 'smooth',
-                  heading: 'Line style',
-                  selectedKey: smoothResource ? 'on' : 'off',
-                  items: [
-                    { key: 'on', label: 'Smooth (monotone)' },
-                    { key: 'off', label: 'Straight (linear)' },
-                  ],
-                },
-              ]}
-              onMenuSelect={onMenuSelect}
             />
             <ResourceChart
               title={`Memory per agent · ${rangeLabel}`}
@@ -745,19 +684,6 @@ export function DashboardMetrics() {
               tickFormat={(v) => `${Math.round(v / 1024)} GB`}
               max={host ? host.memoryMb : undefined}
               smooth={smoothResource}
-              menuSections={[
-                rangeSection,
-                {
-                  key: 'smooth',
-                  heading: 'Line style',
-                  selectedKey: smoothResource ? 'on' : 'off',
-                  items: [
-                    { key: 'on', label: 'Smooth (monotone)' },
-                    { key: 'off', label: 'Straight (linear)' },
-                  ],
-                },
-              ]}
-              onMenuSelect={onMenuSelect}
             />
           </div>
         </Card.Content>
@@ -814,7 +740,7 @@ function ResourceTooltip({
   );
 }
 
-/** A per-agent line chart over the 12h window (CPU% or memory MB). */
+/** A per-agent line chart over the chosen window (CPU% or memory MB). */
 function ResourceChart({
   title,
   data,
@@ -823,8 +749,6 @@ function ResourceChart({
   tickFormat,
   max,
   smooth = true,
-  menuSections,
-  onMenuSelect,
 }: {
   title: string;
   data: Record<string, number>[];
@@ -839,12 +763,9 @@ function ResourceChart({
   /** When true the lines use recharts' "monotone" interpolation; when false
    *  they're straight segments — operator's pick from the context menu. */
   smooth?: boolean;
-  /** Sections passed through to the chart's right-click GraphContextMenu. */
-  menuSections?: GraphContextSection[];
-  onMenuSelect?: (sectionKey: string, itemKey: string) => void;
 }) {
-  const inner = (
-    <>
+  return (
+    <div>
       <div className="text-muted mb-2 text-xs font-semibold tracking-wide uppercase">{title}</div>
       <div className="h-28 w-full">
         {data.length === 0 || series.length === 0 ? (
@@ -890,14 +811,6 @@ function ResourceChart({
           </ResponsiveContainer>
         )}
       </div>
-    </>
+    </div>
   );
-  if (menuSections && onMenuSelect) {
-    return (
-      <GraphContextMenu sections={menuSections} onSelect={onMenuSelect}>
-        {inner}
-      </GraphContextMenu>
-    );
-  }
-  return <div>{inner}</div>;
 }
