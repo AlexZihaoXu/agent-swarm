@@ -44,13 +44,16 @@ def _identity() -> dict:
     try:
         with open(IDENTITY_FILE) as f:
             d = json.load(f)
+        # `desktop` defaults to True (the field is absent on legacy agents that
+        # never explicitly set it — same default as the gateway).
         return {
             "id": d.get("id"),
             "name": d.get("name") or d.get("id"),
             "groups": d.get("groups") or [],
+            "desktop": d.get("desktop") is not False,
         }
     except Exception:
-        return {"id": None, "name": None, "groups": []}
+        return {"id": None, "name": None, "groups": [], "desktop": True}
 
 
 def _shares_group(mine: list, theirs: list) -> bool:
@@ -296,6 +299,7 @@ def agent_stats(args: dict) -> dict:
     elif ctx is not None:
         ctx_line = f"context: {ctx:,} tokens (limit unknown)"
     tokens = d.get("tokens")
+    desktop = d.get("desktop")
     lines = [
         f"{d.get('name', to)}:",
         f"  status: {d.get('status') or 'unknown'}",
@@ -303,6 +307,8 @@ def agent_stats(args: dict) -> dict:
         f"  {ctx_line}",
         f"  total tokens: {tokens:,}" if tokens is not None else "  total tokens: unknown",
     ]
+    if desktop is not None:
+        lines.append(f"  desktop: {'on' if desktop else 'off'}")
     return _ok("\n".join(lines))
 
 

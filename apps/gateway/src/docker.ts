@@ -2288,6 +2288,10 @@ export class AgentManager {
     contextLimit: number | null;
     contextPct: number | null;
     tokens: number | null;
+    /** Whether the target's desktop service (GNOME + noVNC) is configured to
+     *  run. Sourced from the target's identity, not a live probe — the
+     *  identity is the source of truth for the toggle. */
+    desktop: boolean;
     error?: string;
   }> {
     if (!this.agentCan(fromId, 'view_stats'))
@@ -2325,6 +2329,7 @@ export class AgentManager {
         contextLimit,
         contextPct,
         tokens: typeof s.tokens?.total === 'number' ? s.tokens.total : null,
+        desktop: this.readIdentity(target.id)?.desktop !== false,
       };
     } catch (e) {
       return {
@@ -2335,6 +2340,7 @@ export class AgentManager {
         contextLimit: null,
         contextPct: null,
         tokens: null,
+        desktop: this.readIdentity(target.id)?.desktop !== false,
         error: e instanceof Error ? e.message : String(e),
       };
     }
