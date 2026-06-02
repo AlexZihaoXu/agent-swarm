@@ -56,6 +56,15 @@ function fmtHour(t: number): string {
   const hour12 = h % 12 === 0 ? 12 : h % 12;
   return `${hour12}${h < 12 ? 'AM' : 'PM'}`;
 }
+/** Day+hour label for >24h ranges where time-of-day alone is ambiguous (was
+ *  today's 3PM or three days ago?). Format: "Mon 3PM". */
+function fmtDayHour(t: number): string {
+  const d = new Date(t);
+  const h = d.getHours();
+  const hour12 = h % 12 === 0 ? 12 : h % 12;
+  const wk = d.toLocaleDateString([], { weekday: 'short' });
+  return `${wk} ${hour12}${h < 12 ? 'AM' : 'PM'}`;
+}
 function resetsIn(at: number): string {
   const ms = at - Date.now();
   if (ms <= 0) return 'resetting';
@@ -392,7 +401,17 @@ export function DashboardMetrics() {
   const perAgent = [...tokenByName.values()].sort((a, b) =>
     tokensSortBy === 'name' ? a.name.localeCompare(b.name) : b.tokens - a.tokens,
   );
-  const overTime = m.buckets.map((b) => ({ label: fmtHour(b.t), tokens: b.tokens, cost: b.cost }));
+  // Bucket label format depends on range: hours (12h/24h), weekday+hour (3d),
+  // or day-of-month (7d). Keeps the X axis legible without crowding.
+  const bucketLabel = rangeHours <= 24 ? fmtHour : fmtDayHour;
+  const overTime = m.buckets.map((b) => ({
+    label: bucketLabel(b.t),
+    tokens: b.tokens,
+    cost: b.cost,
+  }));
+  // Same for the resource charts' time axis (CPU / Memory), whose X ticks are
+  // numeric epoch ms (scale="time") — pick a formatter for the chosen range.
+  const resourceTick = rangeHours <= 24 ? fmtClock : fmtDayHour;
 
   const totalTokens = m.agents.reduce((s, a) => s + a.tokens, 0);
   const totalCost = m.agents.reduce((s, a) => s + a.cost, 0);
@@ -554,7 +573,7 @@ export function DashboardMetrics() {
 
             <div className="border-separator flex items-baseline justify-between gap-3 border-t pt-3 lg:ml-auto lg:block lg:border-0 lg:pt-0 lg:text-right">
               <div className="text-muted text-xs font-semibold tracking-wide uppercase">
-                Last 12h
+                Last {rangeLabel}
               </div>
               <div className="text-sm">
                 <span className="font-semibold tabular-nums">{fmtTokens(totalTokens)}</span> tokens
@@ -673,6 +692,7 @@ export function DashboardMetrics() {
               format={(v) => `${Math.round(v)}%`}
               max={host ? host.cpus * 100 : undefined}
               smooth={smoothResource}
+              timeTick={resourceTick}
             />
             <ResourceChart
               title={`Memory per agent · ${rangeLabel}`}
@@ -684,6 +704,7 @@ export function DashboardMetrics() {
               tickFormat={(v) => `${Math.round(v / 1024)} GB`}
               max={host ? host.memoryMb : undefined}
               smooth={smoothResource}
+              timeTick={resourceTick}
             />
           </div>
         </Card.Content>
@@ -701,11 +722,13 @@ function ResourceTooltip({
   payload,
   label,
   format,
+  timeTick = fmtClock,
 }: {
   active?: boolean;
   payload?: { name?: string | number; value?: number; color?: string }[];
   label?: number;
   format: (v: number) => string;
+  timeTick?: (t: number) => string;
 }) {
   if (!active || !payload?.length) return null;
   const seen = new Set<string>();
@@ -722,7 +745,7 @@ function ResourceTooltip({
   const shown = rows.slice(0, MAX);
   return (
     <div style={TOOLTIP} className="px-2.5 py-1.5">
-      <div className="text-muted mb-0.5 text-xs">{fmtClock(Number(label))}</div>
+      <div className="text-muted mb-0.5 text-xs">{timeTick(Number(label))}</div>
       {shown.map((r) => (
         <div key={r.name} className="flex items-center gap-2 text-xs leading-5">
           <span
@@ -749,6 +772,7 @@ function ResourceChart({
   tickFormat,
   max,
   smooth = true,
+  timeTick = fmtClock,
 }: {
   title: string;
   data: Record<string, number>[];
@@ -763,6 +787,9 @@ function ResourceChart({
   /** When true the lines use recharts' "monotone" interpolation; when false
    *  they're straight segments — operator's pick from the context menu. */
   smooth?: boolean;
+  /** X-axis tick formatter — varies by selected range so multi-day charts
+   *  show dates instead of bare hours. */
+  timeTick?: (t: number) => string;
 }) {
   return (
     <div>
@@ -779,7 +806,7 @@ function ResourceChart({
                 type="number"
                 scale="time"
                 domain={['dataMin', 'dataMax']}
-                tickFormatter={fmtClock}
+                tickFormatter={timeTick}
                 tick={AXIS}
                 stroke="var(--separator)"
               />
@@ -794,7 +821,7 @@ function ResourceChart({
               <RechartsTooltip
                 allowEscapeViewBox={{ x: false, y: true }}
                 wrapperStyle={{ zIndex: 50 }}
-                content={<ResourceTooltip format={format} />}
+                content={<ResourceTooltip format={format} timeTick={timeTick} />}
               />
               {series.map((s, i) => (
                 <Line
