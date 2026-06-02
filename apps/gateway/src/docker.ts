@@ -1028,6 +1028,22 @@ export class AgentManager {
     if (elapsed >= AgentManager.COMPACTING_TTL_MS) return 0;
     return elapsed / AgentManager.COMPACTING_TTL_MS;
   }
+
+  /** Per-agent epoch ms when auto-compact (NOT manual / peer compact) fired —
+   *  the agent was probably working when the Esc interrupted its turn, so
+   *  after compaction completes and claude returns to idle, we nudge it to
+   *  pick up where it left off. Cleared once the resume nudge fires (or after
+   *  RESUME_MAX_WAIT_MS if claude never goes idle). Manual compacts skip this
+   *  because the operator initiating it presumably wants to steer next. */
+  private readonly pendingAutoCompactResume = new Map<string, number>();
+  /** Wait at least this long after firing /compact before considering a resume
+   *  nudge — claude's TUI takes ~30-60s to actually finish compacting, and an
+   *  earlier nudge would land in the still-busy input buffer. */
+  private static readonly AUTO_COMPACT_RESUME_DELAY_MS = 45_000;
+  /** Give up on the resume nudge after this long — if the agent is still
+   *  busy after this, something else is keeping it occupied and the nudge
+   *  would be redundant. */
+  private static readonly AUTO_COMPACT_RESUME_MAX_WAIT_MS = 6 * 60_000;
   /** Global per-window rate-limit alert latches with hysteresis. Per the
    *  operator's stated model: "warn at X%, reset and warn again only after it
    *  drops back to X-10%". We track the metric that fired (actual % for
@@ -1131,7 +1147,14 @@ export class AgentManager {
             a.id,
             Date.now() + AgentManager.AUTO_COMPACT_COOLDOWN_MS,
           );
-          await this.compactAgent(a.id);
+          const fired = await this.compactAgent(a.id);
+          if (fired) {
+            // Mark this agent as "needs resume after compact completes" — the
+            // Esc that the /compact injection sent will have interrupted any
+            // in-progress turn, and without a nudge claude just sits idle
+            // after compaction finishes. checkPostCompactResume polls below.
+            this.pendingAutoCompactResume.set(a.id, Date.now());
+          }
           console.log(
             `[auto-compact] ${a.username || a.id}: context ${Math.round(contextPct)}% ` +
               `>= ${threshold}% — ran /compact (cooldown ${Math.round(
@@ -1141,6 +1164,55 @@ export class AgentManager {
         }
       } catch {
         /* best-effort per agent — a missed auto-compact is never worth a crash */
+      }
+    }
+    // Same tick: see if any agent we previously auto-compacted is now idle and
+    // ready for the resume nudge. Cheap (we already have the agent list).
+    await this.checkPostCompactResume(agents);
+  }
+
+  /** For each agent we recently auto-compacted, watch for the moment claude
+   *  returns to idle and inject a `[sys://resume]` nudge so it picks up the
+   *  task the Esc-driven /compact had interrupted. Cleared after firing or
+   *  after AUTO_COMPACT_RESUME_MAX_WAIT_MS, whichever first. */
+  private async checkPostCompactResume(agents: Agent[]): Promise<void> {
+    const now = Date.now();
+    for (const a of agents) {
+      const firedAt = this.pendingAutoCompactResume.get(a.id);
+      if (!firedAt) continue;
+      // Agent gone / stopped → drop the pending nudge silently.
+      if (a.status !== 'running') {
+        this.pendingAutoCompactResume.delete(a.id);
+        continue;
+      }
+      // Compaction itself takes ~30-60s; don't even probe before that.
+      if (now - firedAt < AgentManager.AUTO_COMPACT_RESUME_DELAY_MS) continue;
+      // Give up after the max wait so a perpetually-busy agent (one driven
+      // hard by some other automation) doesn't get spammed forever.
+      if (now - firedAt > AgentManager.AUTO_COMPACT_RESUME_MAX_WAIT_MS) {
+        this.pendingAutoCompactResume.delete(a.id);
+        continue;
+      }
+      try {
+        const { host, port } = await this.resolveTarget(a.id, 'terminal');
+        const resp = await fetch(`http://${host}:${port}/api/stats`);
+        if (!resp.ok) continue;
+        const s = (await resp.json()) as { status?: string | null; awaitingInput?: boolean };
+        // Claude is back to idle and not parked at a selector — safe to nudge.
+        if (s.status === 'idle' && !s.awaitingInput) {
+          this.queueDeliver(a.id, {
+            text:
+              '**[sys://resume]** Auto-compact just ran and interrupted your turn. Pick ' +
+              'up where you left off — re-check your recent work / tasks and continue ' +
+              'whatever you were doing before the compaction. If you were mid-task, ' +
+              'finish it.',
+            attachments: [],
+          });
+          this.pendingAutoCompactResume.delete(a.id);
+          console.log(`[post-compact] ${a.username || a.id}: nudged to resume`);
+        }
+      } catch {
+        /* try again next tick */
       }
     }
   }
