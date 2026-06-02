@@ -6,6 +6,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   statfsSync,
@@ -312,13 +313,23 @@ export class AgentManager {
       }
     }
 
-    // Switch the model LIVE by typing `/model <x>` into the running claude
-    // session — env (ANTHROPIC_MODEL) only takes effect on a fresh boot, and a
-    // `--continue` resume keeps the prior session's model, so a restart wouldn't
-    // reliably switch it. (The identity write above still persists the choice
-    // for the next fresh boot / recreate.)
+    // Switch the model LIVE. If the running transcript carries thinking blocks
+    // signed by the old model, the new model rejects every turn with 400
+    // "Invalid `signature` in `thinking` block". So before swapping, scrub
+    // those blocks from disk and restart claude so the new process loads the
+    // cleaned transcript. When there's nothing to scrub (no thinking yet, or
+    // the model didn't change), fall back to a live `/model` injection — same
+    // as before, no session disruption.
     if (patch.model !== undefined && idPatch.model !== prevModel && info.State.Running) {
-      void this.injectToTerminal(id, `/model ${idPatch.model || 'default'}`).catch(() => {});
+      const scrubbed = this.scrubThinkingBlocks(id);
+      if (scrubbed > 0) {
+        console.log(
+          `[model-switch] ${id}: scrubbed thinking blocks in ${scrubbed} file(s); restarting claude`,
+        );
+        void this.restartClaudeSession(id).catch(() => {});
+      } else {
+        void this.injectToTerminal(id, `/model ${idPatch.model || 'default'}`).catch(() => {});
+      }
     }
     // Desktop toggle: sync the on-disk marker (boot-time gate) and, when the
     // agent is running, also live-stop/-start the desktop units via docker
@@ -1821,6 +1832,97 @@ export class AgentManager {
         if (attempt >= MAX - 1) throw e;
       }
       await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
+    }
+  }
+
+  /** Walk an agent's claude transcript files and drop `thinking` /
+   *  `redacted_thinking` blocks from each message's content array. Required
+   *  when the operator changes the model — prior thinking blocks carry
+   *  signatures tied to the OLD model, and the new model rejects them with
+   *  400 "Invalid `signature` in `thinking` block".
+   *
+   *  Preserves uid/gid on each file (the agent user is 1000:1000; the
+   *  gateway writes as root — chown back so claude can read/write again).
+   *  Returns the number of files modified. */
+  private scrubThinkingBlocks(id: string): number {
+    const projects = join(this.agentDataDir(id), '.claude', 'projects');
+    if (!existsSync(projects)) return 0;
+    let touched = 0;
+    for (const file of this.walkJsonl(projects)) {
+      let raw: string;
+      try {
+        raw = readFileSync(file, 'utf8');
+      } catch {
+        continue;
+      }
+      const lines = raw.split('\n');
+      let changed = 0;
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (!line) continue;
+        let o: { message?: { content?: { type?: string }[] } };
+        try {
+          o = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        const msg = o.message;
+        if (!msg || !Array.isArray(msg.content)) continue;
+        const before = msg.content.length;
+        msg.content = msg.content.filter(
+          (c) => c && c.type !== 'thinking' && c.type !== 'redacted_thinking',
+        );
+        if (msg.content.length !== before) {
+          lines[i] = JSON.stringify(o);
+          changed++;
+        }
+      }
+      if (changed > 0) {
+        const tmp = file + '.scrubbed';
+        try {
+          const orig = statSync(file);
+          writeFileSync(tmp, lines.join('\n'));
+          try {
+            chownSync(tmp, orig.uid, orig.gid);
+          } catch {
+            /* gateway may not be root in dev; fall through */
+          }
+          renameSync(tmp, file);
+          touched++;
+        } catch (e) {
+          try {
+            rmSync(tmp);
+          } catch {
+            /* ignore */
+          }
+          console.warn(`[scrub] ${file}: failed to rewrite`, e);
+        }
+      }
+    }
+    return touched;
+  }
+
+  /** Restart the agent's claude TUI session. Used after a model switch so the
+   *  new process (re)loads its transcript from disk (which we just scrubbed of
+   *  thinking blocks) — the prior process keeps the old in-memory messages and
+   *  would 400 on every subsequent turn. Best effort: returns silently if the
+   *  supervisor is unreachable. */
+  private async restartClaudeSession(id: string): Promise<void> {
+    try {
+      const t = await this.resolveTarget(id, 'terminal');
+      await fetch(`http://${t.host}:${t.port}/api/sessions/claude`, { method: 'DELETE' });
+      await new Promise((r) => setTimeout(r, 300));
+      await fetch(`http://${t.host}:${t.port}/api/sessions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'claude',
+          command:
+            'claude --continue --dangerously-skip-permissions || claude --dangerously-skip-permissions',
+        }),
+      });
+    } catch {
+      /* best effort */
     }
   }
 
