@@ -75,10 +75,49 @@ NATIVE_W = NATIVE_H = 0
 SYS_DIMS: dict = {}
 
 
+class DesktopOffError(RuntimeError):
+    """Raised when a display-bound tool is invoked while the agent's desktop
+    (tigervnc + GNOME) is off. The dispatcher renders the message verbatim so
+    the model gets a clear next step (toggle on, or ask the operator)."""
+
+    pass
+
+
+def _check_desktop_enabled() -> None:
+    """If `~/.swarm/desktop-disabled` exists the systemd condition blocks
+    tigervnc + novnc at boot, so there's no X display to connect to. Raise
+    a helpful error instead of letting `display.Display()` produce a cryptic
+    `DisplayConnectionError: Can't connect to display ":1"`.
+
+    Mentions self-enabling when the agent's role grants `toggle_desktop`;
+    falls back to "ask the operator" otherwise."""
+    marker = os.path.expanduser("~/.swarm/desktop-disabled")
+    if not os.path.exists(marker):
+        return
+    can_toggle = False
+    try:
+        with open(os.path.expanduser("~/.swarm/identity.json")) as f:
+            ident = json.load(f)
+        can_toggle = "toggle_desktop" in (ident.get("permissions") or [])
+    except Exception:  # noqa: BLE001
+        pass
+    if can_toggle:
+        raise DesktopOffError(
+            "this agent's desktop is OFF — call swarm_toggle_desktop with "
+            "enabled=true to start it, then retry the screenshot/click/etc."
+        )
+    raise DesktopOffError(
+        "this agent's desktop is OFF and your role doesn't include the "
+        "'toggle own desktop' capability — ask the dashboard operator to "
+        "either enable the desktop or grant you toggle_desktop."
+    )
+
+
 def _connect() -> None:
     global d, _root, NATIVE_W, NATIVE_H, SYS_DIMS
     if d is not None:
         return
+    _check_desktop_enabled()
     d = display.Display()
     _root = d.screen().root
     g = _root.get_geometry()
@@ -770,6 +809,9 @@ TOOLS = [
     ("is_key_pressed", "Whether a specific key is currently held.", {"key": {"type": "string"}}, ["key"], is_key_pressed),
 ]
 HANDLERS = {name: fn for name, _de, _p, _r, fn in TOOLS}
+# Tools that don't touch the X display — safe to run even when the agent's
+# desktop service is off. Everything else routes through _connect() first.
+NO_DISPLAY_TOOLS = {"whoami", "list_keys", "coord_translate"}
 
 
 def _specs() -> list[dict]:
@@ -801,13 +843,21 @@ def _handle(msg: dict) -> None:
         _send({"jsonrpc": "2.0", "id": mid, "result": {"tools": _specs()}})
     elif method == "tools/call":
         params = msg.get("params") or {}
-        fn = HANDLERS.get(params.get("name"))
+        name = params.get("name")
+        fn = HANDLERS.get(name)
         if not fn:
-            _send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32602, "message": f"unknown tool {params.get('name')}"}})
+            _send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32602, "message": f"unknown tool {name}"}})
             return
         try:
-            _connect()  # ensure the X connection is up (idempotent)
+            # Skip the X handshake for tools that don't touch the display, so
+            # introspection (whoami / list_keys / coord_translate) still works
+            # when the desktop is off.
+            if name not in NO_DISPLAY_TOOLS:
+                _connect()  # ensure the X connection is up (idempotent)
             result = fn(params.get("arguments") or {})
+        except DesktopOffError as e:
+            # No class-name prefix — the message is the whole point.
+            result = _err(str(e))
         except Exception as e:  # noqa: BLE001 — surface failures to the model
             result = _err(f"{type(e).__name__}: {e}")
         _send({"jsonrpc": "2.0", "id": mid, "result": result})
