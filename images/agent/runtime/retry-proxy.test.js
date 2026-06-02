@@ -7,7 +7,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
-const { createRetryProxy } = require('./retry-proxy');
+const { createRetryProxy, stripThinkingBlocks } = require('./retry-proxy');
 
 const silentLogger = { warn: () => {}, error: () => {}, log: () => {} };
 
@@ -146,6 +146,191 @@ test('retries transport errors (upstream drops the socket)', async () => {
     await proxy.close();
     await upstream.close();
   }
+});
+
+test('400 thinking-block signature: strips thinking blocks and replays once', async () => {
+  // First hit: upstream returns the Anthropic signature-mismatch 400.
+  // After the proxy strips thinking blocks, the second hit gets a clean body
+  // (no `thinking` content) and returns 200.
+  let lastBody = null;
+  const upstream = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      lastBody = Buffer.concat(chunks).toString('utf8');
+      const parsed = JSON.parse(lastBody);
+      const hasThinking = parsed.messages.some(
+        (m) => Array.isArray(m.content) && m.content.some((c) => c.type === 'thinking'),
+      );
+      if (hasThinking) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            type: 'error',
+            error: {
+              type: 'invalid_request_error',
+              message: 'messages.0.content.0: Invalid `signature` in `thinking` block',
+            },
+          }),
+        );
+      } else {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end('ok');
+      }
+    });
+  });
+  await new Promise((r) => upstream.listen(0, '127.0.0.1', r));
+  const proxy = await startProxy(upstream.address().port);
+  try {
+    const r = await postJson(proxy.port, '/v1/messages', {
+      messages: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: 'pondering', signature: 'sig-from-old-model' },
+            { type: 'text', text: 'hi' },
+          ],
+        },
+        { role: 'user', content: 'follow up' },
+      ],
+    });
+    assert.equal(r.status, 200, 'second attempt (stripped) should succeed');
+    assert.equal(r.body, 'ok');
+    const replayed = JSON.parse(lastBody);
+    assert.equal(
+      replayed.messages[0].content.some((c) => c.type === 'thinking'),
+      false,
+      'thinking block removed from replay',
+    );
+    assert.equal(
+      replayed.messages[0].content.some((c) => c.type === 'text'),
+      true,
+      'other content preserved',
+    );
+  } finally {
+    await proxy.close();
+    await new Promise((r) => upstream.close(r));
+  }
+});
+
+test('400 thinking-block signature: forwards verbatim if the request has no thinking blocks', async () => {
+  // Same error message but the request never had a thinking block (nothing to
+  // strip) — proxy should forward the 400 without retrying.
+  const upstream = await scriptedUpstream([
+    {
+      status: 400,
+      body: JSON.stringify({
+        type: 'error',
+        error: {
+          type: 'invalid_request_error',
+          message: 'Invalid `signature` in `thinking` block',
+        },
+      }),
+    },
+  ]);
+  const proxy = await startProxy(upstream.port);
+  try {
+    const r = await postJson(proxy.port, '/v1/messages', {
+      messages: [{ role: 'user', content: 'no thinking here' }],
+    });
+    assert.equal(r.status, 400);
+    assert.equal(upstream.hits(), 1, 'no replay when there is nothing to strip');
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
+
+test('400 with unrelated message: no strip, no retry', async () => {
+  const upstream = await scriptedUpstream([
+    {
+      status: 400,
+      body: JSON.stringify({
+        type: 'error',
+        error: { type: 'invalid_request_error', message: 'tools[0]: model overload' },
+      }),
+    },
+  ]);
+  const proxy = await startProxy(upstream.port);
+  try {
+    const r = await postJson(proxy.port, '/v1/messages', {
+      messages: [{ role: 'assistant', content: [{ type: 'thinking', signature: 's' }] }],
+    });
+    assert.equal(r.status, 400);
+    assert.equal(upstream.hits(), 1);
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
+
+test('400 thinking-block signature persists after strip: surfaces verbatim, no infinite loop', async () => {
+  // Even after stripping, upstream insists on 400 — proxy must forward and
+  // stop, not loop. RETRY_MAX is 4 for 5xx; this path is bounded at 2 hits.
+  const upstream = await scriptedUpstream([
+    {
+      status: 400,
+      body: JSON.stringify({
+        type: 'error',
+        error: {
+          type: 'invalid_request_error',
+          message: 'Invalid `signature` in `thinking` block',
+        },
+      }),
+    },
+  ]);
+  const proxy = await startProxy(upstream.port);
+  try {
+    const r = await postJson(proxy.port, '/v1/messages', {
+      messages: [{ role: 'assistant', content: [{ type: 'thinking', signature: 's' }] }],
+    });
+    assert.equal(r.status, 400);
+    assert.equal(upstream.hits(), 2, 'exactly one strip-and-retry, then surface');
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
+
+test('stripThinkingBlocks: removes thinking + redacted_thinking, preserves text + tool_use', () => {
+  const out = stripThinkingBlocks(
+    Buffer.from(
+      JSON.stringify({
+        model: 'x',
+        messages: [
+          {
+            role: 'assistant',
+            content: [
+              { type: 'thinking', thinking: '…', signature: 'a' },
+              { type: 'redacted_thinking', data: 'b' },
+              { type: 'text', text: 'kept' },
+              { type: 'tool_use', id: 't1', name: 'x', input: {} },
+            ],
+          },
+          { role: 'user', content: 'plain string left alone' },
+        ],
+      }),
+    ),
+  );
+  assert.ok(out, 'should return a buffer when something was stripped');
+  const parsed = JSON.parse(out.toString('utf8'));
+  assert.equal(parsed.messages[0].content.length, 2);
+  assert.deepEqual(
+    parsed.messages[0].content.map((c) => c.type),
+    ['text', 'tool_use'],
+  );
+  assert.equal(parsed.messages[1].content, 'plain string left alone');
+});
+
+test('stripThinkingBlocks: returns null when nothing to strip (no point replaying)', () => {
+  const out = stripThinkingBlocks(
+    Buffer.from(
+      JSON.stringify({
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+      }),
+    ),
+  );
+  assert.equal(out, null);
 });
 
 test('synthesizes a 502 only when ALL transport attempts fail (never got a response)', async () => {
