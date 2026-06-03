@@ -230,6 +230,53 @@ RUN set -eux; \
     curl -fsSL "$URL" -o /usr/local/bin/oc-go-cc; \
     chmod +x /usr/local/bin/oc-go-cc; \
     /usr/local/bin/oc-go-cc --version || true
+# GitHub CLI + Tailscale: tools the swarm uses routinely. gh auth lives in
+# ~/.config/gh/ (bind-mounted, survives recreate); tailscale auth + state live
+# in /var/lib/tailscale (writable layer, lost on recreate) — restored on first
+# boot from /home/agent/.swarm/tailscale-backup/ by tailscale-restore.service
+# below. Both packages bring their own systemd units; we don't enable tailscaled
+# here because the gateway provisions the auth state (or restore does).
+RUN set -eux; \
+    ARCH="$(dpkg --print-architecture)"; \
+    install -d -m 0755 /etc/apt/keyrings; \
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      -o /etc/apt/keyrings/githubcli-archive-keyring.gpg; \
+    chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg; \
+    echo "deb [arch=$ARCH signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list; \
+    curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg \
+      -o /etc/apt/keyrings/tailscale-archive-keyring.gpg; \
+    chmod go+r /etc/apt/keyrings/tailscale-archive-keyring.gpg; \
+    curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list \
+      -o /etc/apt/sources.list.d/tailscale.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends gh tailscale; \
+    rm -rf /var/lib/apt/lists/*; \
+    tailscale --version || true; \
+    gh --version || true
+
+# Default tailscaled flags: userspace networking + local SOCKS5 (no /dev/net/tun
+# under sysbox today). Layer 2 will drop these and grant a real TUN device.
+# tailscale-restore.service overrides this from the agent's snapshot if one
+# exists, so manual changes the operator made on previous containers survive.
+RUN printf 'PORT="41641"\nFLAGS="--tun=userspace-networking --socks5-server=localhost:1055"\n' \
+      > /etc/default/tailscaled
+
+# Layer 1 (MagicDNS shim): scrape `tailscale status --json` -> /etc/hosts so
+# tailnet hostnames resolve in userspace-networking mode (where 100.100.100.100
+# isn't reachable from the kernel netstack). systemd timer refreshes every 5
+# minutes; runs once at boot too.
+COPY ts-hosts-sync.sh /usr/local/bin/ts-hosts-sync
+RUN chmod +x /usr/local/bin/ts-hosts-sync
+COPY ts-hosts-sync.service /etc/systemd/system/ts-hosts-sync.service
+COPY ts-hosts-sync.timer /etc/systemd/system/ts-hosts-sync.timer
+
+# Restore tailscale auth + flags from /home/agent/.swarm/tailscale-backup/ (the
+# gateway snapshots state into the bind-mounted home before recreates).
+COPY tailscale-restore.sh /usr/local/bin/tailscale-restore
+RUN chmod +x /usr/local/bin/tailscale-restore
+COPY tailscale-restore.service /etc/systemd/system/tailscale-restore.service
+
 # Discord MCP server (outgoing actions; the receive side is the gateway bridge).
 # Built to dist/ with tsc, then dev deps pruned so only the runtime deps remain.
 RUN cd /opt/agent-tools/discord-mcp \
@@ -292,6 +339,9 @@ RUN systemctl set-default multi-user.target \
     && systemctl enable agent-timezone.service \
     && systemctl enable agent-gpu.service \
     && systemctl enable agent-terminals.service \
+    && systemctl enable tailscale-restore.service \
+    && systemctl enable tailscaled.service \
+    && systemctl enable ts-hosts-sync.timer \
     && (systemctl mask gdm3.service 2>/dev/null || true) \
     && echo 'DISABLE_AUTOUPDATER=1' >> /etc/environment
 

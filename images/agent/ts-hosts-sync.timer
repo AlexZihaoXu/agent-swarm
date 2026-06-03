@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic tailnet -> /etc/hosts sync
+Requires=ts-hosts-sync.service
+
+[Timer]
+OnBootSec=10s
+OnUnitActiveSec=5min
+Unit=ts-hosts-sync.service
+
+[Install]
+WantedBy=timers.target

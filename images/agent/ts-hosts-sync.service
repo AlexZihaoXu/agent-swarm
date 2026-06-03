@@ -1,0 +1,8 @@
+[Unit]
+Description=Sync tailnet peers into /etc/hosts (userspace-mode DNS shim)
+After=tailscaled.service
+Wants=tailscaled.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ts-hosts-sync

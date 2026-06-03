@@ -1,0 +1,14 @@
+[Unit]
+Description=Restore tailscale state from persistent backup (post-recreate)
+DefaultDependencies=no
+After=local-fs.target
+Before=tailscaled.service network-pre.target
+ConditionPathExists=/home/agent/.swarm/tailscale-backup
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/tailscale-restore
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
