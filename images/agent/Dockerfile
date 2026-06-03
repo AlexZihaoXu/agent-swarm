@@ -244,9 +244,12 @@ RUN set -eux; \
     chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg; \
     echo "deb [arch=$ARCH signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
       > /etc/apt/sources.list.d/github-cli.list; \
+    # Tailscale's prebaked .list references /usr/share/keyrings/, so we place
+    # the keyring there to match (mixing /etc/apt/keyrings + the upstream list
+    # gives a NO_PUBKEY error at apt-get update).
     curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg \
-      -o /etc/apt/keyrings/tailscale-archive-keyring.gpg; \
-    chmod go+r /etc/apt/keyrings/tailscale-archive-keyring.gpg; \
+      -o /usr/share/keyrings/tailscale-archive-keyring.gpg; \
+    chmod go+r /usr/share/keyrings/tailscale-archive-keyring.gpg; \
     curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list \
       -o /etc/apt/sources.list.d/tailscale.list; \
     apt-get update; \
