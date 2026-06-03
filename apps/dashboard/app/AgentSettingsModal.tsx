@@ -263,6 +263,14 @@ export function AgentSettingsModal({
                           General
                           <Tabs.Indicator />
                         </Tabs.Tab>
+                        <Tabs.Tab id="access">
+                          Access
+                          <Tabs.Indicator />
+                        </Tabs.Tab>
+                        <Tabs.Tab id="resources">
+                          Resources
+                          <Tabs.Indicator />
+                        </Tabs.Tab>
                         <Tabs.Tab id="integrations">
                           Integrations
                           <Tabs.Indicator />
@@ -405,7 +413,12 @@ export function AgentSettingsModal({
                             : 'The model this agent\'s claude runs — switches live. "Default" uses claude\'s own default.'}
                         </p>
                       </div>
+                    </Tabs.Panel>
 
+                    <Tabs.Panel
+                      id="access"
+                      className="max-h-[60vh] space-y-5 overflow-y-auto pt-5 pr-1"
+                    >
                       <RegistrySelect
                         label="Roles"
                         hint="No roles defined yet — create them in Settings."
@@ -476,7 +489,12 @@ export function AgentSettingsModal({
                           </div>
                         </div>
                       )}
+                    </Tabs.Panel>
 
+                    <Tabs.Panel
+                      id="resources"
+                      className="max-h-[60vh] space-y-5 overflow-y-auto pt-5 pr-1"
+                    >
                       {allVolumes.length > 0 && (
                         <div className="space-y-2">
                           <Label className="text-sm">Shared volumes</Label>
@@ -517,6 +535,13 @@ export function AgentSettingsModal({
                             ))}
                           </div>
                         </div>
+                      )}
+
+                      {allVolumes.length === 0 && (
+                        <p className="text-muted text-xs">
+                          No shared volumes exist yet — create them on the dashboard Settings page,
+                          then attach here.
+                        </p>
                       )}
 
                       <div className="space-y-3">
@@ -593,7 +618,7 @@ export function AgentSettingsModal({
                 </Modal.Body>
 
                 <Modal.Footer>
-                  {tab === 'general' ? (
+                  {tab !== 'integrations' ? (
                     <>
                       <Button slot="close" variant="tertiary" isDisabled={busy}>
                         Cancel

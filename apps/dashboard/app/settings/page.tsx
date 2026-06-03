@@ -27,6 +27,7 @@ import { TokenExpiryBanner } from '@/app/TokenExpiryBanner';
 import { RegistryCard } from '@/app/RolesGroups';
 import { PasswordField } from '@/app/PasswordField';
 import { OpencodeGoCard } from '@/app/OpencodeGoCard';
+import { VolumesCard } from '@/app/VolumesCard';
 
 type Status = { kind: 'ok' | 'warn' | 'err'; msg: string } | null;
 
@@ -252,6 +253,10 @@ export default function SettingsPage() {
           capabilities={capabilities}
         />
       </div>
+      <div className="mt-6">
+        <VolumesCard />
+      </div>
+
       <div className="mt-6">
         <RegistryCard
           title="Groups"

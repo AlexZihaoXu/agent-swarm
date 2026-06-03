@@ -85,6 +85,20 @@ do. If `~/.swarm/roles.md` exists, **read it** to understand your role(s), and a
 you're ever unsure what you're for, check that file first. When you receive a `[sys://role]` message,
 your roles changed — **re-read `~/.swarm/roles.md`**.
 
+## Shared volumes (`~/Shared/<name>`)
+
+The operator may attach **shared volumes** to you: directories under `~/Shared/` that are the SAME
+filesystem inside every attached agent — a file you write there is instantly visible to the others
+(and vice versa). Use them to hand off artifacts, share build outputs, or keep a common workspace,
+instead of `swarm_send_file` round-trips.
+
+- Each volume has a **hard size cap** — writes past it fail with ENOSPC (`df -h ~/Shared/<name>`
+  shows usage). Keep them tidy; don't dump caches or node_modules there.
+- Concurrent writers get no locking beyond the filesystem's. Coordinate via `swarm_send` (or use
+  separate subdirectories per agent) when more than one of you writes to the same path.
+- An empty `~/Shared` (or a missing one) just means no volume is attached right now. Attachments
+  change only when your container is rebuilt by the operator.
+
 ## Incoming messages & routing prefixes
 
 Text that arrives in this terminal may carry a routing prefix of the form `[scheme://address]`. The

@@ -4,7 +4,7 @@ import { Button, buttonVariants, Card, Spinner } from '@heroui/react';
 import { AnimatePresence, motion } from 'framer-motion';
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { LuHardDrive, LuPackage, LuSettings } from 'react-icons/lu';
+import { LuPackage, LuSettings } from 'react-icons/lu';
 import { getImageStatus, listAgents, type Agent } from '@/lib/gateway';
 import { AgentCard } from './AgentCard';
 import { CreateAgentModal } from './CreateAgentModal';
@@ -15,7 +15,6 @@ import { ImageBanner } from './ImageBanner';
 import { PackagesModal } from './PackagesModal';
 import { ThemeSwitch } from './ThemeSwitch';
 import { TokenExpiryBanner } from './TokenExpiryBanner';
-import { VolumesModal } from './VolumesModal';
 
 /** Shared ease-out-expo curve for graceful, decelerating entrances. */
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
@@ -26,7 +25,6 @@ export default function HomePage() {
   const [error, setError] = useState<string | null>(null);
   const [imagePresent, setImagePresent] = useState<boolean | null>(null);
   const [packagesOpen, setPackagesOpen] = useState(false);
-  const [volumesOpen, setVolumesOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -75,16 +73,6 @@ export default function HomePage() {
               <LuPackage className="size-4" />
               <span className="hidden sm:inline">Packages</span>
             </Button>
-            <Button
-              size="sm"
-              variant="tertiary"
-              aria-label="Shared volumes"
-              className="gap-1.5"
-              onPress={() => setVolumesOpen(true)}
-            >
-              <LuHardDrive className="size-4" />
-              <span className="hidden sm:inline">Volumes</span>
-            </Button>
             <Link
               href="/settings"
               aria-label="Settings"
@@ -107,8 +95,6 @@ export default function HomePage() {
           onOpenChange={setPackagesOpen}
           onChanged={() => void refresh()}
         />
-
-        <VolumesModal isOpen={volumesOpen} onOpenChange={setVolumesOpen} />
 
         <AnimatePresence>
           {imagePresent === false && (
