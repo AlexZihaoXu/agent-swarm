@@ -36,6 +36,9 @@ export interface Agent {
   compactingProgress?: number;
   /** Identicon avatar seed (defaults to the id; reshuffleable). */
   avatarSeed?: string;
+  /** Shared volumes attached to this agent (mounted at ~/Shared/<name>).
+   *  Binds are fixed at container create — changes land on the next recreate. */
+  volumes?: string[];
 }
 
 // --- Roles & groups --------------------------------------------------------
@@ -151,7 +154,45 @@ export interface CreateAgentOptions {
   desktop?: boolean;
   /** Initial identicon avatar seed; omit to default to the agent id. */
   avatarSeed?: string;
+  /** Shared volumes to attach at creation (mounted at ~/Shared/<name>). */
+  volumes?: string[];
 }
+
+// --- Shared volumes ----------------------------------------------------------
+// Loop-image-backed ext4 filesystems shared between agents; the fixed fs size
+// is the hard cap (writes past it fail with ENOSPC). Attached volumes appear
+// inside the agent at ~/Shared/<name>; attach/detach applies on the agent's
+// next recreate (binds are fixed at container create).
+
+export interface SharedVolume {
+  name: string;
+  sizeMb: number;
+  createdAt: number;
+  /** Live used MB (null when unmounted / not yet propagated). */
+  usedMb: number | null;
+  /** Whether the loop filesystem is currently mounted on the host. */
+  mounted: boolean;
+  /** Agents whose identity lists this volume. */
+  attachedTo: { id: string; name: string }[];
+}
+
+export const VOLUME_MIN_MB = 64;
+export const VOLUME_MAX_MB = 16384;
+
+export const listVolumes = () => api<SharedVolume[]>('/api/volumes');
+export const createVolume = (name: string, sizeMb: number) =>
+  api<SharedVolume>('/api/volumes', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name, sizeMb }),
+  });
+export const deleteVolume = (name: string) =>
+  api<{ ok: true }>(`/api/volumes/${encodeURIComponent(name)}`, { method: 'DELETE' });
+/** Recreate the agent's container (new HostConfig — applies volume attach/detach
+ *  immediately). The home disk persists; the claude session resumes via
+ *  --continue. */
+export const recreateAgent = (id: string) =>
+  api<Agent>(`/api/agents/${id}/recreate`, { method: 'POST' });
 
 /** Anthropic-provider model choices ('' = claude's default). Aliases stay
  *  current across model releases, so they're preferred over ids. Kept as a
@@ -597,6 +638,7 @@ export const updateAgent = (
     permissions?: Capability[];
     desktop?: boolean;
     avatarSeed?: string;
+    volumes?: string[];
   },
 ) =>
   api<Agent>(`/api/agents/${id}`, {

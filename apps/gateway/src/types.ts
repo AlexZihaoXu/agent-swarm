@@ -63,6 +63,9 @@ export interface Agent {
   compactingProgress?: number;
   /** Seed for this agent's identicon avatar. Defaults to the id; reshuffleable. */
   avatarSeed?: string;
+  /** Shared volumes attached to this agent (mounted at ~/Shared/<name>).
+   *  Binds are fixed at container create — changes land on the next recreate. */
+  volumes?: string[];
 }
 
 // --- Roles -----------------------------------------------------------------
@@ -230,4 +233,6 @@ export interface CreateAgentOptions {
   groups?: string[];
   /** Initial identicon avatar seed; omit to default to the agent id. */
   avatarSeed?: string;
+  /** Shared volumes to attach at creation (mounted at ~/Shared/<name>). */
+  volumes?: string[];
 }

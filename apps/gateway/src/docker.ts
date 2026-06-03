@@ -1,9 +1,12 @@
 import { execFile } from 'node:child_process';
 import {
   chownSync,
+  closeSync,
   copyFileSync,
   existsSync,
+  ftruncateSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
   renameSync,
@@ -23,6 +26,14 @@ import { config as defaultConfig, type Config } from './config.js';
 import { getSettings } from './settings.js';
 import { swarmToken } from './auth.js';
 import { LATEST_VERSION, migrations, VERSION_MARKER, type MigrationCtx } from './migrations.js';
+import {
+  addVolumeMeta,
+  getVolumeMeta,
+  listVolumeMeta,
+  removeVolumeMeta,
+  validateVolumeRequest,
+  type SharedVolumeMeta,
+} from './volumes.js';
 import { DiscordBridge, sanitizeInbound, testDiscordToken } from './discord-bridge.js';
 import * as integrations from './integrations.js';
 import { CAPABILITIES, getRoles, rolesGrant } from './roles.js';
@@ -86,6 +97,10 @@ interface AgentIdentity {
   desktop?: boolean;
   /** Identicon avatar seed (defaults to the id; reshuffleable from the UI). */
   avatarSeed?: string;
+  /** Names of shared volumes bind-mounted at /home/agent/Shared/<name>.
+   *  Binds are fixed at container create, so attach/detach applies on the
+   *  next recreate. */
+  volumes?: string[];
 }
 
 /** Per-million-token USD pricing (mirrors the agent runtime's modelRates).
@@ -214,6 +229,7 @@ export class AgentManager {
       permissions: patch.permissions !== undefined ? patch.permissions : (cur?.permissions ?? []),
       desktop: patch.desktop !== undefined ? patch.desktop : (cur?.desktop ?? true),
       avatarSeed: patch.avatarSeed !== undefined ? patch.avatarSeed : cur?.avatarSeed,
+      volumes: patch.volumes !== undefined ? patch.volumes : (cur?.volumes ?? []),
     };
     mkdirSync(dirname(this.identityFile(id)), { recursive: true });
     writeFileSync(this.identityFile(id), JSON.stringify(next, null, 2));
@@ -244,6 +260,7 @@ export class AgentManager {
       permissions?: Capability[];
       desktop?: boolean;
       avatarSeed?: string;
+      volumes?: string[];
     },
   ): Promise<Agent> {
     if (!existsSync(this.agentDataDir(id)))
@@ -279,6 +296,9 @@ export class AgentManager {
     if (patch.desktop !== undefined) idPatch.desktop = patch.desktop;
     // Empty string explicitly resets the avatar to the default (id-seeded).
     if (patch.avatarSeed !== undefined) idPatch.avatarSeed = patch.avatarSeed.trim() || id;
+    // Shared-volume attach list — validated against the registry. Binds are
+    // fixed at container create, so this lands on the agent's next recreate.
+    if (patch.volumes !== undefined) idPatch.volumes = this.validateAttachList(patch.volumes);
     const prevModel = this.readIdentity(id)?.model ?? null;
     const prevProvider = this.readIdentity(id)?.provider ?? 'anthropic';
     const prevDesktop = this.readIdentity(id)?.desktop !== false;
@@ -366,6 +386,183 @@ export class AgentManager {
     } finally {
       await helper.remove({ force: true }).catch(() => {});
     }
+  }
+
+  // --- Shared volumes --------------------------------------------------------
+  // Loop-image-backed ext4 filesystems shared between agents. The image file
+  // (sparse) and the host mountpoint both live under <swarmData>/volumes/;
+  // attached agents get the mountpoint bind-mounted at ~/Shared/<name>. The
+  // fixed fs size is the hard cap — writes past it fail with ENOSPC.
+
+  private volumesDirMount(): string {
+    return join(this.cfg.swarmDataMount, 'volumes');
+  }
+  private volImgMount(name: string): string {
+    return join(this.volumesDirMount(), `${name}.img`);
+  }
+  private volDirMount(name: string): string {
+    return join(this.volumesDirMount(), name);
+  }
+  private volImgHost(name: string): string {
+    return join(this.cfg.swarmDataHost, 'volumes', `${name}.img`);
+  }
+  private volDirHost(name: string): string {
+    return join(this.cfg.swarmDataHost, 'volumes', name);
+  }
+
+  /** Run a shell command in the HOST mount namespace via a privileged one-shot
+   *  helper container (nsenter into pid 1's mount ns). The gateway container is
+   *  unprivileged and has its own mount namespace, so loop mounts must happen
+   *  on the host for the Docker daemon (and agents' binds) to see them. Volume
+   *  names are regex-validated ([a-z0-9-]) and paths come from config, so the
+   *  interpolated command is shell-safe. */
+  private async hostMountExec(cmd: string): Promise<void> {
+    const helper = await this.docker.createContainer({
+      Image: this.cfg.agentImage,
+      Entrypoint: ['nsenter', '-t', '1', '-m', '--', '/bin/sh', '-c'],
+      Cmd: [cmd],
+      HostConfig: { Privileged: true, PidMode: 'host' },
+    });
+    try {
+      await helper.start();
+      const res = (await helper.wait()) as { StatusCode: number };
+      if (res.StatusCode !== 0) {
+        let logs = '';
+        try {
+          logs = (
+            (await helper.logs({ stdout: true, stderr: true, tail: 20 })) as unknown as Buffer
+          ).toString('utf8');
+        } catch {
+          /* logs unavailable */
+        }
+        throw new Error(`volume helper exited ${res.StatusCode}: ${logs.slice(-400)}`);
+      }
+    } finally {
+      await helper.remove({ force: true }).catch(() => {});
+    }
+  }
+
+  /** Agents whose identity lists this volume (attachment is identity-side;
+   *  the bind itself lands on the agent's next recreate). */
+  private volumeAttachments(name: string): { id: string; name: string }[] {
+    const base = join(this.cfg.swarmDataMount, 'agents');
+    let ids: string[] = [];
+    try {
+      ids = readdirSync(base);
+    } catch {
+      return [];
+    }
+    const out: { id: string; name: string }[] = [];
+    for (const id of ids) {
+      const ident = this.readIdentity(id);
+      if (ident?.volumes?.includes(name)) out.push({ id, name: ident.name || id });
+    }
+    return out;
+  }
+
+  /** All volumes with live usage. `mounted` is heuristic: statfs through the
+   *  gateway's own (rslave-propagated) view of the mountpoint — if the fs
+   *  total ≈ the registered size we're seeing the loop fs; a wildly different
+   *  total means the dir is just a directory on the host root fs (unmounted
+   *  or propagation missing). */
+  listVolumes(): (SharedVolumeMeta & {
+    usedMb: number | null;
+    mounted: boolean;
+    attachedTo: { id: string; name: string }[];
+  })[] {
+    return listVolumeMeta(this.cfg.volumesFile).map((v) => {
+      let usedMb: number | null = null;
+      let mounted = false;
+      try {
+        const s = statfsSync(this.volDirMount(v.name));
+        const totalMb = (Number(s.blocks) * s.bsize) / (1 << 20);
+        mounted = totalMb > 0 && Math.abs(totalMb - v.sizeMb) / v.sizeMb < 0.25;
+        if (mounted)
+          usedMb = Math.round(((Number(s.blocks) - Number(s.bfree)) * s.bsize) / (1 << 20));
+      } catch {
+        /* dir missing → unmounted */
+      }
+      return { ...v, usedMb, mounted, attachedTo: this.volumeAttachments(v.name) };
+    });
+  }
+
+  async createVolume(nameRaw: unknown, sizeRaw: unknown): Promise<SharedVolumeMeta> {
+    const { name, sizeMb } = validateVolumeRequest(nameRaw, sizeRaw);
+    if (getVolumeMeta(this.cfg.volumesFile, name))
+      throw Object.assign(new Error(`volume "${name}" already exists`), { statusCode: 409 });
+    mkdirSync(this.volumesDirMount(), { recursive: true });
+    // Sparse image: blocks allocate on write, so a big volume doesn't eat host
+    // disk up front — the ext4 size is still the hard write cap.
+    const img = this.volImgMount(name);
+    const fd = openSync(img, 'w');
+    try {
+      ftruncateSync(fd, sizeMb * 1024 * 1024);
+    } finally {
+      closeSync(fd);
+    }
+    try {
+      await this.hostMountExec(
+        `set -e; mkdir -p ${this.volDirHost(name)}; ` +
+          `mkfs.ext4 -q -F ${this.volImgHost(name)}; ` +
+          `mount -o loop ${this.volImgHost(name)} ${this.volDirHost(name)}; ` +
+          `chown 1000:1000 ${this.volDirHost(name)}; chmod 0775 ${this.volDirHost(name)}`,
+      );
+    } catch (e) {
+      rmSync(img, { force: true });
+      throw e;
+    }
+    const meta: SharedVolumeMeta = { name, sizeMb, createdAt: Date.now() };
+    addVolumeMeta(this.cfg.volumesFile, meta);
+    return meta;
+  }
+
+  async deleteVolume(name: string): Promise<void> {
+    if (!getVolumeMeta(this.cfg.volumesFile, name))
+      throw Object.assign(new Error('volume not found'), { statusCode: 404 });
+    const attached = this.volumeAttachments(name);
+    if (attached.length > 0)
+      throw Object.assign(
+        new Error(`volume is attached to ${attached.map((a) => a.name).join(', ')} — detach first`),
+        { statusCode: 409 },
+      );
+    // Lazy umount: a recreate-pending container that still holds the old bind
+    // keeps the fs alive via its own reference until it's recreated; -l detaches
+    // the host path immediately either way.
+    await this.hostMountExec(
+      `umount -l ${this.volDirHost(name)} 2>/dev/null || true; ` +
+        `rmdir ${this.volDirHost(name)} 2>/dev/null || true`,
+    );
+    rmSync(this.volImgMount(name), { force: true });
+    removeVolumeMeta(this.cfg.volumesFile, name);
+  }
+
+  /** Re-mount all registered volumes (no-op for ones already mounted). Called
+   *  at gateway boot so volumes survive a host reboot; agents' rslave binds
+   *  pick the remount up without an agent restart. */
+  async ensureVolumesMounted(): Promise<void> {
+    for (const v of listVolumeMeta(this.cfg.volumesFile)) {
+      try {
+        await this.hostMountExec(
+          `mkdir -p ${this.volDirHost(v.name)}; ` +
+            `mountpoint -q ${this.volDirHost(v.name)} || ` +
+            `mount -o loop ${this.volImgHost(v.name)} ${this.volDirHost(v.name)}`,
+        );
+      } catch (e) {
+        console.warn(`[volumes] ensure-mount ${v.name} failed:`, e);
+      }
+    }
+  }
+
+  /** Validate a requested attach list: every name must exist in the registry.
+   *  Returns the deduped list. */
+  private validateAttachList(volumes: unknown): string[] {
+    if (!Array.isArray(volumes)) return [];
+    const names = [...new Set(volumes.map((v) => String(v)))];
+    for (const n of names) {
+      if (!getVolumeMeta(this.cfg.volumesFile, n))
+        throw Object.assign(new Error(`unknown volume "${n}"`), { statusCode: 400 });
+    }
+    return names;
   }
 
   /** Ensure the agent's `~/.swarm` dir exists AND is owned by the agent user
@@ -1583,6 +1780,7 @@ export class AgentManager {
       groups: Array.isArray(opts.groups) ? opts.groups : [],
       desktop: opts.desktop !== false,
       avatarSeed: opts.avatarSeed?.trim() || undefined,
+      volumes: this.validateAttachList(opts.volumes),
     });
     this.writeAuthToken(id);
     this.writeOpencodeGoKey(id);
@@ -1641,6 +1839,12 @@ export class AgentManager {
     // gateway's uid-1000 writes still appear as the agent user inside.
     const sysbox = this.cfg.agentRuntime === 'sysbox-runc';
     const homeBind = `${this.agentHostDir(id)}:/home/agent`;
+    // Shared volumes attached to this agent: bind each loop-mounted volume at
+    // ~/Shared/<name>. `rslave` so a host-side remount (gateway boot after a
+    // host reboot) propagates into the running container without a restart.
+    const volBinds = (this.readIdentity(id)?.volumes ?? [])
+      .filter((v) => getVolumeMeta(this.cfg.volumesFile, v))
+      .map((v) => `${this.volDirHost(v)}:/home/agent/Shared/${v}:rslave`);
     const hostConfig = {
       // Hard resource caps (omitted → unlimited). NanoCpus is cores × 1e9.
       NanoCpus: cpus ? Math.round(cpus * 1e9) : undefined,
@@ -1668,7 +1872,7 @@ export class AgentManager {
             // NET_ADMIN lets tailscaled bring up its tunnel interface against
             // the /dev/net/tun device exposed above (Layer 2).
             Runtime: 'sysbox-runc',
-            Binds: [homeBind],
+            Binds: [homeBind, ...volBinds],
             CapAdd: ['NET_ADMIN'],
           }
         : {
@@ -1676,7 +1880,7 @@ export class AgentManager {
             // these. `CgroupnsMode` is cast in — a valid Docker API field the
             // current @types/dockerode HostConfig doesn't declare yet.
             CgroupnsMode: 'host',
-            Binds: ['/sys/fs/cgroup:/sys/fs/cgroup:rw', homeBind],
+            Binds: ['/sys/fs/cgroup:/sys/fs/cgroup:rw', homeBind, ...volBinds],
             Tmpfs: { '/run': '', '/run/lock': '', '/tmp': '' },
             CapAdd: ['SYS_BOOT', 'SYS_ADMIN'],
             SecurityOpt: ['seccomp=unconfined', 'apparmor=unconfined'],
@@ -1780,6 +1984,7 @@ export class AgentManager {
         compacting: this.isCompacting(id),
         compactingProgress: this.compactingProgress(id),
         avatarSeed: identity?.avatarSeed ?? id,
+        volumes: identity?.volumes ?? [],
       };
     });
   }
@@ -2781,6 +2986,7 @@ export class AgentManager {
       compacting: this.isCompacting(id),
       compactingProgress: this.compactingProgress(id),
       avatarSeed: this.readIdentity(id)?.avatarSeed ?? id,
+      volumes: this.readIdentity(id)?.volumes ?? [],
     };
   }
 }

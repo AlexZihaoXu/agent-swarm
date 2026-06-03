@@ -98,6 +98,8 @@ const PACKAGE_API = /^\/api\/packages(?:\/([^/]+)(?:\/(download|import))?)?$/;
 // /api/roles, /api/roles/:id  •  /api/groups, /api/groups/:id
 const ROLE_API = /^\/api\/roles(?:\/([^/]+))?$/;
 const GROUP_API = /^\/api\/groups(?:\/([^/]+))?$/;
+// /api/volumes, /api/volumes/:name — shared loop-image volumes.
+const VOLUME_API = /^\/api\/volumes(?:\/([^/]+))?$/;
 // /api/groups/:id/messages — the group's running chat log.
 const GROUP_MSG_API = /^\/api\/groups\/([^/]+)\/messages$/;
 
@@ -225,6 +227,7 @@ export async function handleApi(
     if (pathname === '/api/image/build') return await handleImageBuild(res, manager, method);
     if (pathname.startsWith('/api/packages'))
       return await handlePackages(req, res, manager, method);
+    if (VOLUME_API.test(pathname)) return await handleVolumes(req, res, manager, method);
     if (AGENT_FILES_API.test(pathname)) return await handleAgentFiles(req, res, manager, method);
     if (INTEGRATION_API.test(pathname)) return await handleIntegrations(req, res, manager, method);
     if (pathname.startsWith('/api/agents')) return await handleAgents(req, res, manager, method);
@@ -519,6 +522,29 @@ async function handleGroups(
   return true;
 }
 
+// Shared volumes: list (with usage + attachments), create, delete.
+async function handleVolumes(
+  req: IncomingMessage,
+  res: ServerResponse,
+  manager: AgentManager,
+  method: string,
+): Promise<boolean> {
+  const { pathname } = new URL(req.url ?? '/', 'http://localhost');
+  const m = VOLUME_API.exec(pathname);
+  const name = m?.[1] ? decodeURIComponent(m[1]) : undefined;
+  if (!name) {
+    if (method === 'GET') return (sendJson(res, 200, manager.listVolumes()), true);
+    if (method === 'POST') {
+      const body = await readJson(req);
+      return (sendJson(res, 201, await manager.createVolume(body.name, body.sizeMb)), true);
+    }
+    return (sendJson(res, 405, { error: 'method not allowed' }), true);
+  }
+  if (method === 'DELETE')
+    return (await manager.deleteVolume(name), sendJson(res, 200, { ok: true }), true);
+  return (sendJson(res, 405, { error: 'method not allowed' }), true);
+}
+
 async function handleAgents(
   req: IncomingMessage,
   res: ServerResponse,
@@ -546,6 +572,7 @@ async function handleAgents(
         groups: body.groups,
         desktop: body.desktop,
         avatarSeed: body.avatarSeed,
+        volumes: body.volumes,
       });
       return (sendJson(res, 201, created), true);
     }
@@ -565,6 +592,7 @@ async function handleAgents(
         permissions?: Capability[];
         desktop?: boolean;
         avatarSeed?: string;
+        volumes?: string[];
       } = {};
       if (body.username !== undefined) patch.username = body.username;
       if (body.autoCompactPct !== undefined) patch.autoCompactPct = body.autoCompactPct;
@@ -575,6 +603,7 @@ async function handleAgents(
       if (Array.isArray(body.permissions)) patch.permissions = body.permissions as Capability[];
       if (typeof body.desktop === 'boolean') patch.desktop = body.desktop;
       if (body.avatarSeed !== undefined) patch.avatarSeed = body.avatarSeed;
+      if (Array.isArray(body.volumes)) patch.volumes = body.volumes;
       return (sendJson(res, 200, await manager.patchAgent(id, patch)), true);
     }
   } else if (action === 'upgrade') {
@@ -876,6 +905,8 @@ async function readJson(req: IncomingMessage): Promise<{
   password?: string;
   currentPassword?: string;
   newPassword?: string;
+  sizeMb?: number;
+  volumes?: string[];
 }> {
   const chunks: Buffer[] = [];
   for await (const c of req) chunks.push(c as Buffer);

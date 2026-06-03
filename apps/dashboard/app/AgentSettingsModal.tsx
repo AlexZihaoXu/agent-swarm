@@ -26,12 +26,15 @@ import {
   listGroups,
   listCapabilities,
   listProviders,
+  listVolumes,
+  recreateAgent,
   type Agent,
   type Capability,
   type CapabilityInfo,
   type Provider,
   type ProviderInfo,
   type Role,
+  type SharedVolume,
 } from '@/lib/gateway';
 import { randomName } from '@/lib/names';
 import { IntegrationsPanel } from './IntegrationsPanel';
@@ -78,12 +81,14 @@ export function AgentSettingsModal({
   const [avatarSeed, setAvatarSeed] = useState('');
   const [permissions, setPermissions] = useState<Capability[]>([]);
   const [desktop, setDesktop] = useState(true);
+  const [volumes, setVolumes] = useState<string[]>([]);
+  const [allVolumes, setAllVolumes] = useState<SharedVolume[]>([]);
   const [allRoles, setAllRoles] = useState<Role[]>([]);
   const [allGroups, setAllGroups] = useState<Role[]>([]);
   const [allCaps, setAllCaps] = useState<CapabilityInfo[]>([]);
   const [allProviders, setAllProviders] = useState<ProviderInfo[]>([]);
   const [busy, setBusy] = useState(false);
-  const [phase, setPhase] = useState<'form' | 'restart'>('form');
+  const [phase, setPhase] = useState<'form' | 'restart' | 'rebuild'>('form');
   const [tab, setTab] = useState('general');
 
   // Load the global role/group registries for the assignment selectors.
@@ -100,6 +105,9 @@ export function AgentSettingsModal({
       .catch(() => {});
     void listProviders()
       .then(setAllProviders)
+      .catch(() => {});
+    void listVolumes()
+      .then(setAllVolumes)
       .catch(() => {});
   }, [isOpen]);
 
@@ -123,6 +131,7 @@ export function AgentSettingsModal({
         setGroups(a.groups ?? []);
         setPermissions(a.permissions ?? []);
         setDesktop(a.desktop !== false);
+        setVolumes(a.volumes ?? []);
         setAvatarSeed(a.avatarSeed || a.id);
       })
       .catch(() => {});
@@ -145,6 +154,8 @@ export function AgentSettingsModal({
   // session); for opencodeGo the model lives in the proxy, also live.
   const running = agent?.status === 'running';
   const needsRestart = pctChanged || providerChanged;
+  const origVolumes = JSON.stringify([...(agent?.volumes ?? [])].sort());
+  const volumesChanged = JSON.stringify([...volumes].sort()) !== origVolumes;
 
   const providerModels =
     allProviders.find((p) => p.key === provider)?.models ??
@@ -166,6 +177,7 @@ export function AgentSettingsModal({
         permissions,
         desktop,
         avatarSeed,
+        volumes,
       });
       onChanged?.();
       if (modelChanged && !providerChanged && running) {
@@ -174,9 +186,13 @@ export function AgentSettingsModal({
       }
       if (needsRestart && running) {
         setPhase('restart');
+      } else if (volumesChanged && running) {
+        setPhase('rebuild');
       } else {
         if (pctChanged && !providerChanged)
           toast.warning('Saved — the new threshold applies next time the agent starts.');
+        if (volumesChanged && !running)
+          toast.success('Saved — volumes mount when the agent starts.');
         onOpenChange(false);
       }
     } catch (e) {
@@ -200,6 +216,23 @@ export function AgentSettingsModal({
     }
   };
 
+  /** Container rebuild (rm + create) — required for volume attach/detach since
+   *  binds are fixed at container create. Home disk + transcript persist. */
+  const rebuild = async () => {
+    setBusy(true);
+    try {
+      await recreateAgent(agentId);
+      onChanged?.();
+      onOpenChange(false);
+    } catch (e) {
+      toast.warning(
+        e instanceof Error ? e.message : 'Rebuild failed — recreate manually to apply.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <Modal>
       <Modal.Backdrop
@@ -212,7 +245,11 @@ export function AgentSettingsModal({
             <Modal.CloseTrigger />
             <Modal.Header>
               <Modal.Heading>
-                {phase === 'form' ? 'Agent settings' : 'Restart to apply?'}
+                {phase === 'form'
+                  ? 'Agent settings'
+                  : phase === 'restart'
+                    ? 'Restart to apply?'
+                    : 'Rebuild to apply volumes?'}
               </Modal.Heading>
             </Modal.Header>
 
@@ -440,6 +477,48 @@ export function AgentSettingsModal({
                         </div>
                       )}
 
+                      {allVolumes.length > 0 && (
+                        <div className="space-y-2">
+                          <Label className="text-sm">Shared volumes</Label>
+                          <p className="text-muted text-xs">
+                            Mounted at <code>~/Shared/&lt;name&gt;</code> — files are shared with
+                            every other attached agent. Changes apply on the next rebuild.
+                          </p>
+                          <div className="space-y-2">
+                            {allVolumes.map((v) => (
+                              <Switch
+                                key={v.name}
+                                isSelected={volumes.includes(v.name)}
+                                onChange={(on) =>
+                                  setVolumes((prev) =>
+                                    on ? [...prev, v.name] : prev.filter((x) => x !== v.name),
+                                  )
+                                }
+                              >
+                                <Switch.Control>
+                                  <Switch.Thumb />
+                                </Switch.Control>
+                                <Switch.Content>
+                                  <Label className="text-sm font-mono">{v.name}</Label>
+                                  <p className="text-muted text-xs">
+                                    {v.usedMb !== null ? `${v.usedMb} / ` : ''}
+                                    {v.sizeMb} MB
+                                    {v.attachedTo.length > 0
+                                      ? ` · shared with ${
+                                          v.attachedTo
+                                            .filter((a) => a.id !== agentId)
+                                            .map((a) => a.name)
+                                            .join(', ') || 'no one else yet'
+                                        }`
+                                      : ''}
+                                  </p>
+                                </Switch.Content>
+                              </Switch>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
                       <div className="space-y-3">
                         <Switch isSelected={desktop} onChange={setDesktop}>
                           <Switch.Control>
@@ -530,7 +609,7 @@ export function AgentSettingsModal({
                   )}
                 </Modal.Footer>
               </>
-            ) : (
+            ) : phase === 'restart' ? (
               <>
                 <Modal.Body>
                   <p className="text-muted text-sm">
@@ -547,6 +626,25 @@ export function AgentSettingsModal({
                   </Button>
                   <Button isDisabled={busy} onPress={() => void restart()}>
                     {busy ? 'Restarting…' : 'Restart now'}
+                  </Button>
+                </Modal.Footer>
+              </>
+            ) : (
+              <>
+                <Modal.Body>
+                  <p className="text-muted text-sm">
+                    Volume attachments changed. Mounts are fixed when the container is created, so
+                    the agent&apos;s container must be rebuilt (same disk, fresh container) for{' '}
+                    <code>~/Shared</code> to update. The transcript is preserved and resumes via{' '}
+                    <code>--continue</code>.
+                  </p>
+                </Modal.Body>
+                <Modal.Footer>
+                  <Button variant="tertiary" isDisabled={busy} onPress={() => onOpenChange(false)}>
+                    Later
+                  </Button>
+                  <Button isDisabled={busy} onPress={() => void rebuild()}>
+                    {busy ? 'Rebuilding…' : 'Rebuild now'}
                   </Button>
                 </Modal.Footer>
               </>

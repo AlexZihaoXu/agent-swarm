@@ -16,6 +16,7 @@ import { useState } from 'react';
 import { LuChevronRight, LuDices, LuRefreshCw } from 'react-icons/lu';
 import {
   createAgent,
+  listVolumes,
   getHostInfo,
   listGroups,
   listProviders,
@@ -23,6 +24,7 @@ import {
   type Provider,
   type ProviderInfo,
   type Role,
+  type SharedVolume,
 } from '@/lib/gateway';
 import { randomName } from '@/lib/names';
 import { Identicon, randomSeed } from '@/lib/identicon';
@@ -122,6 +124,8 @@ export function CreateAgentModal({
   const [allGroups, setAllGroups] = useState<Role[]>([]);
   const [allProviders, setAllProviders] = useState<ProviderInfo[]>([]);
   const [avatarSeed, setAvatarSeed] = useState('');
+  const [volumes, setVolumes] = useState<string[]>([]);
+  const [allVolumes, setAllVolumes] = useState<SharedVolume[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -145,8 +149,12 @@ export function CreateAgentModal({
     setRoles([]);
     setGroups([]);
     setAvatarSeed(randomSeed());
+    setVolumes([]);
     setError(null);
     setOpen(true);
+    void listVolumes()
+      .then(setAllVolumes)
+      .catch(() => {});
     void listRoles()
       .then(setAllRoles)
       .catch(() => {});
@@ -185,6 +193,7 @@ export function CreateAgentModal({
         roles,
         groups,
         avatarSeed: avatarSeed || undefined,
+        volumes: volumes.length > 0 ? volumes : undefined,
       });
       setOpen(false);
       onCreated();
@@ -371,6 +380,35 @@ export function CreateAgentModal({
                       value={groups}
                       onChange={setGroups}
                     />
+                    {allVolumes.length > 0 && (
+                      <div className="space-y-2">
+                        <Label className="text-sm">Shared volumes</Label>
+                        <p className="text-muted text-xs">
+                          Mounted at <code>~/Shared/&lt;name&gt;</code>, shared with every other
+                          attached agent.
+                        </p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {allVolumes.map((v) => {
+                            const on = volumes.includes(v.name);
+                            return (
+                              <Button
+                                key={v.name}
+                                size="sm"
+                                variant={on ? 'primary' : 'tertiary'}
+                                className="font-mono"
+                                onPress={() =>
+                                  setVolumes((prev) =>
+                                    on ? prev.filter((x) => x !== v.name) : [...prev, v.name],
+                                  )
+                                }
+                              >
+                                {v.name}
+                              </Button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 

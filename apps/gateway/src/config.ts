@@ -63,6 +63,8 @@ export const config = {
   groupsFile: process.env.GROUPS_FILE ?? join(dirname(settingsFile), 'groups.json'),
   /** Per-group chat logs (the running group-chat transcript shown in the UI). */
   groupChatsFile: process.env.GROUP_CHATS_FILE ?? join(dirname(settingsFile), 'group-chats.json'),
+  /** Shared-volume registry (name + size of each loop-image-backed volume). */
+  volumesFile: process.env.VOLUMES_FILE ?? join(dirname(settingsFile), 'volumes.json'),
   /**
    * Persistent agent disks. Each agent's home is bind-mounted from
    * `${swarmDataHost}/agents/<id>` on the HOST (the daemon resolves this), and

@@ -66,6 +66,13 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - gateway-data:/data
-      - ${PWD}/.swarm_data:/swarmdata
+      # rslave: host mounts that appear UNDER .swarm_data after this container
+      # starts (the shared-volume loop mounts at volumes/<name>) propagate in,
+      # so the gateway can statfs them for usage reporting.
+      - type: bind
+        source: ${PWD}/.swarm_data
+        target: /swarmdata
+        bind:
+          propagation: rslave
     networks: [swarm-net]
     restart: unless-stopped
