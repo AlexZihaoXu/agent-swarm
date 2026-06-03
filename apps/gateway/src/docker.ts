@@ -1971,7 +1971,13 @@ export class AgentManager {
     this.writeDesktopMarker(id);
     this.writeRolesDoc(id);
     this.markDeliberateRestart(id); // → [sys://restart] notice once the new container boots
-    return this.spawnContainer(id, name, labels, cpus, memoryMb, timezone);
+    // Drop the old bridge connection (bound to the removed container) before
+    // spawning, then reconnect — without this a recreated agent's Discord bot
+    // stays offline until the next gateway restart (start() already does both).
+    await this.discord.disconnect(id).catch(() => {});
+    const agent = await this.spawnContainer(id, name, labels, cpus, memoryMb, timezone);
+    void this.reconnectIntegrations(id);
+    return agent;
   }
 
   async list(): Promise<Agent[]> {
