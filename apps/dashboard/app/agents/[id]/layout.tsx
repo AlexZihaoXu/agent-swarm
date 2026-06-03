@@ -9,6 +9,7 @@ import { LuChevronLeft, LuFolderOpen, LuMonitor, LuSettings, LuTerminal } from '
 import { AgentSettingsModal } from '@/app/AgentSettingsModal';
 import { AgentStatsBar } from '@/app/AgentStats';
 import { FileExplorer } from '@/app/FileExplorer';
+import { agentFilesBase } from '@/lib/gateway';
 import { ChatWidget } from './ChatWidget';
 import { DesktopLockButton, DesktopLockProvider } from './DesktopLock';
 
@@ -104,7 +105,14 @@ export default function AgentLayout({
         <div className="min-h-0 flex-1">{children}</div>
       </DesktopLockProvider>
       <AgentSettingsModal agentId={id} isOpen={settingsOpen} onOpenChange={setSettingsOpen} />
-      <FileExplorer agentId={id} agentName={id} isOpen={filesOpen} onOpenChange={setFilesOpen} />
+      <FileExplorer
+        apiBase={agentFilesBase(id)}
+        title={id}
+        copyPathRoot="/home/agent"
+        defaultPath="Desktop"
+        isOpen={filesOpen}
+        onOpenChange={setFilesOpen}
+      />
       <ChatWidget agentId={id} />
     </motion.div>
   );

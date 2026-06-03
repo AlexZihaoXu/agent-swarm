@@ -585,33 +585,40 @@ export interface DirView {
   path: string;
   entries: FileEntry[];
 }
-const filesBase = (id: string) => `/api/agents/${id}/files`;
-export const listAgentFiles = (id: string, path: string) =>
-  api<DirView>(`${filesBase(id)}?op=list&path=${encodeURIComponent(path)}`);
-export const readAgentFile = (id: string, path: string) =>
-  api<{ content: string }>(`${filesBase(id)}?op=read&path=${encodeURIComponent(path)}`);
-const filesPost = (id: string, op: string, body: Record<string, string>) =>
-  api<{ ok: true }>(`${filesBase(id)}?op=${op}`, {
+// --- File explorer (agent home OR shared volume) ----------------------------
+// All explorer ops take a `base` URL fragment so the same component can browse
+// either an agent's /home/agent (`/api/agents/<id>/files`) or a shared volume's
+// root (`/api/volumes/<name>/files`).
+
+export const agentFilesBase = (id: string) => `/api/agents/${id}/files`;
+export const volumeFilesBase = (name: string) => `/api/volumes/${encodeURIComponent(name)}/files`;
+
+export const listFiles = (base: string, path: string) =>
+  api<DirView>(`${base}?op=list&path=${encodeURIComponent(path)}`);
+export const readFile = (base: string, path: string) =>
+  api<{ content: string }>(`${base}?op=read&path=${encodeURIComponent(path)}`);
+const filesPost = (base: string, op: string, body: Record<string, string>) =>
+  api<{ ok: true }>(`${base}?op=${op}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   });
-export const writeAgentFile = (id: string, path: string, content: string) =>
-  filesPost(id, 'write', { path, content });
-export const mkdirAgentFile = (id: string, path: string) => filesPost(id, 'mkdir', { path });
-export const renameAgentFile = (id: string, from: string, to: string) =>
-  filesPost(id, 'rename', { from, to });
-export const deleteAgentFile = (id: string, path: string) => filesPost(id, 'delete', { path });
+export const writeFile = (base: string, path: string, content: string) =>
+  filesPost(base, 'write', { path, content });
+export const mkdirFile = (base: string, path: string) => filesPost(base, 'mkdir', { path });
+export const renameFile = (base: string, from: string, to: string) =>
+  filesPost(base, 'rename', { from, to });
+export const deleteFile = (base: string, path: string) => filesPost(base, 'delete', { path });
 /** Direct URL for downloading a file (same-origin → the session cookie is sent). */
-export const agentFileDownloadUrl = (id: string, path: string) =>
-  `${GATEWAY_BASE}${filesBase(id)}?op=download&path=${encodeURIComponent(path)}`;
+export const fileDownloadUrl = (base: string, path: string) =>
+  `${GATEWAY_BASE}${base}?op=download&path=${encodeURIComponent(path)}`;
 /** Direct URL for downloading a folder as a .zip (same-origin → cookie is sent). */
-export const agentFolderZipUrl = (id: string, path: string) =>
-  `${GATEWAY_BASE}${filesBase(id)}?op=zip&path=${encodeURIComponent(path)}`;
+export const folderZipUrl = (base: string, path: string) =>
+  `${GATEWAY_BASE}${base}?op=zip&path=${encodeURIComponent(path)}`;
 /** Upload a File into `dir` (raw body; filename in the query). */
-export async function uploadAgentFile(id: string, dir: string, file: File): Promise<void> {
+export async function uploadFile(base: string, dir: string, file: File): Promise<void> {
   const res = await fetch(
-    `${GATEWAY_BASE}${filesBase(id)}?op=upload&path=${encodeURIComponent(dir)}&name=${encodeURIComponent(file.name)}`,
+    `${GATEWAY_BASE}${base}?op=upload&path=${encodeURIComponent(dir)}&name=${encodeURIComponent(file.name)}`,
     { method: 'POST', body: file },
   );
   if (!res.ok) {

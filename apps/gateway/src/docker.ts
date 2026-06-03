@@ -404,6 +404,13 @@ export class AgentManager {
   private volDirMount(name: string): string {
     return join(this.volumesDirMount(), name);
   }
+  /** Filesystem root of a shared volume, for the file-explorer routes. Throws
+   *  404 when the name isn't registered. */
+  volumeHome(name: string): string {
+    if (!getVolumeMeta(this.cfg.volumesFile, name))
+      throw Object.assign(new Error('volume not found'), { statusCode: 404 });
+    return this.volDirMount(name);
+  }
   private volImgHost(name: string): string {
     return join(this.cfg.swarmDataHost, 'volumes', `${name}.img`);
   }

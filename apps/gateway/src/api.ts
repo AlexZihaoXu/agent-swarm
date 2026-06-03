@@ -100,6 +100,8 @@ const ROLE_API = /^\/api\/roles(?:\/([^/]+))?$/;
 const GROUP_API = /^\/api\/groups(?:\/([^/]+))?$/;
 // /api/volumes, /api/volumes/:name — shared loop-image volumes.
 const VOLUME_API = /^\/api\/volumes(?:\/([^/]+))?$/;
+// /api/volumes/:name/files — file-explorer ops on a shared volume's root.
+const VOLUME_FILES_API = /^\/api\/volumes\/([^/]+)\/files$/;
 // /api/groups/:id/messages — the group's running chat log.
 const GROUP_MSG_API = /^\/api\/groups\/([^/]+)\/messages$/;
 
@@ -227,6 +229,7 @@ export async function handleApi(
     if (pathname === '/api/image/build') return await handleImageBuild(res, manager, method);
     if (pathname.startsWith('/api/packages'))
       return await handlePackages(req, res, manager, method);
+    if (VOLUME_FILES_API.test(pathname)) return await handleVolumeFiles(req, res, manager, method);
     if (VOLUME_API.test(pathname)) return await handleVolumes(req, res, manager, method);
     if (AGENT_FILES_API.test(pathname)) return await handleAgentFiles(req, res, manager, method);
     if (INTEGRATION_API.test(pathname)) return await handleIntegrations(req, res, manager, method);
@@ -308,16 +311,16 @@ async function handleAuth(
 
 // /api/agents/:id/files?op=… — per-agent file explorer (operator-only; gated).
 // ops: list/read/download (GET), upload/write/mkdir/rename/delete (POST).
-async function handleAgentFiles(
+/** Shared file-explorer dispatch: drives the same op/path query-string
+ *  protocol against any filesystem root (agent home, shared volume). The
+ *  caller resolves the root (and throws 404 if it doesn't exist). */
+async function dispatchFileOp(
   req: IncomingMessage,
   res: ServerResponse,
-  manager: AgentManager,
+  root: string,
   method: string,
 ): Promise<boolean> {
   const url = new URL(req.url ?? '/', 'http://localhost');
-  const id = AGENT_FILES_API.exec(url.pathname)?.[1];
-  if (!id) return (sendJson(res, 404, { error: 'unknown endpoint' }), true);
-  const root = manager.agentHome(id); // throws 404 if the agent disk is absent
   const op = url.searchParams.get('op') ?? '';
   const qpath = url.searchParams.get('path') ?? '';
 
@@ -391,6 +394,32 @@ async function handleAgentFiles(
   }
   sendJson(res, 405, { error: 'method not allowed' });
   return true;
+}
+
+async function handleAgentFiles(
+  req: IncomingMessage,
+  res: ServerResponse,
+  manager: AgentManager,
+  method: string,
+): Promise<boolean> {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const id = AGENT_FILES_API.exec(url.pathname)?.[1];
+  if (!id) return (sendJson(res, 404, { error: 'unknown endpoint' }), true);
+  const root = manager.agentHome(id); // throws 404 if the agent disk is absent
+  return dispatchFileOp(req, res, root, method);
+}
+
+async function handleVolumeFiles(
+  req: IncomingMessage,
+  res: ServerResponse,
+  manager: AgentManager,
+  method: string,
+): Promise<boolean> {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const name = VOLUME_FILES_API.exec(url.pathname)?.[1];
+  if (!name) return (sendJson(res, 404, { error: 'unknown endpoint' }), true);
+  const root = manager.volumeHome(decodeURIComponent(name)); // 404 if unregistered
+  return dispatchFileOp(req, res, root, method);
 }
 
 // /api/agents/:id/integrations[/:type[/(test|apply|disable)]]

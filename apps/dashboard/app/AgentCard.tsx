@@ -17,6 +17,7 @@ import {
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState, type MouseEvent } from 'react';
 import {
+  agentFilesBase,
   compactAgent,
   getUpgradeInfo,
   removeAgent,
@@ -331,8 +332,10 @@ export function AgentCard({
       />
 
       <FileExplorer
-        agentId={agent.id}
-        agentName={agent.username || agent.id}
+        apiBase={agentFilesBase(agent.id)}
+        title={agent.username || agent.id}
+        copyPathRoot="/home/agent"
+        defaultPath="Desktop"
         isOpen={dialog === 'files'}
         onOpenChange={(o) => !o && setDialog(null)}
       />

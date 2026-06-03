@@ -31,21 +31,18 @@ import {
   LuUpload,
 } from 'react-icons/lu';
 import {
-  agentFileDownloadUrl,
-  agentFolderZipUrl,
-  deleteAgentFile,
-  listAgentFiles,
-  mkdirAgentFile,
-  readAgentFile,
-  renameAgentFile,
-  uploadAgentFile,
-  writeAgentFile,
+  deleteFile,
+  fileDownloadUrl,
+  folderZipUrl,
+  listFiles,
+  mkdirFile,
+  readFile,
+  renameFile,
+  uploadFile,
+  writeFile,
   type DirView,
   type FileEntry,
 } from '@/lib/gateway';
-
-/** The path the agent itself sees for its home, used by "Copy path". */
-const AGENT_HOME = '/home/agent';
 
 /** Extensions we open in the built-in text editor; everything else downloads. */
 const TEXT_EXT = new Set([
@@ -140,13 +137,23 @@ function join(dir: string, name: string): string {
  * download, make folders, rename, delete, and edit text files inline.
  */
 export function FileExplorer({
-  agentId,
-  agentName,
+  apiBase,
+  title,
+  /** Path inside the agent / container that maps to the explorer root —
+   *  only used by "Copy path" so the agent can find the same file. For an
+   *  agent home it's "/home/agent"; for a shared volume it's the volume's
+   *  mount path inside attached agents (e.g. "/home/agent/Shared/<name>"). */
+  copyPathRoot,
+  /** Folder to open by default when the modal mounts (relative to root).
+   *  Falls back to '' (root) on error. Pass '' to always open at root. */
+  defaultPath = '',
   isOpen,
   onOpenChange,
 }: {
-  agentId: string;
-  agentName: string;
+  apiBase: string;
+  title: string;
+  copyPathRoot: string;
+  defaultPath?: string;
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -167,7 +174,7 @@ export function FileExplorer({
   const load = useCallback(
     (path: string) => {
       setLoading(true);
-      listAgentFiles(agentId, path)
+      listFiles(apiBase, path)
         .then((v) => {
           setView(v);
           setCwd(v.path);
@@ -175,21 +182,21 @@ export function FileExplorer({
         .catch((e) => toast.warning(e instanceof Error ? e.message : 'Failed to list folder.'))
         .finally(() => setLoading(false));
     },
-    [agentId],
+    [apiBase],
   );
 
   // Open to Desktop by default (the agent's visible workspace); fall back to the
   // home root for agents that don't have a Desktop folder.
   const openDefault = useCallback(() => {
     setLoading(true);
-    listAgentFiles(agentId, 'Desktop')
+    listFiles(apiBase, defaultPath)
       .then((v) => {
         setView(v);
         setCwd(v.path);
         setLoading(false);
       })
       .catch(() => load(''));
-  }, [agentId, load]);
+  }, [apiBase, defaultPath, load]);
 
   useEffect(() => {
     if (isOpen) {
@@ -205,7 +212,7 @@ export function FileExplorer({
   useEffect(() => setQuery(''), [cwd]);
 
   const copyPath = (name: string) => {
-    const full = `${AGENT_HOME}/${join(cwd, name)}`;
+    const full = `${copyPathRoot}/${join(cwd, name)}`.replace(/\/+$/, '');
     navigator.clipboard
       .writeText(full)
       .then(() => toast.success('Path copied.'))
@@ -217,7 +224,7 @@ export function FileExplorer({
   };
   const removeEntry = (e: FileEntry) => {
     if (confirm(`Delete "${e.name}"${e.dir ? ' and its contents' : ''}?`))
-      void run(() => deleteAgentFile(agentId, join(cwd, e.name)));
+      void run(() => deleteFile(apiBase, join(cwd, e.name)));
   };
 
   // Right-click context-menu actions, keyed by Dropdown.Item id.
@@ -226,9 +233,7 @@ export function FileExplorer({
     const rel = join(cwd, e.name);
     if (key === 'open') openEntry(e);
     else if (key === 'download')
-      window.location.href = e.dir
-        ? agentFolderZipUrl(agentId, rel)
-        : agentFileDownloadUrl(agentId, rel);
+      window.location.href = e.dir ? folderZipUrl(apiBase, rel) : fileDownloadUrl(apiBase, rel);
     else if (key === 'copy') copyPath(e.name);
     else if (key === 'rename') startRename(e.name);
     else if (key === 'delete') removeEntry(e);
@@ -250,11 +255,11 @@ export function FileExplorer({
     if (e.dir) return load(join(cwd, e.name));
     if (isText(e.name)) {
       const path = join(cwd, e.name);
-      readAgentFile(agentId, path)
+      readFile(apiBase, path)
         .then(({ content }) => setEditing({ path, content, dirty: false }))
         .catch((err) => toast.warning(err instanceof Error ? err.message : 'Failed to open file.'));
     } else {
-      window.location.href = agentFileDownloadUrl(agentId, join(cwd, e.name));
+      window.location.href = fileDownloadUrl(apiBase, join(cwd, e.name));
     }
   };
 
@@ -262,7 +267,7 @@ export function FileExplorer({
     if (!files || files.length === 0) return;
     setBusy(true);
     try {
-      for (const f of Array.from(files)) await uploadAgentFile(agentId, cwd, f);
+      for (const f of Array.from(files)) await uploadFile(apiBase, cwd, f);
       toast.success(`Uploaded ${files.length} file${files.length > 1 ? 's' : ''}.`);
       load(cwd);
     } catch (e) {
@@ -286,7 +291,7 @@ export function FileExplorer({
           <Modal.Dialog className="flex h-[80vh] max-h-[88vh] flex-col sm:max-w-[760px]">
             <Modal.CloseTrigger />
             <Modal.Header>
-              <Modal.Heading>Files — {agentName}</Modal.Heading>
+              <Modal.Heading>Files — {title}</Modal.Heading>
             </Modal.Header>
             <Modal.Body
               className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden"
@@ -294,7 +299,7 @@ export function FileExplorer({
             >
               {editing ? (
                 <EditorPane
-                  agentId={agentId}
+                  apiBase={apiBase}
                   editing={editing}
                   setEditing={setEditing}
                   onClose={() => setEditing(null)}
@@ -359,7 +364,7 @@ export function FileExplorer({
                         onChange={(e) => setNewFolder(e.target.value)}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter' && newFolder.trim()) {
-                            void run(() => mkdirAgentFile(agentId, join(cwd, newFolder.trim())));
+                            void run(() => mkdirFile(apiBase, join(cwd, newFolder.trim())));
                             setNewFolder(null);
                           } else if (e.key === 'Escape') setNewFolder(null);
                         }}
@@ -368,7 +373,7 @@ export function FileExplorer({
                         size="sm"
                         isDisabled={busy || !newFolder.trim()}
                         onPress={() => {
-                          void run(() => mkdirAgentFile(agentId, join(cwd, newFolder.trim())));
+                          void run(() => mkdirFile(apiBase, join(cwd, newFolder.trim())));
                           setNewFolder(null);
                         }}
                       >
@@ -434,8 +439,8 @@ export function FileExplorer({
                                     renameValue !== e.name
                                   ) {
                                     void run(() =>
-                                      renameAgentFile(
-                                        agentId,
+                                      renameFile(
+                                        apiBase,
                                         join(cwd, e.name),
                                         join(cwd, renameValue.trim()),
                                       ),
@@ -590,12 +595,12 @@ export function FileExplorer({
 
 /** Inline text editor for a single file. */
 function EditorPane({
-  agentId,
+  apiBase,
   editing,
   setEditing,
   onClose,
 }: {
-  agentId: string;
+  apiBase: string;
   editing: { path: string; content: string; dirty: boolean };
   setEditing: (e: { path: string; content: string; dirty: boolean } | null) => void;
   onClose: () => void;
@@ -605,7 +610,7 @@ function EditorPane({
   const save = async () => {
     setSaving(true);
     try {
-      await writeAgentFile(agentId, editing.path, editing.content);
+      await writeFile(apiBase, editing.path, editing.content);
       setEditing({ ...editing, dirty: false });
       toast.success('Saved.');
     } catch (e) {
@@ -624,7 +629,7 @@ function EditorPane({
         </div>
         <div className="flex items-center gap-2">
           <a
-            href={agentFileDownloadUrl(agentId, editing.path)}
+            href={fileDownloadUrl(apiBase, editing.path)}
             className="text-muted hover:text-foreground rounded p-1"
             aria-label="Download"
           >
