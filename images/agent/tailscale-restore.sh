@@ -37,8 +37,16 @@ if [ -f "$BACKUP/var-lib-tailscale.tgz" ]; then
   echo "restored $STATE from snapshot"
 fi
 
-# Restore daemon flags (e.g. --tun=userspace-networking --socks5-server).
+# Restore daemon flags ONLY if the snapshot looks like a custom-tuned config
+# we should preserve. Skip when the snapshot just carries the legacy Layer 1
+# defaults (--tun=userspace-networking --socks5-server=localhost:1055) — the
+# image's current Layer 2 defaults (kernel TUN, no SOCKS) supersede those.
 if [ -f "$BACKUP/etc-default-tailscaled" ]; then
-  cp "$BACKUP/etc-default-tailscaled" /etc/default/tailscaled
-  echo "restored /etc/default/tailscaled from snapshot"
+  if grep -q -- '--tun=userspace-networking' "$BACKUP/etc-default-tailscaled" \
+     && grep -q -- '--socks5-server=localhost:1055' "$BACKUP/etc-default-tailscaled"; then
+    echo "snapshot has legacy userspace flags; keeping image defaults (Layer 2)"
+  else
+    cp "$BACKUP/etc-default-tailscaled" /etc/default/tailscaled
+    echo "restored /etc/default/tailscaled from snapshot (custom flags)"
+  fi
 fi

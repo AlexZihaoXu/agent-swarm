@@ -258,12 +258,12 @@ RUN set -eux; \
     tailscale --version || true; \
     gh --version || true
 
-# Default tailscaled flags: userspace networking + local SOCKS5 (no /dev/net/tun
-# under sysbox today). Layer 2 will drop these and grant a real TUN device.
-# tailscale-restore.service overrides this from the agent's snapshot if one
-# exists, so manual changes the operator made on previous containers survive.
-RUN printf 'PORT="41641"\nFLAGS="--tun=userspace-networking --socks5-server=localhost:1055"\n' \
-      > /etc/default/tailscaled
+# Default tailscaled flags: kernel mode (uses /dev/net/tun exposed via gateway
+# HostConfig + NET_ADMIN). No more userspace networking or SOCKS5 proxy —
+# tailnet routing is transparent to apps now. tailscale-restore.service still
+# overrides this from the agent's snapshot if one exists (so a hand-tuned
+# /etc/default/tailscaled survives), but new agents come up in kernel mode.
+RUN printf 'PORT="41641"\nFLAGS=""\n' > /etc/default/tailscaled
 
 # Layer 1 (MagicDNS shim): scrape `tailscale status --json` -> /etc/hosts so
 # tailnet hostnames resolve in userspace-networking mode (where 100.100.100.100

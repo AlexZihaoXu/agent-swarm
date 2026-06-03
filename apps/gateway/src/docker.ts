@@ -1622,6 +1622,17 @@ export class AgentManager {
           },
         ]
       : undefined;
+    // Layer 2: expose /dev/net/tun so tailscaled (and any other tunneling tool)
+    // can run kernel mode under sysbox — kills the SOCKS5-only path and makes
+    // tailnet routing transparent. Pairs with NET_ADMIN in the sysbox branch
+    // below. Host must have the tun module loaded (persisted via
+    // /etc/modules-load.d/tun.conf).
+    const tunDevice = {
+      PathOnHost: '/dev/net/tun',
+      PathInContainer: '/dev/net/tun',
+      CgroupPermissions: 'rwm',
+    };
+    const devices = [...(gpuDevices ?? []), tunDevice];
     // Sysbox runs systemd/GNOME unprivileged inside a user namespace (container
     // root → unprivileged host uid). When it's the runtime we DROP the escape
     // surface the privileged `runc` path needs (SYS_ADMIN, unconfined
@@ -1644,7 +1655,7 @@ export class AgentManager {
       // DNS (127.0.0.11); only outbound lookups use these upstreams.
       Dns: ['1.1.1.1', '8.8.8.8'],
       DnsSearch: ['.'],
-      ...(gpuDevices ? { Devices: gpuDevices } : {}),
+      Devices: devices,
       // Dev (macOS): let Docker assign ephemeral host ports so the host-run
       // gateway can reach them on 127.0.0.1 — no manual port juggling.
       PortBindings: portMode
@@ -1654,8 +1665,11 @@ export class AgentManager {
       ...(sysbox
         ? {
             // Unprivileged: Sysbox provides the rest. Just the home bind-mount.
+            // NET_ADMIN lets tailscaled bring up its tunnel interface against
+            // the /dev/net/tun device exposed above (Layer 2).
             Runtime: 'sysbox-runc',
             Binds: [homeBind],
+            CapAdd: ['NET_ADMIN'],
           }
         : {
             // Privileged `runc` fallback (e.g. macOS dev): systemd/GNOME need
@@ -1685,13 +1699,12 @@ export class AgentManager {
     try {
       container = await createWith(hostConfig);
     } catch (e) {
-      // GPU device missing/unusable on this host → fall back to software render.
-      if (
-        gpuDevices &&
-        /\/dev\/dri|device|no such file/i.test(e instanceof Error ? e.message : '')
-      ) {
+      // GPU device missing/unusable on this host → drop the GPU devices and
+      // retry (software render). Keep /dev/net/tun — that's Layer 2 and is
+      // unrelated to GPU. If TUN is also missing the host needs `modprobe tun`.
+      if (gpuDevices && /\/dev\/dri|renderD|card[0-9]/i.test(e instanceof Error ? e.message : '')) {
         const soft = { ...(hostConfig as Record<string, unknown>) };
-        delete soft.Devices;
+        soft.Devices = [tunDevice];
         container = await createWith(soft as Docker.ContainerCreateOptions['HostConfig']);
       } else {
         throw e;
