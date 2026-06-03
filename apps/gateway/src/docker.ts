@@ -10,6 +10,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  rmdirSync,
   rmSync,
   statSync,
   statfsSync,
@@ -1842,9 +1843,28 @@ export class AgentManager {
     // Shared volumes attached to this agent: bind each loop-mounted volume at
     // ~/Shared/<name>. `rslave` so a host-side remount (gateway boot after a
     // host reboot) propagates into the running container without a restart.
-    const volBinds = (this.readIdentity(id)?.volumes ?? [])
-      .filter((v) => getVolumeMeta(this.cfg.volumesFile, v))
-      .map((v) => `${this.volDirHost(v)}:/home/agent/Shared/${v}:rslave`);
+    const attachedVols = (this.readIdentity(id)?.volumes ?? []).filter((v) =>
+      getVolumeMeta(this.cfg.volumesFile, v),
+    );
+    const volBinds = attachedVols.map(
+      (v) => `${this.volDirHost(v)}:/home/agent/Shared/${v}:rslave`,
+    );
+    // Prune empty stub dirs left in ~/Shared by detached volumes (Docker
+    // creates bind target dirs in the persistent home; they linger after a
+    // detach). rmdir-only, so anything with actual content is left alone.
+    try {
+      const sharedDir = join(this.agentDataDir(id), 'Shared');
+      for (const entry of readdirSync(sharedDir)) {
+        if (attachedVols.includes(entry)) continue;
+        try {
+          rmdirSync(join(sharedDir, entry)); // empty dirs only — rmdir semantics
+        } catch {
+          /* non-empty or not a dir — leave it */
+        }
+      }
+    } catch {
+      /* no Shared dir yet */
+    }
     const hostConfig = {
       // Hard resource caps (omitted → unlimited). NanoCpus is cores × 1e9.
       NanoCpus: cpus ? Math.round(cpus * 1e9) : undefined,
