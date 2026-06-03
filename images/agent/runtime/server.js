@@ -367,12 +367,27 @@ function modelContextLimit(model) {
   return 0;
 }
 
+// Same cache strategy as readTranscript — keyed by (path, mtimeMs, size). The
+// stats WebSocket pushes once per second per client, so for idle agents we
+// were re-parsing a 40+ MB file 5×/sec.
+let transcriptStatsCache = { key: null, value: null };
+
 function transcriptStats() {
   const totals = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
   let model = null;
   let lastTs = null;
   let cost = 0;
   let context = 0;
+  const newest = newestFile(path.join(CLAUDE_DIR, 'projects'), '.jsonl');
+  if (!newest) return { totals, model, turns: 0, lastTs, context, cost };
+  let st;
+  try {
+    st = fs.statSync(newest.path);
+  } catch {
+    return { totals, model, turns: 0, lastTs, context, cost };
+  }
+  const cacheKey = `${newest.path}:${st.mtimeMs}:${st.size}`;
+  if (transcriptStatsCache.key === cacheKey) return transcriptStatsCache.value;
   // Two reasons claude can write the same `message.id` more than once:
   //   1. `claude --continue` replays prior assistant messages into the resumed
   //      transcript;
@@ -382,10 +397,13 @@ function transcriptStats() {
   //      is zero — and `context` (the latest turn's input) ends up 0 even
   //      after a 30k-token turn. Track per-id usage and keep the MAX of each
   //      field — final values always strictly grow vs. partial ones.
+  // NOTE on accuracy: transcriptStats needs to SUM over all turns (not just
+  // tail), so we cannot tail-read here. The (mtime, size) cache keeps the
+  // expensive full read to a once-per-actual-change cadence, which is what
+  // makes the disk pressure go away.
   const byId = new Map(); // id → { input, output, cacheRead, cacheCreation, model, order }
   let order = 0;
-  const newest = newestFile(path.join(CLAUDE_DIR, 'projects'), '.jsonl');
-  const raw = newest && safeRead(newest.path);
+  const raw = safeRead(newest.path);
   if (!raw) return { totals, model, turns: 0, lastTs, context, cost };
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
@@ -430,7 +448,9 @@ function transcriptStats() {
     cost +=
       (e.input * r.in + e.output * r.out + e.cacheCreation * r.cw + e.cacheRead * r.cr) / 1_000_000;
   }
-  return { totals, model, turns: entries.length, lastTs, context, cost };
+  const result = { totals, model, turns: entries.length, lastTs, context, cost };
+  transcriptStatsCache = { key: cacheKey, value: result };
+  return result;
 }
 
 // A short, human one-liner of what a tool call did (command, path, pattern…).
@@ -478,11 +498,57 @@ function parseCommandMessage(text) {
   return null;
 }
 
+// Module-level cache keyed by (path, mtimeMs, size). The dashboard ChatPanel
+// polls /api/transcript every 2s per open chat; the file is large (atlas's
+// hit 43MB) but only changes when claude writes a turn — so for an idle agent
+// the cache hits and we skip both the disk read AND the JSON parsing.
+let transcriptCache = { key: null, value: [] };
+// Tail-read budget for large transcripts: 1.5 MB covers the last 500 lines
+// for typical chats (the dashboard only ever shows .slice(-500)). Reading the
+// whole file is what was burning CPU.
+const TRANSCRIPT_TAIL_BYTES = 1_500_000;
+
+function readTranscriptRawTail(filePath, size) {
+  if (size <= TRANSCRIPT_TAIL_BYTES) {
+    return safeRead(filePath);
+  }
+  // Open + read the last TRANSCRIPT_TAIL_BYTES, then discard the first
+  // (partial) line so JSON.parse below never sees a truncated record.
+  let fd;
+  try {
+    fd = fs.openSync(filePath, 'r');
+    const buf = Buffer.allocUnsafe(TRANSCRIPT_TAIL_BYTES);
+    fs.readSync(fd, buf, 0, TRANSCRIPT_TAIL_BYTES, size - TRANSCRIPT_TAIL_BYTES);
+    const s = buf.toString('utf8');
+    const nl = s.indexOf('\n');
+    return nl === -1 ? s : s.slice(nl + 1);
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
 // Normalized conversation for the dashboard chat view: user/assistant turns,
 // each with text and tool-call items (tool results & thinking are omitted).
 function readTranscript() {
   const newest = newestFile(path.join(CLAUDE_DIR, 'projects'), '.jsonl');
-  const raw = newest && safeRead(newest.path);
+  if (!newest) return [];
+  let st;
+  try {
+    st = fs.statSync(newest.path);
+  } catch {
+    return [];
+  }
+  const key = `${newest.path}:${st.mtimeMs}:${st.size}`;
+  if (transcriptCache.key === key) return transcriptCache.value;
+  const raw = readTranscriptRawTail(newest.path, st.size);
   if (!raw) return [];
   const lines = raw.split('\n').slice(-500);
   // Pre-scan tool_results for screenshot markers: a tool that saved a shot puts
@@ -577,6 +643,7 @@ function readTranscript() {
       out.push(turn);
     }
   }
+  transcriptCache = { key, value: out };
   return out;
 }
 
