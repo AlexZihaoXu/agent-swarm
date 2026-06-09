@@ -49,16 +49,34 @@ function errStatus(err: unknown): number {
   return s && s >= 400 && s < 600 ? s : 500;
 }
 
-/** Client IP for rate-limiting. X-Forwarded-For is CLIENT-CONTROLLED unless a
- *  trusted reverse proxy sets it, so we only honor it when TRUST_PROXY is on;
- *  otherwise an attacker could forge a unique IP per request and slip the
- *  throttle (and balloon its map). Default: the real socket peer. */
+function headerValue(h: string | string[] | undefined): string | undefined {
+  const raw = Array.isArray(h) ? h[0] : h;
+  const v = raw?.trim();
+  return v || undefined;
+}
+
+/** Client IP for rate-limiting. Forwarding headers are CLIENT-CONTROLLED unless
+ *  a trusted reverse proxy sets them, so they're only honored when TRUST_PROXY
+ *  is on; otherwise an attacker could forge a unique IP per request and slip
+ *  the throttle (and balloon its map). Behind the proxy, prefer headers the
+ *  proxy chain OVERWRITES over ones it merely appends to:
+ *   - cf-connecting-ip — set authoritatively by Cloudflare (replaces any
+ *     client-sent value) and passed through by the origin proxy.
+ *   - x-real-ip — set by nginx to ITS immediate peer; not client-spoofable.
+ *   - X-Forwarded-For's LAST hop — appended by the nearest proxy. The first
+ *     entry is whatever the client sent (Cloudflare appends, it doesn't
+ *     replace), so it must never be the throttle key.
+ *  None of this is bulletproof against an attacker who finds and hits the
+ *  origin directly — the global login breaker in auth.ts is the backstop. */
 function clientIp(req: IncomingMessage): string {
   if (config.trustProxy) {
-    const xff = req.headers['x-forwarded-for'];
-    const raw = Array.isArray(xff) ? xff[0] : xff;
-    const first = raw?.split(',')[0]?.trim();
-    if (first) return first;
+    const cf = headerValue(req.headers['cf-connecting-ip']);
+    if (cf) return cf;
+    const real = headerValue(req.headers['x-real-ip']);
+    if (real) return real;
+    const xff = headerValue(req.headers['x-forwarded-for']);
+    const last = xff?.split(',').at(-1)?.trim();
+    if (last) return last;
   }
   return req.socket.remoteAddress || 'unknown';
 }
@@ -259,8 +277,9 @@ async function handleAuth(
   if (pathname === '/api/auth/setup') {
     if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
     if (isConfigured()) return (sendJson(res, 409, { error: 'already configured' }), true);
-    const body = await readJson(req);
+    const body = await readJson(req, MAX_AUTH_JSON_BYTES);
     setupCredentials(body.username ?? '', body.password ?? '');
+    console.log(`[auth] first-run setup completed from ${clientIp(req)}`);
     res.setHeader('set-cookie', sessionCookie(issueToken((body.username ?? '').trim()), isSecure));
     return (sendJson(res, 200, { ok: true }), true);
   }
@@ -280,12 +299,14 @@ async function handleAuth(
         true
       );
     }
-    const body = await readJson(req);
+    const body = await readJson(req, MAX_AUTH_JSON_BYTES);
     if (!verifyPassword(body.username ?? '', body.password ?? '')) {
       noteLoginFailure(ip);
+      console.warn(`[auth] failed login from ${ip}`);
       return (sendJson(res, 401, { error: 'invalid username or password' }), true);
     }
     noteLoginSuccess(ip);
+    console.log(`[auth] login ok from ${ip}`);
     res.setHeader('set-cookie', sessionCookie(issueToken((body.username ?? '').trim()), isSecure));
     return (sendJson(res, 200, { ok: true }), true);
   }
@@ -297,8 +318,34 @@ async function handleAuth(
   if (pathname === '/api/auth/password') {
     if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
     if (!authed) return (sendJson(res, 401, { error: 'unauthorized' }), true);
-    const body = await readJson(req);
-    changePassword(body.currentPassword ?? '', body.newPassword ?? '');
+    // Same brute-force guard as login: a stolen session cookie must not allow
+    // grinding the current password through this endpoint.
+    const ip = clientIp(req);
+    const throttle = loginThrottle(ip);
+    if (throttle.blocked) {
+      res.setHeader('retry-after', String(throttle.retryAfterSec));
+      return (
+        sendJson(res, 429, {
+          error: 'too many attempts, try again later',
+          retryAfter: throttle.retryAfterSec,
+        }),
+        true
+      );
+    }
+    const body = await readJson(req, MAX_AUTH_JSON_BYTES);
+    try {
+      changePassword(body.currentPassword ?? '', body.newPassword ?? '');
+    } catch (err) {
+      // Only a WRONG current password counts as a guess; validation errors
+      // (e.g. a too-short new password) don't arm the throttle.
+      if ((err as { statusCode?: number })?.statusCode === 403) {
+        noteLoginFailure(ip);
+        console.warn(`[auth] failed password change from ${ip}`);
+      }
+      throw err;
+    }
+    noteLoginSuccess(ip);
+    console.log(`[auth] password changed from ${ip}`);
     // The change rotates the session secret (invalidating other sessions); mint a
     // fresh cookie so the operator who changed it stays logged in.
     const username = getSettings().auth?.username ?? '';
@@ -897,8 +944,19 @@ async function handleImageBuild(
   return true;
 }
 
-/** Read and parse a JSON request body; tolerate an empty/invalid body. */
-async function readJson(req: IncomingMessage): Promise<{
+/** Default cap on a JSON request body. Generous because the file editor sends
+ *  whole text files (≤ MAX_TEXT_BYTES) as JSON; everything else is tiny. */
+const MAX_JSON_BYTES = 5 * 1024 * 1024;
+/** Tight cap for the unauthenticated auth endpoints — credentials are short,
+ *  and an uncapped body there would be a free memory-exhaustion DoS. */
+const MAX_AUTH_JSON_BYTES = 16 * 1024;
+
+/** Read and parse a JSON request body; tolerate an empty/invalid body. Bodies
+ *  over `maxBytes` abort with a 413 instead of buffering without bound. */
+async function readJson(
+  req: IncomingMessage,
+  maxBytes: number = MAX_JSON_BYTES,
+): Promise<{
   hostname?: string;
   username?: string;
   oauthToken?: string;
@@ -938,7 +996,15 @@ async function readJson(req: IncomingMessage): Promise<{
   volumes?: string[];
 }> {
   const chunks: Buffer[] = [];
-  for await (const c of req) chunks.push(c as Buffer);
+  let size = 0;
+  for await (const c of req) {
+    size += (c as Buffer).length;
+    if (size > maxBytes) {
+      req.destroy();
+      throw Object.assign(new Error('request body too large'), { statusCode: 413 });
+    }
+    chunks.push(c as Buffer);
+  }
   const raw = Buffer.concat(chunks).toString('utf8').trim();
   if (!raw) return {};
   try {

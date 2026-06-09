@@ -82,3 +82,25 @@ test('login throttle: a successful login clears the IP', () => {
   assert.equal(loginThrottle(ip).blocked, false);
   assert.equal(loginThrottle(ip).retryAfterSec, 0);
 });
+
+test('global breaker: failures spread across many IPs still trip a block', () => {
+  _resetLoginThrottle();
+  // An attacker rotating source IPs gets a fresh per-IP bucket every time —
+  // the global breaker has to catch the aggregate. 25 misses are tolerated.
+  for (let i = 0; i < 25; i++) noteLoginFailure(`198.51.100.${i}`);
+  assert.equal(loginThrottle('203.0.113.50').blocked, false, 'under the global allowance');
+  // The 26th (from yet another IP) trips it for EVERYONE.
+  noteLoginFailure('198.51.100.250');
+  const t = loginThrottle('203.0.113.99'); // an IP that never failed
+  assert.equal(t.blocked, true, 'global breaker should block all IPs');
+  assert.ok(
+    t.retryAfterSec > 0 && t.retryAfterSec <= 60,
+    `first global block ~60s, got ${t.retryAfterSec}`,
+  );
+});
+
+test('global breaker: a burst from one IP counts toward the global total', () => {
+  _resetLoginThrottle();
+  for (let i = 0; i < 26; i++) noteLoginFailure('203.0.113.66');
+  assert.equal(loginThrottle('203.0.113.77').blocked, true, 'unrelated IP blocked too');
+});

@@ -21,12 +21,24 @@ const LOGIN_BACKOFF_BASE_MS = 30_000; // first block: 30s, then 60s, 120s, …
 const LOGIN_BACKOFF_MAX_MS = 15 * 60_000; // cap each block at ~15m
 const LOGIN_PRUNE_MAX = 10_000; // hard cap on tracked IPs (DoS guard)
 
+// Global (all-IP) circuit breaker. The per-IP throttle is only as good as the
+// IP attribution — an attacker rotating source addresses (botnet, or forged
+// forwarding headers if they can reach the origin directly) gets a fresh
+// bucket each time. This is the backstop: too many TOTAL failures in the
+// window means someone is brute-forcing, so block ALL logins briefly with
+// escalating backoff. For a single-operator gateway, locking the front door
+// for a minute during an active attack is the right trade.
+const GLOBAL_FREE_FAILS = 25; // total misses tolerated per window
+const GLOBAL_BACKOFF_BASE_MS = 60_000; // first global block: 60s, then 2×, …
+const GLOBAL_BACKOFF_MAX_MS = 60 * 60_000; // cap at 1h
+
 interface LoginAttempt {
   fails: number;
   firstTs: number;
   blockedUntil: number;
 }
 const loginAttempts = new Map<string, LoginAttempt>();
+const globalAttempts: LoginAttempt = { fails: 0, firstTs: 0, blockedUntil: 0 };
 
 /** Drop entries past their window and not currently blocked; then, if a flood of
  *  still-live entries keeps the map over the cap, evict the oldest (insertion-
@@ -52,6 +64,9 @@ function pruneLoginAttempts(now: number): void {
  */
 export function loginThrottle(ip: string): { blocked: boolean; retryAfterSec: number } {
   const now = Date.now();
+  if (globalAttempts.blockedUntil > now) {
+    return { blocked: true, retryAfterSec: Math.ceil((globalAttempts.blockedUntil - now) / 1000) };
+  }
   const a = loginAttempts.get(ip);
   if (a && a.blockedUntil > now) {
     return { blocked: true, retryAfterSec: Math.ceil((a.blockedUntil - now) / 1000) };
@@ -77,6 +92,22 @@ export function noteLoginFailure(ip: string): void {
     const backoff = Math.min(LOGIN_BACKOFF_BASE_MS * 2 ** over, LOGIN_BACKOFF_MAX_MS);
     a.blockedUntil = now + backoff;
   }
+
+  // Feed the global breaker too. Its window restarts once stale, same as per-IP.
+  if (globalAttempts.blockedUntil <= now && now - globalAttempts.firstTs > LOGIN_WINDOW_MS) {
+    globalAttempts.fails = 0;
+    globalAttempts.firstTs = now;
+  }
+  globalAttempts.fails += 1;
+  if (globalAttempts.fails > GLOBAL_FREE_FAILS) {
+    const over = globalAttempts.fails - GLOBAL_FREE_FAILS - 1;
+    const backoff = Math.min(GLOBAL_BACKOFF_BASE_MS * 2 ** over, GLOBAL_BACKOFF_MAX_MS);
+    globalAttempts.blockedUntil = now + backoff;
+    console.warn(
+      `[auth] global login breaker tripped: ${globalAttempts.fails} failures in window, ` +
+        `blocking all logins for ${Math.round(backoff / 1000)}s`,
+    );
+  }
 }
 
 /** Clear all throttle state for `ip` after a successful login. */
@@ -84,9 +115,12 @@ export function noteLoginSuccess(ip: string): void {
   loginAttempts.delete(ip);
 }
 
-/** Test-only: wipe the throttle map between cases. */
+/** Test-only: wipe the throttle state between cases. */
 export function _resetLoginThrottle(): void {
   loginAttempts.clear();
+  globalAttempts.fails = 0;
+  globalAttempts.firstTs = 0;
+  globalAttempts.blockedUntil = 0;
 }
 
 /** Whether an operator login has been set (false → show first-run setup). */
@@ -114,10 +148,12 @@ export function setupCredentials(username: string, password: string): void {
 export function verifyPassword(username: string, password: string): boolean {
   const auth = getSettings().auth;
   if (!auth) return false;
-  if (username.trim() !== auth.username) return false;
+  // Run the (deliberately slow) hash even when the username doesn't match, so
+  // response timing can't be used to probe which usernames exist.
   const got = Buffer.from(hashPassword(password ?? '', auth.salt), 'hex');
   const want = Buffer.from(auth.hash, 'hex');
-  return got.length === want.length && timingSafeEqual(got, want);
+  const passOk = got.length === want.length && timingSafeEqual(got, want);
+  return username.trim() === auth.username && passOk;
 }
 
 /** Change the password after verifying the current one. */

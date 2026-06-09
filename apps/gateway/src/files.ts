@@ -8,9 +8,11 @@ import {
   chownSync,
   createReadStream,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -43,11 +45,45 @@ function err(message: string, statusCode: number): Error {
   return Object.assign(new Error(message), { statusCode });
 }
 
-/** Resolve a client-supplied relative path inside `root`; reject any escape. */
-function safe(root: string, rel: string): string {
+/**
+ * Resolve a client-supplied relative path inside `root`; reject any escape.
+ *
+ * Lexical containment (resolve + prefix check) alone isn't enough: the tree is
+ * writable by the agent, which could plant a symlink pointing OUTSIDE its home
+ * (e.g. at the gateway's settings file) and let the operator's file explorer
+ * read or write through it. So the deepest existing ancestor of the target is
+ * also realpath'd and must still land inside the (realpath'd) root.
+ *
+ * `followLeaf: false` exempts the final component from that check — for ops
+ * that act on a link itself (delete, rename-source) rather than through it.
+ */
+function safe(root: string, rel: string, followLeaf = true): string {
   const clean = (rel || '').replace(/\\/g, '/').replace(/^\/+/, '');
   const abs = resolve(root, clean);
   if (abs !== root && !abs.startsWith(root + sep)) {
+    throw err('path escapes the agent home', 400);
+  }
+  const rootReal = realpathSync(root);
+  // Walk up to the deepest component that exists and realpath-vet it. lstat
+  // (not stat): a dangling symlink still "exists" as something realpath must
+  // judge — writeFileSync would happily follow it and create its target.
+  let probe = abs;
+  if (!followLeaf && probe !== root) probe = dirname(probe);
+  let probeReal: string;
+  for (;;) {
+    if (lstatSync(probe, { throwIfNoEntry: false })) {
+      try {
+        probeReal = realpathSync(probe);
+      } catch {
+        // Exists but won't resolve → dangling symlink. Never operate through it.
+        throw err('path escapes the agent home', 400);
+      }
+      break;
+    }
+    if (probe === root) throw err('not found', 404);
+    probe = dirname(probe);
+  }
+  if (probeReal !== rootReal && !probeReal.startsWith(rootReal + sep)) {
     throw err('path escapes the agent home', 400);
   }
   return abs;
@@ -112,10 +148,12 @@ export function makeDir(root: string, rel: string): void {
 }
 
 export function move(root: string, from: string, to: string): void {
-  const src = safe(root, from);
+  // followLeaf=false on the source: renaming moves a symlink itself, so a link
+  // pointing outside is fine to relocate (it's never dereferenced here).
+  const src = safe(root, from, false);
   const dst = safe(root, to);
   if (src === root) throw err('cannot move the home root', 400);
-  if (!existsSync(src)) throw err('source not found', 404);
+  if (!lstatSync(src, { throwIfNoEntry: false })) throw err('source not found', 404);
   if (existsSync(dst)) throw err('destination already exists', 409);
   mkdirSync(dirname(dst), { recursive: true });
   renameSync(src, dst);
@@ -123,9 +161,11 @@ export function move(root: string, from: string, to: string): void {
 }
 
 export function remove(root: string, rel: string): void {
-  const t = safe(root, rel);
+  // followLeaf=false: deleting a symlink removes the link, not its target, so
+  // the operator can clean up even a link that points outside the home.
+  const t = safe(root, rel, false);
   if (t === root) throw err('cannot delete the home root', 400);
-  if (!existsSync(t)) throw err('not found', 404);
+  if (!lstatSync(t, { throwIfNoEntry: false })) throw err('not found', 404);
   rmSync(t, { recursive: true, force: true });
 }
 

@@ -30,9 +30,25 @@ const dashboardPort = Number(dashboard.port) || (dashboard.protocol === 'https:'
 const docker = new Docker({ socketPath: config.dockerSocket });
 const manager = new AgentManager(docker);
 
+/** Baseline security headers on every response (API, proxied dashboard, agent
+ *  streams). SAMEORIGIN (not DENY): the dashboard embeds agent desktops in
+ *  same-origin iframes. HSTS only once we know we're on HTTPS (direct TLS or a
+ *  trusted proxy's X-Forwarded-Proto) — sending it over plain HTTP is invalid. */
+function applySecurityHeaders(req: http.IncomingMessage, res: http.ServerResponse): void {
+  res.setHeader('x-content-type-options', 'nosniff');
+  res.setHeader('x-frame-options', 'SAMEORIGIN');
+  res.setHeader('referrer-policy', 'same-origin');
+  const encrypted = (req.socket as { encrypted?: boolean }).encrypted === true;
+  const proxiedTls = config.trustProxy && req.headers['x-forwarded-proto'] === 'https';
+  if (encrypted || proxiedTls) {
+    res.setHeader('strict-transport-security', 'max-age=15552000'); // 180 days
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
   try {
+    applySecurityHeaders(req, res);
     // 0. Auth gate. Preflights pass (no cookie/side effects); everything else
     //    that isn't public needs either a valid operator session (browser) or a
     //    valid swarm token (agents' machine-to-machine /api/swarm/* calls). The
