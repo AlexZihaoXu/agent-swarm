@@ -1000,7 +1000,11 @@ async function readJson(
   for await (const c of req) {
     size += (c as Buffer).length;
     if (size > maxBytes) {
-      req.destroy();
+      // Pause (don't destroy) the stream: req and res share the socket, so a
+      // destroy here would reset the connection before the 413 can flush —
+      // surfacing as an opaque 502 at the reverse proxy. Node closes the
+      // connection itself after responding to an incompletely-read request.
+      req.pause();
       throw Object.assign(new Error('request body too large'), { statusCode: 413 });
     }
     chunks.push(c as Buffer);
