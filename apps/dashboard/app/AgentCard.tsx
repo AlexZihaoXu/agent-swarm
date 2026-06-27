@@ -11,6 +11,7 @@ import {
   LuFolderOpen,
   LuMonitor,
   LuPackage,
+  LuScrollText,
   LuSettings,
   LuTrash2,
 } from 'react-icons/lu';
@@ -115,6 +116,7 @@ export function AgentCard({
   const onAction = (key: string) => {
     setMenuPos(null);
     if (key === 'open') router.push(`/agents/${agent.id}/desktop`);
+    else if (key === 'logs') router.push(`/logs?agent=${encodeURIComponent(agent.id)}`);
     else if (key === 'start') void act(() => startAgent(agent.id));
     else if (key === 'compact') void act(() => compactAgent(agent.id));
     else setDialog(key as Dialog);
@@ -260,6 +262,12 @@ export function AgentCard({
                   <LuFolderOpen className="text-muted size-4 shrink-0" />
                 </span>
                 <Label>Files…</Label>
+              </Dropdown.Item>
+              <Dropdown.Item id="logs" textValue="Logs">
+                <span className="flex items-center justify-center">
+                  <LuScrollText className="text-muted size-4 shrink-0" />
+                </span>
+                <Label>Logs…</Label>
               </Dropdown.Item>
               <Dropdown.Item id="settings" textValue="Settings">
                 <span className="flex items-center justify-center">

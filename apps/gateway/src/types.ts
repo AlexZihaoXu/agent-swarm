@@ -66,6 +66,10 @@ export interface Agent {
   /** Shared volumes attached to this agent (mounted at ~/Shared/<name>).
    *  Binds are fixed at container create — changes land on the next recreate. */
   volumes?: string[];
+  /** Per-agent guidance, written to this agent's own ~/.claude/CLAUDE.md (its
+   *  user-level memory, distinct per agent). Only populated on a single-agent
+   *  fetch (getAgent), not in the fleet list. Applies on the next restart. */
+  guidance?: string;
 }
 
 // --- Roles -----------------------------------------------------------------
@@ -90,7 +94,8 @@ export type Capability =
   | 'compact_agents'
   | 'view_stats'
   | 'dashboard_alerts'
-  | 'toggle_desktop';
+  | 'toggle_desktop'
+  | 'restart_self';
 
 /** Which upstream the agent's claude session uses. 'anthropic' = direct OAuth
  *  to Anthropic (Claude); 'opencodeGo' = the OpenCode Go subscription routed

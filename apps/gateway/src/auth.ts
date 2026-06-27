@@ -4,6 +4,7 @@
 // survive a gateway restart. All stdlib node:crypto — no deps.
 import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { getSettings, updateSettings, type AuthCreds } from './settings.js';
+import { logEvent } from './audit.js';
 
 const COOKIE_NAME = 'swarm_session';
 const SESSION_TTL_MS = 7 * 86_400_000; // 7 days
@@ -103,10 +104,14 @@ export function noteLoginFailure(ip: string): void {
     const over = globalAttempts.fails - GLOBAL_FREE_FAILS - 1;
     const backoff = Math.min(GLOBAL_BACKOFF_BASE_MS * 2 ** over, GLOBAL_BACKOFF_MAX_MS);
     globalAttempts.blockedUntil = now + backoff;
-    console.warn(
-      `[auth] global login breaker tripped: ${globalAttempts.fails} failures in window, ` +
-        `blocking all logins for ${Math.round(backoff / 1000)}s`,
-    );
+    logEvent({
+      category: 'auth',
+      action: 'auth.breaker.trip',
+      level: 'error',
+      message: `global login breaker tripped: ${globalAttempts.fails} failures in window — all logins blocked for ${Math.round(backoff / 1000)}s`,
+      actor: { kind: 'system' },
+      meta: { fails: globalAttempts.fails, blockSeconds: Math.round(backoff / 1000) },
+    });
   }
 }
 
