@@ -25,6 +25,7 @@ import type Docker from 'dockerode';
 import tar from 'tar-fs';
 import { config as defaultConfig, type Config } from './config.js';
 import { getSettings } from './settings.js';
+import { logEvent, SYSTEM_ACTOR } from './audit.js';
 import { swarmToken } from './auth.js';
 import { LATEST_VERSION, migrations, VERSION_MARKER, type MigrationCtx } from './migrations.js';
 import {
@@ -70,6 +71,11 @@ const TZ_LABEL = 'swarm.timezone';
 const VALID_ID = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,30}$/;
 /** How long the persisted cpu/mem resource history is kept (7 days). */
 const USAGE_RETAIN_MS = 7 * 24 * 3_600_000;
+/** Hard cap on a single agent's guidance (chars) — bounds the file claude loads
+ *  at session start and the growth from the agent's own self-appends. */
+const AGENT_GUIDANCE_MAX = 20_000;
+/** Cap on one swarm_append_guidance call so a single append can't fill the budget. */
+const GUIDANCE_APPEND_MAX = 4_000;
 
 /** The agent's self-identity, written to its disk so it (and its MCP tools)
  *  can read its own name/id within the swarm. */
@@ -80,6 +86,18 @@ interface AgentIdentity {
   project: string;
   timezone: string | null;
   createdAt: number;
+  /** Hard CPU limit in cores; null/undefined = unlimited. The editable source of
+   *  truth (the create-time `swarm.cpus` label is the legacy fallback). Applied
+   *  to the container's HostConfig only at create, so a change lands on the next
+   *  recreate. */
+  cpus?: number | null;
+  /** Hard memory limit in MB; null/undefined = unlimited. Same recreate-to-apply
+   *  semantics as `cpus`. */
+  memoryMb?: number | null;
+  /** Per-agent guidance written to this agent's ~/.claude/CLAUDE.md (its own
+   *  user-level memory, distinct from every other agent's). null/empty = none.
+   *  Read by claude at session start, so a change applies on the next restart. */
+  guidance?: string | null;
   /** CLAUDE_AUTOCOMPACT_PCT_OVERRIDE (1–100); null = use the claude default. */
   autoCompactPct?: number | null;
   /** Upstream the agent's claude talks to. Default 'anthropic'. */
@@ -221,6 +239,9 @@ export class AgentManager {
       project: this.cfg.project,
       timezone: patch.timezone !== undefined ? patch.timezone : (cur?.timezone ?? null),
       createdAt: cur?.createdAt ?? Date.now(),
+      cpus: patch.cpus !== undefined ? patch.cpus : (cur?.cpus ?? null),
+      memoryMb: patch.memoryMb !== undefined ? patch.memoryMb : (cur?.memoryMb ?? null),
+      guidance: patch.guidance !== undefined ? patch.guidance : (cur?.guidance ?? null),
       autoCompactPct:
         patch.autoCompactPct !== undefined ? patch.autoCompactPct : (cur?.autoCompactPct ?? null),
       provider: patch.provider !== undefined ? patch.provider : (cur?.provider ?? 'anthropic'),
@@ -235,6 +256,20 @@ export class AgentManager {
     mkdirSync(dirname(this.identityFile(id)), { recursive: true });
     writeFileSync(this.identityFile(id), JSON.stringify(next, null, 2));
     return next;
+  }
+
+  /** Effective resource cap (cores or MB) for display + recreate. The editable
+   *  identity is the source of truth; the create-time `swarm.*` label is the
+   *  legacy fallback for agents created before identity carried these. `null` in
+   *  identity is an explicit "unlimited" (clears the cap); a missing field falls
+   *  back to the label. Returns undefined for unlimited. */
+  private effectiveCap(
+    identVal: number | null | undefined,
+    label: string | undefined,
+  ): number | undefined {
+    if (identVal === null) return undefined; // explicitly unlimited
+    if (typeof identVal === 'number' && identVal > 0) return identVal;
+    return label ? Number(label) : undefined; // legacy / unset → label
   }
 
   /** Inspect a single agent (404 if its disk doesn't exist). */
@@ -253,6 +288,10 @@ export class AgentManager {
     id: string,
     patch: {
       username?: string;
+      cpus?: number | null;
+      memoryMb?: number | null;
+      timezone?: string | null;
+      guidance?: string | null;
       autoCompactPct?: number | null;
       provider?: Provider;
       model?: string | null;
@@ -267,6 +306,29 @@ export class AgentManager {
     if (!existsSync(this.agentDataDir(id)))
       throw Object.assign(new Error('agent not found'), { statusCode: 404 });
     const idPatch: Partial<AgentIdentity> = {};
+    // Per-agent guidance (this agent's own ~/.claude/CLAUDE.md). Trim + cap;
+    // empty clears it. Re-applied to disk below, picked up on the next session
+    // relaunch (so a running agent needs a restart to read the change).
+    if (patch.guidance !== undefined) {
+      const g = (patch.guidance ?? '').slice(0, AGENT_GUIDANCE_MAX).trimEnd();
+      idPatch.guidance = g || null;
+    }
+    // Resource caps (cores / MB). 0, null, or negative = unlimited (cleared).
+    // Clamp to the host's real hardware (the UI does too, but the API is
+    // directly callable). These only bind on the container's HostConfig at
+    // create, so a change here applies on the agent's next recreate.
+    if (patch.cpus !== undefined || patch.memoryMb !== undefined) {
+      const hw = await this.hostInfo();
+      if (patch.cpus !== undefined) {
+        const v = patch.cpus;
+        idPatch.cpus = v && v > 0 ? Math.min(Math.round(v * 100) / 100, hw.cpus || v) : null;
+      }
+      if (patch.memoryMb !== undefined) {
+        const v = patch.memoryMb;
+        idPatch.memoryMb =
+          v && v > 0 ? Math.min(Math.round(v), hw.memoryMb || Math.round(v)) : null;
+      }
+    }
     if (patch.username !== undefined) {
       const display = patch.username.trim();
       if (!display) throw Object.assign(new Error('name cannot be empty'), { statusCode: 400 });
@@ -300,11 +362,21 @@ export class AgentManager {
     // Shared-volume attach list — validated against the registry. Binds are
     // fixed at container create, so this lands on the agent's next recreate.
     if (patch.volumes !== undefined) idPatch.volumes = this.validateAttachList(patch.volumes);
+    // Timezone is the container's TZ env, fixed at create — empty clears it back
+    // to the image default (UTC). Like cpus/mem, it applies on the next recreate.
+    if (patch.timezone !== undefined) idPatch.timezone = patch.timezone?.trim() || null;
     const prevModel = this.readIdentity(id)?.model ?? null;
     const prevProvider = this.readIdentity(id)?.provider ?? 'anthropic';
     const prevDesktop = this.readIdentity(id)?.desktop !== false;
     const prevRoles = JSON.stringify(this.readIdentity(id)?.roles ?? []);
+    const prevGuidance = this.readIdentity(id)?.guidance ?? null;
     this.writeIdentity(id, idPatch);
+    // Guidance changed → re-stamp this agent's ~/.claude/CLAUDE.md now so it's
+    // current on disk; the running claude picks it up on its next relaunch (the
+    // UI prompts a restart). No effect on a peer — this is the agent's own file.
+    if (patch.guidance !== undefined && (idPatch.guidance ?? null) !== prevGuidance) {
+      this.writeAgentGuidance(id);
+    }
     const info = await this.docker.getContainer(this.containerName(id)).inspect();
 
     // Provider changed → resync the opencode-go key onto disk (added when
@@ -817,6 +889,46 @@ export class AgentManager {
     }
   }
 
+  /** This agent's user-level memory file (~/.claude/CLAUDE.md), where its own
+   *  per-agent guidance lands. claude reads it at session start regardless of
+   *  cwd — distinct from the migration-managed project guide at
+   *  /home/agent/CLAUDE.md, and distinct from every other agent's copy. */
+  private guidanceFile(id: string): string {
+    return join(this.agentDataDir(id), '.claude', 'CLAUDE.md');
+  }
+
+  /** Write (or clear) THIS agent's own guidance onto its disk as user-level
+   *  memory. Sourced from the agent's identity (per-agent — every agent can
+   *  carry different guidance). Called on create / start / recreate and whenever
+   *  the guidance is patched, so it re-applies when the agent's claude session
+   *  next (re)launches. Best-effort. */
+  writeAgentGuidance(id: string): void {
+    const file = this.guidanceFile(id);
+    const content = this.readIdentity(id)?.guidance?.trim();
+    try {
+      if (!content) {
+        rmSync(file, { force: true }); // cleared → remove the file
+        return;
+      }
+      mkdirSync(dirname(file), { recursive: true });
+      const body =
+        `# Your guidance\n\n` +
+        `Operator-managed instructions for you specifically. They apply in ` +
+        `addition to your roles (~/.swarm/roles.md).\n\n` +
+        content +
+        '\n';
+      writeFileSync(file, body);
+      try {
+        chownSync(dirname(file), 1000, 1000);
+        chownSync(file, 1000, 1000);
+      } catch {
+        /* best-effort ownership (the .claude dir is already agent-owned) */
+      }
+    } catch {
+      /* best-effort */
+    }
+  }
+
   /** Rewrite roles docs + nudge every running agent assigned a given role (used
    *  when a role's description changes or it's deleted). */
   async refreshAgentsWithRole(roleId: string): Promise<void> {
@@ -1319,6 +1431,15 @@ export class AgentManager {
             `Free memory NOW — you risk being OOM-killed.`,
           attachments: [],
         });
+        logEvent({
+          category: 'system',
+          action: 'system.memory_warn',
+          level: 'error',
+          message: `${id} memory critical: ${Math.round(pct)}% (${usedGb}/${capGb} GB)`,
+          actor: SYSTEM_ACTOR,
+          agentId: id,
+          meta: { pct: Math.round(pct), usedGb, capGb },
+        });
       } else if (pct >= 80 && !st.warned80) {
         st.warned80 = true;
         this.queueDeliver(id, {
@@ -1326,6 +1447,15 @@ export class AgentManager {
             `**[sys://mem]** Memory at ${Math.round(pct)}% (${usedGb} / ${capGb} GB). ` +
             `Free up memory — close heavy processes before you hit the cap.`,
           attachments: [],
+        });
+        logEvent({
+          category: 'system',
+          action: 'system.memory_warn',
+          level: 'warn',
+          message: `${id} memory high: ${Math.round(pct)}% (${usedGb}/${capGb} GB)`,
+          actor: SYSTEM_ACTOR,
+          agentId: id,
+          meta: { pct: Math.round(pct), usedGb, capGb },
         });
       }
       this.memState.set(id, st);
@@ -1731,6 +1861,14 @@ export class AgentManager {
     });
     if (!nets.some((n) => n.Name === this.cfg.networkName)) {
       await this.docker.createNetwork({ Name: this.cfg.networkName, Driver: 'bridge' });
+      logEvent({
+        category: 'docker',
+        action: 'docker.createNetwork',
+        message: `docker network create ${this.cfg.networkName}`,
+        actor: SYSTEM_ACTOR,
+        target: this.cfg.networkName,
+        ok: true,
+      });
     }
   }
 
@@ -1782,6 +1920,8 @@ export class AgentManager {
     this.writeIdentity(id, {
       name: username,
       timezone: timezone ?? null,
+      cpus: cpus ?? null,
+      memoryMb: memoryMb ?? null,
       provider: opts.provider ?? 'anthropic',
       model: model ?? null,
       roles: Array.isArray(opts.roles) ? opts.roles : [],
@@ -1795,6 +1935,7 @@ export class AgentManager {
     this.writeDesktopMarker(id);
     this.writeSwarmToken(id);
     this.writeRolesDoc(id);
+    this.writeAgentGuidance(id);
 
     return this.spawnContainer(id, name, labels, cpus, memoryMb, timezone);
   }
@@ -1926,22 +2067,69 @@ export class AgentManager {
         ExposedPorts: { '6080/tcp': {}, '7681/tcp': {} },
         HostConfig: hc,
       });
+    // GPU device missing/unusable on this host → drop the GPU devices and retry
+    // (software render). The render nodes are validated by the daemon at START,
+    // not at create (e.g. a broken /dev/dri/card0 after a reboot fails with "not
+    // a device node"), so the fallback has to wrap start() too — and remove the
+    // created-but-unstarted container before retrying so the name is free. Keep
+    // /dev/net/tun — that's Layer 2, unrelated to GPU (if TUN is also missing the
+    // host needs `modprobe tun`).
+    const isGpuError = (e: unknown) =>
+      /\/dev\/dri|renderD|card[0-9]/i.test(e instanceof Error ? e.message : '');
+    const spawnWith = async (hc: Docker.ContainerCreateOptions['HostConfig']) => {
+      const c = await createWith(hc);
+      try {
+        await c.start();
+      } catch (e) {
+        await c.remove({ force: true }).catch(() => {});
+        throw e;
+      }
+      return c;
+    };
+    const started = Date.now();
     let container;
     try {
-      container = await createWith(hostConfig);
+      container = await spawnWith(hostConfig);
     } catch (e) {
-      // GPU device missing/unusable on this host → drop the GPU devices and
-      // retry (software render). Keep /dev/net/tun — that's Layer 2 and is
-      // unrelated to GPU. If TUN is also missing the host needs `modprobe tun`.
-      if (gpuDevices && /\/dev\/dri|renderD|card[0-9]/i.test(e instanceof Error ? e.message : '')) {
+      if (gpuDevices && isGpuError(e)) {
+        logEvent({
+          category: 'system',
+          action: 'system.gpu_fallback',
+          level: 'warn',
+          message: `GPU device unusable for ${name} — spawning with software render`,
+          actor: SYSTEM_ACTOR,
+          agentId: id,
+          target: name,
+          meta: { error: e instanceof Error ? e.message : String(e) },
+        });
         const soft = { ...(hostConfig as Record<string, unknown>) };
         soft.Devices = [tunDevice];
-        container = await createWith(soft as Docker.ContainerCreateOptions['HostConfig']);
+        container = await spawnWith(soft as Docker.ContainerCreateOptions['HostConfig']);
       } else {
+        logEvent({
+          category: 'docker',
+          action: 'docker.run',
+          level: 'error',
+          message: `docker create+start ${name} failed: ${e instanceof Error ? e.message : String(e)}`,
+          actor: SYSTEM_ACTOR,
+          agentId: id,
+          target: name,
+          ok: false,
+          durationMs: Date.now() - started,
+        });
         throw e;
       }
     }
-    await container.start();
+    logEvent({
+      category: 'docker',
+      action: 'docker.run',
+      message: `docker create+start ${name}`,
+      actor: SYSTEM_ACTOR,
+      agentId: id,
+      target: name,
+      ok: true,
+      durationMs: Date.now() - started,
+    });
     await this.stampVersion(container);
     return this.toAgent(await container.inspect());
   }
@@ -1963,9 +2151,22 @@ export class AgentManager {
       'com.docker.compose.project': this.cfg.project,
       [USERNAME_LABEL]: this.readIdentity(id)?.name ?? id,
     };
-    const cpus = labels[CPUS_LABEL] ? Number(labels[CPUS_LABEL]) : undefined;
-    const memoryMb = labels[MEMORY_LABEL] ? Number(labels[MEMORY_LABEL]) : undefined;
-    const timezone = labels[TZ_LABEL] || undefined;
+    // Resource caps: the editable identity wins (so a CPU/memory change made via
+    // patchAgent lands here); the create-time labels are the legacy fallback.
+    const ident = this.readIdentity(id);
+    const cpus = this.effectiveCap(ident?.cpus, labels[CPUS_LABEL]);
+    const memoryMb = this.effectiveCap(ident?.memoryMb, labels[MEMORY_LABEL]);
+    // Re-stamp the labels from the effective values so `docker inspect` and the
+    // list() label fallback stay in sync after an edit-then-rebuild.
+    if (cpus) labels[CPUS_LABEL] = String(cpus);
+    else delete labels[CPUS_LABEL];
+    if (memoryMb) labels[MEMORY_LABEL] = String(memoryMb);
+    else delete labels[MEMORY_LABEL];
+    // Timezone (the container's TZ env): the editable identity wins so an edit via
+    // patchAgent lands here; re-stamp the label to match. Empty = inherit UTC.
+    const timezone = ident?.timezone?.trim() || undefined;
+    if (timezone) labels[TZ_LABEL] = timezone;
+    else delete labels[TZ_LABEL];
     // Drop the old container (the host bind-mounted home is untouched).
     await this.docker
       .getContainer(name)
@@ -1977,6 +2178,7 @@ export class AgentManager {
     this.writeOpencodeGoKey(id);
     this.writeDesktopMarker(id);
     this.writeRolesDoc(id);
+    this.writeAgentGuidance(id);
     this.markDeliberateRestart(id); // → [sys://restart] notice once the new container boots
     // Drop the old bridge connection (bound to the removed container) before
     // spawning, then reconnect — without this a recreated agent's Discord bot
@@ -2004,9 +2206,11 @@ export class AgentManager {
         username: identity?.name ?? c.Labels?.[USERNAME_LABEL] ?? id,
         status: c.State,
         createdAt: c.Created * 1000,
-        cpus: c.Labels?.[CPUS_LABEL] ? Number(c.Labels[CPUS_LABEL]) : undefined,
-        memoryMb: c.Labels?.[MEMORY_LABEL] ? Number(c.Labels[MEMORY_LABEL]) : undefined,
-        timezone: c.Labels?.[TZ_LABEL],
+        cpus: this.effectiveCap(identity?.cpus, c.Labels?.[CPUS_LABEL]),
+        memoryMb: this.effectiveCap(identity?.memoryMb, c.Labels?.[MEMORY_LABEL]),
+        // Identity is authoritative when present (null = explicitly cleared, so
+        // don't resurrect the old label); the label is only a no-identity fallback.
+        timezone: identity ? (identity.timezone ?? undefined) : c.Labels?.[TZ_LABEL],
         autoCompactPct: identity?.autoCompactPct ?? null,
         provider: identity?.provider ?? 'anthropic',
         model: identity?.model ?? null,
@@ -2024,12 +2228,13 @@ export class AgentManager {
 
   async start(id: string): Promise<void> {
     // Refresh the auth token + roles doc onto the disk so a restart picks up any
-    // change (e.g. an edited role description).
+    // change (e.g. an edited role description, or updated global guidance).
     this.writeAuthToken(id);
     this.writeSwarmToken(id);
     this.writeOpencodeGoKey(id);
     this.writeDesktopMarker(id);
     this.writeRolesDoc(id);
+    this.writeAgentGuidance(id);
     this.markDeliberateRestart(id); // → [sys://restart] notice once it boots
     await this.docker.getContainer(this.containerName(id)).start();
     // Reconnect any `active` integrations once the terminal is reachable.
@@ -2037,13 +2242,36 @@ export class AgentManager {
   }
 
   async stop(id: string): Promise<void> {
+    const name = this.containerName(id);
     await this.discord.disconnect(id);
-    await this.docker.getContainer(this.containerName(id)).stop();
+    const started = Date.now();
+    await this.docker.getContainer(name).stop();
+    logEvent({
+      category: 'docker',
+      action: 'docker.stop',
+      message: `docker stop ${name}`,
+      actor: SYSTEM_ACTOR,
+      agentId: id,
+      target: name,
+      ok: true,
+      durationMs: Date.now() - started,
+    });
   }
 
   async remove(id: string): Promise<void> {
+    const name = this.containerName(id);
     await this.discord.disconnect(id);
-    await this.docker.getContainer(this.containerName(id)).remove({ force: true });
+    await this.docker.getContainer(name).remove({ force: true });
+    logEvent({
+      category: 'docker',
+      action: 'docker.remove',
+      level: 'warn',
+      message: `docker rm -f ${name} (and persistent disk)`,
+      actor: SYSTEM_ACTOR,
+      agentId: id,
+      target: name,
+      ok: true,
+    });
     // Also delete the agent's persistent disk (the caller must have warned the
     // user — this is irreversible).
     rmSync(this.agentDataDir(id), { recursive: true, force: true });
@@ -2524,6 +2752,64 @@ export class AgentManager {
     return { ok: true, desktop: enabled };
   }
 
+  /** Append to the CALLER'S OWN guidance (its ~/.claude/CLAUDE.md). Append-only
+   *  and size-capped: an agent can record something for its future self but can't
+   *  rewrite or wipe what's there — the operator can, from the agent's Settings.
+   *  Self-scoped (only touches the caller; never a peer). Persists to the agent's
+   *  identity + re-stamps its on-disk file, but it only takes EFFECT on the next
+   *  session relaunch — so the caller should restart to apply (swarm_restart_self)
+   *  or ask the operator. Ungated by design; bounded by the per-append + total
+   *  caps and the operator's full edit/clear control. */
+  async appendAgentGuidance(fromId: string, text: string): Promise<{ ok: true; length: number }> {
+    if (!existsSync(this.agentDataDir(fromId)))
+      throw Object.assign(new Error('caller not found'), { statusCode: 404 });
+    const addition = (text ?? '').trim();
+    if (!addition) throw Object.assign(new Error("'text' is required"), { statusCode: 400 });
+    const chunk = addition.slice(0, GUIDANCE_APPEND_MAX);
+    const stamp = new Date().toISOString().slice(0, 10);
+    const current = (this.readIdentity(fromId)?.guidance ?? '').trimEnd();
+    const entry = `<!-- you added this on ${stamp} -->\n${chunk}`;
+    const next = current ? `${current}\n\n${entry}` : entry;
+    if (next.length > AGENT_GUIDANCE_MAX)
+      throw Object.assign(
+        new Error(
+          `your guidance is full (${AGENT_GUIDANCE_MAX}-char cap) — ask the operator to trim it`,
+        ),
+        { statusCode: 409 },
+      );
+    this.writeIdentity(fromId, { guidance: next });
+    this.writeAgentGuidance(fromId);
+    return { ok: true, length: next.length };
+  }
+
+  /** Capability-gated SELF restart (the `restart_self` role permission). Schedules
+   *  a deferred stop → start of the caller's OWN container so this call's HTTP
+   *  reply reaches the agent before its process is torn down. The boot
+   *  re-provisions on-disk state (its own guidance, roles doc, tokens), reconnects
+   *  integrations, and resumes the claude session via --continue. Self only — an
+   *  agent can never restart a peer. */
+  async restartSelf(fromId: string): Promise<{ ok: true }> {
+    if (!this.agentCan(fromId, 'restart_self'))
+      throw Object.assign(new Error('your role does not permit restarting yourself'), {
+        statusCode: 403,
+      });
+    if (!existsSync(this.agentDataDir(fromId)))
+      throw Object.assign(new Error('caller not found'), { statusCode: 404 });
+    // Defer so the MCP tool's 200 flushes back to the agent before we stop its
+    // container (which kills the claude process making the call).
+    setTimeout(() => {
+      void (async () => {
+        try {
+          await this.stop(fromId);
+          await this.start(fromId);
+        } catch (e) {
+          console.warn(`[restart-self] ${fromId}:`, e instanceof Error ? e.message : e);
+        }
+      })();
+    }, 1_000);
+    return { ok: true };
+  }
+
   /** Capability-gated live-stats read of a peer (the `view_stats` role
    *  permission), scoped to agents that share a group with the caller. Returns a
    *  compact summary of the target's session (context-window usage, model,
@@ -2999,6 +3285,7 @@ export class AgentManager {
     const name = info.Name.replace(/^\//, '');
     const id = this.idFromName(info.Name);
     const labels = info.Config.Labels ?? {};
+    const ident = this.readIdentity(id);
     return {
       id,
       name,
@@ -3006,9 +3293,11 @@ export class AgentManager {
       username: this.readIdentity(id)?.name ?? labels[USERNAME_LABEL] ?? id,
       status: info.State.Status,
       createdAt: Date.parse(info.Created),
-      cpus: labels[CPUS_LABEL] ? Number(labels[CPUS_LABEL]) : undefined,
-      memoryMb: labels[MEMORY_LABEL] ? Number(labels[MEMORY_LABEL]) : undefined,
-      timezone: labels[TZ_LABEL],
+      cpus: this.effectiveCap(this.readIdentity(id)?.cpus, labels[CPUS_LABEL]),
+      memoryMb: this.effectiveCap(this.readIdentity(id)?.memoryMb, labels[MEMORY_LABEL]),
+      // Identity is authoritative when present (null = explicitly cleared); the
+      // label is only a fallback when there's no identity file at all.
+      timezone: ident ? (ident.timezone ?? undefined) : labels[TZ_LABEL],
       autoCompactPct: this.readIdentity(id)?.autoCompactPct ?? null,
       provider: this.readIdentity(id)?.provider ?? 'anthropic',
       model: this.readIdentity(id)?.model ?? null,
@@ -3020,6 +3309,9 @@ export class AgentManager {
       compactingProgress: this.compactingProgress(id),
       avatarSeed: this.readIdentity(id)?.avatarSeed ?? id,
       volumes: this.readIdentity(id)?.volumes ?? [],
+      // Per-agent guidance — only surfaced on a single-agent fetch (getAgent),
+      // not in list() (which stays light; the fleet view doesn't need it).
+      guidance: this.readIdentity(id)?.guidance ?? '',
     };
   }
 }

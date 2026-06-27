@@ -62,6 +62,14 @@ export const CAPABILITIES: {
     mcpHelp:
       "Tool: swarm_toggle_desktop(enabled). `enabled` = true to bring the GNOME + noVNC stack up, false to stop it (saves ~2 GB RSS — gnome-shell, mutter, chrome, etc.). Scope: self only — you can't toggle a peer's desktop. The change takes effect immediately via systemctl start/stop tigervncserver@:1 novnc, and the marker on disk also gates the next boot. Your claude TUI session keeps running through the toggle.",
   },
+  {
+    key: 'restart_self',
+    label: 'Restart self',
+    description:
+      'Restart its own agent (stop → start) to apply pending settings — e.g. its refreshed guidance (CLAUDE.md) or auto-compact threshold. Scope: self only.',
+    mcpHelp:
+      "Tool: swarm_restart_self(). Restarts the agent's OWN container (a deferred stop → start, so the tool's reply reaches you first). The boot re-provisions on-disk state — your own guidance (~/.claude/CLAUDE.md), roles doc, auth/swarm tokens — reconnects integrations, and resumes your claude session via `--continue` so the transcript is preserved. Scope: self only — you can never restart a peer. Use it after swarm_append_guidance, or when the operator changes a setting that needs a restart. Takes ~10-20s of downtime while the container reboots.",
+  },
 ];
 
 const CAPABILITY_KEYS = new Set<string>(CAPABILITIES.map((c) => c.key));

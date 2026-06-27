@@ -10,6 +10,7 @@ import {
   Slider,
   Switch,
   Tabs,
+  TextArea,
   TextField,
   Tooltip,
   toast,
@@ -19,6 +20,7 @@ import { LuCircleHelp, LuDices, LuDownload, LuShuffle } from 'react-icons/lu';
 import { Identicon, downloadIdenticon, randomSeed } from '@/lib/identicon';
 import {
   getAgent,
+  getHostInfo,
   startAgent,
   stopAgent,
   updateAgent,
@@ -49,6 +51,44 @@ const DEFAULT_PCT = 80;
  *  state in the popover), so we map model='' ↔ this key at the boundary. */
 const MODEL_DEFAULT_KEY = '__default__';
 
+/** A resource-cap slider where 0 means "unlimited" (mirrors CreateAgentModal). */
+function LimitSlider({
+  label,
+  value,
+  onChange,
+  max,
+  step,
+  unit,
+}: {
+  label: string;
+  value: number;
+  onChange: (v: number) => void;
+  max: number;
+  step: number;
+  unit: string;
+}) {
+  return (
+    <Slider
+      value={value}
+      onChange={(v) => onChange(Array.isArray(v) ? v[0]! : v)}
+      minValue={0}
+      maxValue={max}
+      step={step}
+    >
+      <div className="flex items-center justify-between">
+        <Label className="text-sm">{label}</Label>
+        <span className="text-muted text-xs tabular-nums">
+          {value === 0 ? 'unlimited' : `${value} ${unit}`}
+        </span>
+      </div>
+      <Slider.Track>
+        <Slider.Fill />
+        <Slider.Thumb />
+      </Slider.Track>
+    </Slider>
+  );
+}
+
 /**
  * Per-agent settings, in two tabs:
  *  - General: display name (rename, live) + auto-compact threshold
@@ -72,6 +112,12 @@ export function AgentSettingsModal({
 }) {
   const [agent, setAgent] = useState<Agent | null>(null);
   const [name, setName] = useState('');
+  const [guidance, setGuidance] = useState(''); // this agent's own ~/.claude/CLAUDE.md
+  const [cpus, setCpus] = useState(0); // 0 = unlimited
+  const [memGb, setMemGb] = useState(0); // 0 = unlimited
+  const [maxCpus, setMaxCpus] = useState(8);
+  const [maxMemGb, setMaxMemGb] = useState(16);
+  const [timezone, setTimezone] = useState(''); // '' = inherit (UTC)
   const [override, setOverride] = useState(false);
   const [pct, setPct] = useState(DEFAULT_PCT);
   const [provider, setProvider] = useState<Provider>('anthropic');
@@ -109,6 +155,13 @@ export function AgentSettingsModal({
     void listVolumes()
       .then(setAllVolumes)
       .catch(() => {});
+    // Cap the resource sliders at the host's real hardware (mirrors create).
+    void getHostInfo()
+      .then((h) => {
+        setMaxCpus(Math.max(1, Math.floor(h.cpus || 8)));
+        setMaxMemGb(Math.max(0.25, Math.floor((h.memoryMb || 16384) / 256) * 0.25));
+      })
+      .catch(() => {});
   }, [isOpen]);
 
   // Load fresh settings each time the modal opens.
@@ -122,6 +175,10 @@ export function AgentSettingsModal({
         if (!alive) return;
         setAgent(a);
         setName(a.username || a.id);
+        setGuidance(a.guidance ?? '');
+        setCpus(a.cpus ?? 0);
+        setMemGb(a.memoryMb ? a.memoryMb / 1024 : 0);
+        setTimezone(a.timezone ?? '');
         const has = typeof a.autoCompactPct === 'number';
         setOverride(has);
         setPct(has ? a.autoCompactPct! : DEFAULT_PCT);
@@ -147,15 +204,25 @@ export function AgentSettingsModal({
   const modelChanged = model !== origModel;
   const origProvider = agent?.provider ?? 'anthropic';
   const providerChanged = provider !== origProvider;
+  const origGuidance = agent?.guidance ?? '';
+  const guidanceChanged = guidance !== origGuidance;
   // The threshold is read by claude only at launch, so it needs a restart. The
   // provider switch flips ANTHROPIC_BASE_URL, which Claude Code only reads at
-  // process start — so changing provider also needs a restart. The model
-  // switches LIVE for Anthropic (the gateway types `/model …` into the
+  // process start — so changing provider also needs a restart. Guidance lands in
+  // ~/.claude/CLAUDE.md, read by claude at session start — also restart-to-apply.
+  // The model switches LIVE for Anthropic (the gateway types `/model …` into the
   // session); for opencodeGo the model lives in the proxy, also live.
   const running = agent?.status === 'running';
-  const needsRestart = pctChanged || providerChanged;
+  const needsRestart = pctChanged || providerChanged || guidanceChanged;
   const origVolumes = JSON.stringify([...(agent?.volumes ?? [])].sort());
   const volumesChanged = JSON.stringify([...volumes].sort()) !== origVolumes;
+  // CPU/memory caps bind on the container's HostConfig at create, so a change
+  // only lands on a rebuild (recreate) — same as volumes.
+  const origCpus = agent?.cpus ?? 0;
+  const origMemGb = agent?.memoryMb ? agent.memoryMb / 1024 : 0;
+  const resourcesChanged = cpus !== origCpus || memGb !== origMemGb;
+  // Timezone is the container's TZ env, also fixed at create → rebuild to apply.
+  const timezoneChanged = timezone.trim() !== (agent?.timezone ?? '');
 
   const providerModels =
     allProviders.find((p) => p.key === provider)?.models ??
@@ -169,6 +236,10 @@ export function AgentSettingsModal({
     try {
       await updateAgent(agentId, {
         username: name.trim(),
+        guidance: guidance.trim() || null,
+        cpus: cpus > 0 ? cpus : null,
+        memoryMb: memGb > 0 ? Math.round(memGb * 1024) : null,
+        timezone: timezone.trim() || null,
         autoCompactPct: nextPct,
         provider,
         model: model || null,
@@ -184,15 +255,21 @@ export function AgentSettingsModal({
         const label = providerModels.find((o) => o.value === model)?.label ?? model ?? 'default';
         toast.warning(`Switching model to ${label}…`);
       }
-      if (needsRestart && running) {
-        setPhase('restart');
-      } else if (volumesChanged && running) {
+      // A rebuild (recreate) re-reads the threshold/provider too, so it takes
+      // priority when a create-time setting (resources/timezone/volumes) changed.
+      if ((volumesChanged || resourcesChanged || timezoneChanged) && running) {
         setPhase('rebuild');
+      } else if (needsRestart && running) {
+        setPhase('restart');
       } else {
         if (pctChanged && !providerChanged)
           toast.warning('Saved — the new threshold applies next time the agent starts.');
+        if (guidanceChanged && !running)
+          toast.success('Saved — guidance applies when the agent starts.');
         if (volumesChanged && !running)
           toast.success('Saved — volumes mount when the agent starts.');
+        if ((resourcesChanged || timezoneChanged) && !running)
+          toast.success('Saved — CPU/memory/timezone apply on the next rebuild.');
         onOpenChange(false);
       }
     } catch (e) {
@@ -249,7 +326,7 @@ export function AgentSettingsModal({
                   ? 'Agent settings'
                   : phase === 'restart'
                     ? 'Restart to apply?'
-                    : 'Rebuild to apply volumes?'}
+                    : 'Rebuild to apply?'}
               </Modal.Heading>
             </Modal.Header>
 
@@ -413,6 +490,27 @@ export function AgentSettingsModal({
                             : 'The model this agent\'s claude runs — switches live. "Default" uses claude\'s own default.'}
                         </p>
                       </div>
+
+                      <div className="space-y-2">
+                        <TextField value={guidance} onChange={setGuidance}>
+                          <Label className="text-sm">Guidance (CLAUDE.md)</Label>
+                          <TextArea
+                            rows={5}
+                            className="resize-y font-mono text-xs leading-relaxed"
+                            placeholder={
+                              'Instructions for THIS agent only — e.g.\nYou are the release manager; never merge without two approvals.'
+                            }
+                          />
+                        </TextField>
+                        <p className="text-muted text-xs">
+                          Written to this agent&apos;s own <code>~/.claude/CLAUDE.md</code> — its
+                          user-level memory, separate from every other agent. Read by{' '}
+                          <code>claude</code> in addition to its roles.{' '}
+                          {running && guidanceChanged
+                            ? 'Requires a restart to take effect.'
+                            : 'Applies on the next restart.'}
+                        </p>
+                      </div>
                     </Tabs.Panel>
 
                     <Tabs.Panel
@@ -495,6 +593,52 @@ export function AgentSettingsModal({
                       id="resources"
                       className="max-h-[60vh] space-y-5 overflow-y-auto pt-5 pr-1"
                     >
+                      <div className="space-y-3">
+                        <div className="space-y-1">
+                          <Label className="text-sm">Resource limits</Label>
+                          <p className="text-muted text-xs">
+                            Hard CPU and memory caps for the container. 0 = unlimited. These are
+                            fixed when the container is created, so a change rebuilds the agent to
+                            apply.
+                          </p>
+                        </div>
+                        <LimitSlider
+                          label="CPUs"
+                          value={cpus}
+                          onChange={setCpus}
+                          max={maxCpus}
+                          step={1}
+                          unit="cores"
+                        />
+                        <LimitSlider
+                          label="Max memory"
+                          value={memGb}
+                          onChange={setMemGb}
+                          max={maxMemGb}
+                          step={0.25}
+                          unit="GB"
+                        />
+                        {running && resourcesChanged && (
+                          <p className="text-warning text-xs">
+                            Changing CPU/memory rebuilds the agent (recreate) to take effect — the
+                            transcript is preserved.
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="space-y-2">
+                        <TextField value={timezone} onChange={setTimezone}>
+                          <Label className="text-sm">Timezone</Label>
+                          <Input placeholder="e.g. America/Toronto (blank = UTC)" />
+                        </TextField>
+                        <p className="text-muted text-xs">
+                          IANA timezone for this agent (its <code>TZ</code> — used by{' '}
+                          <code>claude</code> and CLI tools for timestamps). Fixed at container
+                          create, so a change rebuilds the agent to apply.
+                          {running && timezoneChanged ? ' Requires a rebuild to take effect.' : ''}
+                        </p>
+                      </div>
+
                       {allVolumes.length > 0 && (
                         <div className="space-y-2">
                           <Label className="text-sm">Shared volumes</Label>
@@ -638,11 +782,16 @@ export function AgentSettingsModal({
               <>
                 <Modal.Body>
                   <p className="text-muted text-sm">
-                    {providerChanged
-                      ? 'The provider changed (ANTHROPIC_BASE_URL flips). '
-                      : 'The auto-compact threshold changed. '}
-                    The agent must restart (stop → start) for <code>claude</code> to pick it up. The
-                    transcript is preserved and resumes via <code>--continue</code>.
+                    You changed{' '}
+                    {[
+                      providerChanged && 'the provider (ANTHROPIC_BASE_URL)',
+                      pctChanged && 'the auto-compact threshold',
+                      guidanceChanged && 'the guidance (CLAUDE.md)',
+                    ]
+                      .filter(Boolean)
+                      .join(', ')}
+                    . The agent must restart (stop → start) for <code>claude</code> to pick it up.
+                    The transcript is preserved and resumes via <code>--continue</code>.
                   </p>
                 </Modal.Body>
                 <Modal.Footer>
@@ -658,10 +807,17 @@ export function AgentSettingsModal({
               <>
                 <Modal.Body>
                   <p className="text-muted text-sm">
-                    Volume attachments changed. Mounts are fixed when the container is created, so
-                    the agent&apos;s container must be rebuilt (same disk, fresh container) for{' '}
-                    <code>~/Shared</code> to update. The transcript is preserved and resumes via{' '}
-                    <code>--continue</code>.
+                    You changed{' '}
+                    {[
+                      resourcesChanged && 'the CPU/memory caps',
+                      timezoneChanged && 'the timezone',
+                      volumesChanged && 'volume attachments',
+                    ]
+                      .filter(Boolean)
+                      .join(', ')}
+                    . These bind when the container is created, so the agent&apos;s container must
+                    be rebuilt (same disk, fresh container) to apply. The transcript is preserved
+                    and resumes via <code>--continue</code>.
                   </p>
                 </Modal.Body>
                 <Modal.Footer>

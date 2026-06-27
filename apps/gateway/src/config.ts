@@ -65,6 +65,17 @@ export const config = {
   groupChatsFile: process.env.GROUP_CHATS_FILE ?? join(dirname(settingsFile), 'group-chats.json'),
   /** Shared-volume registry (name + size of each loop-image-backed volume). */
   volumesFile: process.env.VOLUMES_FILE ?? join(dirname(settingsFile), 'volumes.json'),
+  /** Append-only audit/event log (NDJSON), in the gateway-data volume. Rotated
+   *  at auditMaxBytes; the gateway keeps a recent in-memory window for queries
+   *  and a live stream, and persists everything here for the full trail. */
+  auditFile: process.env.AUDIT_FILE ?? join(dirname(settingsFile), 'audit.jsonl'),
+  /** Rotate the audit log once it exceeds this size (bytes); one .1 backup kept. */
+  auditMaxBytes: num(process.env.AUDIT_MAX_BYTES, 50 * 1024 * 1024),
+  /** How many recent events to keep in memory for fast filtered queries. */
+  auditRingSize: num(process.env.AUDIT_RING_SIZE, 20_000),
+  /** IANA timezone the audit log renders its (Minecraft-style) timestamps in.
+   *  Defaults to Toronto; the dashboard can override the display tz per-viewer. */
+  auditTimezone: process.env.AUDIT_TZ?.trim() || 'America/Toronto',
   /**
    * Persistent agent disks. Each agent's home is bind-mounted from
    * `${swarmDataHost}/agents/<id>` on the HOST (the daemon resolves this), and

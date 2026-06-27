@@ -6,6 +6,7 @@ import { parseAgentPath } from './router.js';
 import { applyCors, handleApi } from './api.js';
 import { isAuthed, swarmTokenMayAccess, validSwarmToken } from './auth.js';
 import { proxyHttp, proxyToUpstream, relayWs } from './proxy.js';
+import { logEvent, SYSTEM_ACTOR } from './audit.js';
 
 /** Paths reachable without a session: the login page + its assets, the auth API,
  *  and CORS preflights. Everything else (dashboard, API, agent proxy) is gated. */
@@ -127,10 +128,13 @@ server.on('upgrade', async (req, socket, head) => {
 });
 
 server.listen(config.port, () => {
-  console.log(
-    `gateway on :${config.port} — mode=${config.mode}, network=${config.networkName}, ` +
-      `dashboard=${config.dashboardUpstream}`,
-  );
+  logEvent({
+    category: 'system',
+    action: 'system.boot',
+    message: `gateway started on :${config.port} (mode=${config.mode}, network=${config.networkName})`,
+    actor: SYSTEM_ACTOR,
+    meta: { port: config.port, mode: config.mode, auditTimezone: config.auditTimezone },
+  });
   // Backfill the swarm token onto every agent disk so agents (incl. ones created
   // before login was enabled) can authenticate their gateway calls.
   manager.writeSwarmTokenAll();

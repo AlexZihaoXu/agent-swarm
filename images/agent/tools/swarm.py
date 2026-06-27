@@ -363,6 +363,45 @@ def swarm_usage(_args: dict) -> dict:
     return _ok("\n".join(lines))
 
 
+def append_guidance(args: dict) -> dict:
+    text = str(args.get("text") or "").strip()
+    if not text:
+        return _err("'text' is required (the guidance to append to the swarm's global CLAUDE.md)")
+    me = _identity()
+    try:
+        r = _http("POST", "/api/swarm/append-guidance", {"fromId": me["id"], "text": text})
+    except urllib.error.HTTPError as e:
+        return _err(f"HTTP {e.code}: {e.read().decode()[:200]}")
+    except Exception as e:  # noqa: BLE001
+        return _err(str(e))
+    length = (r or {}).get("length", "?")
+    return _ok(
+        f"Appended to YOUR OWN guidance (now {length} chars). It only affects you, and applies "
+        "the next time your claude session restarts — use swarm_restart_self (if you have that "
+        "permission) to apply it now, or ask the operator."
+    )
+
+
+def restart_self(_args: dict) -> dict:
+    me = _identity()
+    try:
+        _http("POST", "/api/swarm/restart-self", {"fromId": me["id"]})
+    except urllib.error.HTTPError as e:
+        if e.code == 403:
+            return _err(
+                "your role lacks the 'restart self' capability — ask the operator to "
+                "grant it to one of your roles."
+            )
+        return _err(f"HTTP {e.code}: {e.read().decode()[:200]}")
+    except Exception as e:  # noqa: BLE001
+        return _err(str(e))
+    return _ok(
+        "Restarting your agent now (stop → start). Your container reboots in ~1s and your claude "
+        "session resumes via --continue (transcript preserved). This is the last thing the "
+        "current process will emit before the restart."
+    )
+
+
 TOOLS = [
     ("swarm_whoami", "Your own identity (id + name) within the swarm.", {}, [], whoami),
     (
@@ -493,6 +532,34 @@ TOOLS = [
         },
         ["enabled"],
         toggle_desktop,
+    ),
+    (
+        "swarm_append_guidance",
+        "Append a note to YOUR OWN guidance — your personal ~/.claude/CLAUDE.md that only YOU load "
+        "as user memory (every agent has its own; this never touches a peer's). Use it to record a "
+        "convention, fact, or lesson for your future self. Append-only: you can't edit or remove "
+        "what's there (only the operator can, from your settings). It applies the next time your "
+        "claude session restarts — use swarm_restart_self to apply it now (if you have that "
+        "permission). One append is capped at 4000 chars.",
+        {
+            "text": {
+                "type": "string",
+                "description": "The guidance to append to your own CLAUDE.md (markdown). Keep it concise.",
+            },
+        },
+        ["text"],
+        append_guidance,
+    ),
+    (
+        "swarm_restart_self",
+        "Restart YOUR OWN agent (a deferred stop → start) to apply pending settings — e.g. guidance "
+        "you just added with swarm_append_guidance, or an operator change. The reboot re-reads your "
+        "CLAUDE.md, reconnects integrations, and resumes your session via --continue (your "
+        "transcript is preserved). ~10-20s of downtime. Self-only — you can never restart a peer. "
+        "Requires a role with the 'restart self' permission (403 otherwise). No arguments.",
+        {},
+        [],
+        restart_self,
     ),
 ]
 HANDLERS = {name: fn for name, _d, _p, _r, fn in TOOLS}

@@ -39,6 +39,10 @@ export interface Agent {
   /** Shared volumes attached to this agent (mounted at ~/Shared/<name>).
    *  Binds are fixed at container create — changes land on the next recreate. */
   volumes?: string[];
+  /** Per-agent guidance written to this agent's own ~/.claude/CLAUDE.md (its
+   *  user-level memory, distinct per agent). Only present on a single-agent
+   *  fetch (getAgent), not the fleet list. Applies on the next restart. */
+  guidance?: string;
 }
 
 // --- Roles & groups --------------------------------------------------------
@@ -339,6 +343,118 @@ export async function buildImage(onChunk: (text: string) => void): Promise<void>
   }
 }
 
+// --- Audit / event log ------------------------------------------------------
+
+export type AuditCategory =
+  | 'auth'
+  | 'agent'
+  | 'docker'
+  | 'swarm'
+  | 'integration'
+  | 'settings'
+  | 'file'
+  | 'system';
+export type AuditLevel = 'info' | 'warn' | 'error';
+
+export interface AuditEvent {
+  id: string;
+  ts: number;
+  category: AuditCategory;
+  action: string;
+  level: AuditLevel;
+  message: string;
+  actor: { kind: 'operator' | 'agent' | 'system'; id?: string; name?: string; ip?: string };
+  agentId?: string;
+  target?: string;
+  durationMs?: number;
+  ok?: boolean;
+  meta?: Record<string, unknown>;
+}
+
+export interface AuditMeta {
+  timezone: string;
+  categories: AuditCategory[];
+  levels: AuditLevel[];
+  total: number;
+  byCategory: Record<string, number>;
+  byLevel: Record<string, number>;
+}
+
+export interface AuditFilters {
+  from?: number;
+  to?: number;
+  category?: AuditCategory | '';
+  action?: string;
+  agentId?: string;
+  actor?: 'operator' | 'agent' | 'system' | '';
+  level?: AuditLevel | '';
+  q?: string;
+  limit?: number;
+  before?: string;
+}
+
+function auditQs(f: AuditFilters): string {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(f)) {
+    if (v !== undefined && v !== '' && v !== null) p.set(k, String(v));
+  }
+  return p.toString();
+}
+
+export const getAuditMeta = () => api<AuditMeta>('/api/audit/meta');
+
+export const listAudit = (f: AuditFilters = {}) =>
+  api<{ events: AuditEvent[]; hasMore: boolean; timezone: string }>(`/api/audit?${auditQs(f)}`);
+
+/** Open the live NDJSON stream and call `onEvent` per event until aborted. */
+export async function streamAudit(
+  f: AuditFilters,
+  onEvent: (ev: AuditEvent) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${GATEWAY_BASE}/api/audit/stream?${auditQs(f)}`, { signal });
+  if (!res.body) throw new Error('audit stream produced no body');
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop() ?? ''; // keep the trailing partial line
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        onEvent(JSON.parse(line) as AuditEvent);
+      } catch {
+        /* skip a malformed line */
+      }
+    }
+  }
+}
+
+/** `YYYY-MM-DD HH:MM:SS` for an epoch-ms time in an IANA timezone (mirrors the
+ *  gateway's Minecraft-style timestamp). */
+export function formatAuditTimestamp(ts: number, tz: string): string {
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).formatToParts(ts);
+    const g = (t: string) => parts.find((x) => x.type === t)?.value ?? '';
+    return `${g('year')}-${g('month')}-${g('day')} ${g('hour')}:${g('minute')}:${g('second')}`;
+  } catch {
+    return new Date(ts).toISOString().replace('T', ' ').slice(0, 19);
+  }
+}
+
 export interface AgentTask {
   id: string;
   subject: string;
@@ -615,20 +731,40 @@ export const fileDownloadUrl = (base: string, path: string) =>
 /** Direct URL for downloading a folder as a .zip (same-origin → cookie is sent). */
 export const folderZipUrl = (base: string, path: string) =>
   `${GATEWAY_BASE}${base}?op=zip&path=${encodeURIComponent(path)}`;
-/** Upload a File into `dir` (raw body; filename in the query). */
-export async function uploadFile(base: string, dir: string, file: File): Promise<void> {
-  const res = await fetch(
-    `${GATEWAY_BASE}${base}?op=upload&path=${encodeURIComponent(dir)}&name=${encodeURIComponent(file.name)}`,
-    { method: 'POST', body: file },
-  );
-  if (!res.ok) {
-    const msg = await res
-      .clone()
-      .json()
-      .then((b: { error?: string }) => b.error)
-      .catch(() => undefined);
-    throw new Error(msg ?? `upload failed (${res.status})`);
-  }
+/** Upload a File into `dir` (raw body; filename in the query). Uses XHR (not
+ *  fetch) so `onProgress` can report the upload fraction (0..1) for a progress
+ *  UI. Same-origin cookies ride along automatically (no withCredentials, matching
+ *  the rest of the API client). */
+export function uploadFile(
+  base: string,
+  dir: string,
+  file: File,
+  onProgress?: (fraction: number) => void,
+): Promise<void> {
+  const url = `${GATEWAY_BASE}${base}?op=upload&path=${encodeURIComponent(dir)}&name=${encodeURIComponent(file.name)}`;
+  return new Promise<void>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress?.(e.loaded / e.total);
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress?.(1);
+        resolve();
+      } else {
+        let msg: string | undefined;
+        try {
+          msg = (JSON.parse(xhr.responseText) as { error?: string }).error;
+        } catch {
+          /* non-JSON error body */
+        }
+        reject(new Error(msg ?? `upload failed (${xhr.status})`));
+      }
+    };
+    xhr.onerror = () => reject(new Error('upload failed (network error)'));
+    xhr.send(file);
+  });
 }
 
 /** Patch an agent's editable settings (display name and/or auto-compact %).
@@ -637,6 +773,16 @@ export const updateAgent = (
   id: string,
   patch: {
     username?: string;
+    /** Hard CPU cap in cores; null/0 = unlimited. Applies on the next rebuild. */
+    cpus?: number | null;
+    /** Hard memory cap in MB; null/0 = unlimited. Applies on the next rebuild. */
+    memoryMb?: number | null;
+    /** IANA timezone (the container's TZ); empty clears it back to UTC. Applies
+     *  on the next rebuild. */
+    timezone?: string | null;
+    /** Per-agent guidance (this agent's ~/.claude/CLAUDE.md); empty clears it.
+     *  Applies on the next restart. */
+    guidance?: string | null;
     autoCompactPct?: number | null;
     provider?: Provider;
     model?: string | null;

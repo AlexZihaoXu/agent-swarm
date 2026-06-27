@@ -4,7 +4,7 @@ import { Button, buttonVariants, Card, Spinner } from '@heroui/react';
 import { AnimatePresence, motion } from 'framer-motion';
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { LuPackage, LuSettings } from 'react-icons/lu';
+import { LuPackage, LuScrollText, LuSettings } from 'react-icons/lu';
 import { getImageStatus, listAgents, type Agent } from '@/lib/gateway';
 import { AgentCard } from './AgentCard';
 import { CreateAgentModal } from './CreateAgentModal';
@@ -73,6 +73,14 @@ export default function HomePage() {
               <LuPackage className="size-4" />
               <span className="hidden sm:inline">Packages</span>
             </Button>
+            <Link
+              href="/logs"
+              aria-label="Logs"
+              className={`${buttonVariants({ variant: 'tertiary', size: 'sm' })} gap-1.5`}
+            >
+              <LuScrollText className="size-4" />
+              <span className="hidden sm:inline">Logs</span>
+            </Link>
             <Link
               href="/settings"
               aria-label="Settings"

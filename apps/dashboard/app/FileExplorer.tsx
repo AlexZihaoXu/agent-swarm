@@ -13,7 +13,7 @@ import {
   TextField,
   toast,
 } from '@heroui/react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   LuCopy,
   LuDownload,
@@ -132,6 +132,57 @@ function join(dir: string, name: string): string {
   return dir ? `${dir}/${name}` : name;
 }
 
+/** Live state of an upload batch — a tiny subscribable store so the progress can
+ *  be rendered inside a toast (which snapshots its content, so it can't be
+ *  re-rendered from the outside) and updated as bytes stream up. */
+type UploadState = { total: number; index: number; name: string; frac: number };
+class UploadTracker {
+  private state: UploadState;
+  private readonly listeners = new Set<() => void>();
+  constructor(total: number) {
+    this.state = { total, index: 0, name: '', frac: 0 };
+  }
+  /** Stable between updates so useSyncExternalStore doesn't loop. */
+  readonly get = (): UploadState => this.state;
+  readonly subscribe = (fn: () => void): (() => void) => {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  };
+  update(patch: Partial<UploadState>): void {
+    this.state = { ...this.state, ...patch };
+    for (const fn of this.listeners) fn();
+  }
+}
+
+/** The toast body for an in-flight upload: current file + an overall progress
+ *  bar. Subscribes to its UploadTracker so it re-renders as bytes upload. */
+function UploadProgress({ tracker }: { tracker: UploadTracker }) {
+  const s = useSyncExternalStore(tracker.subscribe, tracker.get, tracker.get);
+  const pct = Math.round(Math.min(1, s.total ? (s.index + s.frac) / s.total : 0) * 100);
+  return (
+    <div className="mt-1 w-full space-y-1">
+      <div className="flex items-center justify-between gap-2 text-xs">
+        <span className="min-w-0 truncate">
+          {s.total > 1 ? `${Math.min(s.index + 1, s.total)}/${s.total} · ` : ''}
+          {s.name}
+        </span>
+        <span className="tabular-nums">{pct}%</span>
+      </div>
+      <div className="bg-surface-secondary h-1.5 w-full overflow-hidden rounded-full">
+        <div
+          className="bg-accent h-full rounded-full transition-[width] duration-150"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** Whether a drag carries files (vs. text / an internal element drag). */
+function dragHasFiles(e: React.DragEvent): boolean {
+  return Array.from(e.dataTransfer?.types ?? []).includes('Files');
+}
+
 /**
  * Per-agent file explorer (Finder-style): browse the agent's home, upload /
  * download, make folders, rename, delete, and edit text files inline.
@@ -169,7 +220,10 @@ export function FileExplorer({
   const [newFolder, setNewFolder] = useState<string | null>(null); // null = not creating
   const [query, setQuery] = useState(''); // in-folder filter
   const [menu, setMenu] = useState<{ x: number; y: number; entry: FileEntry } | null>(null);
+  const [dragOver, setDragOver] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  // dragenter/leave fire per descendant; count depth so the overlay doesn't flicker.
+  const dragDepth = useRef(0);
 
   const load = useCallback(
     (path: string) => {
@@ -263,19 +317,58 @@ export function FileExplorer({
     }
   };
 
-  const onUpload = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
+  const onUpload = async (files: FileList | File[] | null) => {
+    const list = files ? Array.from(files) : [];
+    if (list.length === 0) return;
     setBusy(true);
+    // A persistent (timeout:0) loading toast whose body shows live progress.
+    const tracker = new UploadTracker(list.length);
+    const key = toast(`Uploading ${list.length} file${list.length > 1 ? 's' : ''}…`, {
+      description: <UploadProgress tracker={tracker} />,
+      isLoading: true,
+      timeout: 0,
+    });
     try {
-      for (const f of Array.from(files)) await uploadFile(apiBase, cwd, f);
-      toast.success(`Uploaded ${files.length} file${files.length > 1 ? 's' : ''}.`);
+      for (let i = 0; i < list.length; i++) {
+        const f = list[i]!;
+        tracker.update({ index: i, name: f.name, frac: 0 });
+        await uploadFile(apiBase, cwd, f, (frac) => tracker.update({ frac }));
+      }
+      toast.close(key);
+      toast.success(`Uploaded ${list.length} file${list.length > 1 ? 's' : ''}.`);
       load(cwd);
     } catch (e) {
+      toast.close(key);
       toast.warning(e instanceof Error ? e.message : 'Upload failed.');
     } finally {
       setBusy(false);
       if (fileInput.current) fileInput.current.value = '';
     }
+  };
+
+  // Drag-and-drop upload onto the listing. Depth-counted so moving over child
+  // rows doesn't toggle the overlay; only file drags are accepted.
+  const onDragEnter = (e: React.DragEvent) => {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    dragDepth.current += 1;
+    setDragOver(true);
+  };
+  const onDragOver = (e: React.DragEvent) => {
+    if (dragHasFiles(e)) e.preventDefault(); // allow the drop
+  };
+  const onDragLeave = (e: React.DragEvent) => {
+    if (!dragHasFiles(e)) return;
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDragOver(false);
+  };
+  const onDrop = (e: React.DragEvent) => {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    dragDepth.current = 0;
+    setDragOver(false);
+    if (busy) return; // a batch is already uploading — ignore the drop
+    void onUpload(e.dataTransfer.files);
   };
 
   const segments = cwd ? cwd.split('/') : [];
@@ -305,7 +398,21 @@ export function FileExplorer({
                   onClose={() => setEditing(null)}
                 />
               ) : (
-                <>
+                <div
+                  className="relative flex min-h-0 flex-1 flex-col gap-3"
+                  onDragEnter={onDragEnter}
+                  onDragOver={onDragOver}
+                  onDragLeave={onDragLeave}
+                  onDrop={onDrop}
+                >
+                  {dragOver && (
+                    <div className="border-accent bg-surface/85 text-foreground pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed text-sm backdrop-blur-[2px]">
+                      <LuUpload className="text-accent size-7" />
+                      <span>
+                        Drop to upload to <code>{cwd || 'home'}</code>
+                      </span>
+                    </div>
+                  )}
                   {/* Toolbar: breadcrumb + actions */}
                   <div className="flex flex-wrap items-center gap-2">
                     <div className="text-muted flex min-w-0 flex-1 flex-wrap items-center gap-1 text-sm">
@@ -576,7 +683,7 @@ export function FileExplorer({
                       </Dropdown.Popover>
                     )}
                   </Dropdown>
-                </>
+                </div>
               )}
             </Modal.Body>
             {!editing && (

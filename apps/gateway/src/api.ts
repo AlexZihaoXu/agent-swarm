@@ -18,6 +18,14 @@ import {
   noteLoginSuccess,
 } from './auth.js';
 import { CAPABILITIES, listRoles, createRole, updateRole, deleteRole } from './roles.js';
+import {
+  auditLog,
+  logEvent,
+  type AuditActor,
+  type AuditCategory,
+  type AuditEvent,
+  type AuditQuery,
+} from './audit.js';
 import { listProviders } from './providers.js';
 import type { Capability, Provider } from './types.js';
 import { listGroups, createGroup, updateGroup, deleteGroup } from './groups.js';
@@ -81,6 +89,21 @@ function clientIp(req: IncomingMessage): string {
   return req.socket.remoteAddress || 'unknown';
 }
 
+/** Audit actor for an operator request (the human via the dashboard). */
+function opActor(req: IncomingMessage): AuditActor {
+  return { kind: 'operator', ip: clientIp(req) };
+}
+/** Audit actor for an agent-originated /api/swarm/* request (fromId/from in body).
+ *  Falls back to the operator when fromId is absent (e.g. operator group-send). */
+function agentActor(
+  req: IncomingMessage,
+  body: { fromId?: string; from?: string; fromName?: string },
+): AuditActor {
+  const id = body.fromId?.trim();
+  if (!id) return opActor(req);
+  return { kind: 'agent', id, name: body.from || body.fromName || undefined };
+}
+
 /** Whether the request reached us over HTTPS — gates the `Secure` cookie. Direct
  *  TLS always counts; X-Forwarded-Proto is client-forgeable, so it's only trusted
  *  behind a configured proxy (TRUST_PROXY) — otherwise a forged `https` header
@@ -101,6 +124,87 @@ export function applyCors(req: IncomingMessage, res: ServerResponse): boolean {
     return true;
   }
   return false;
+}
+
+const AUDIT_CATEGORIES: AuditCategory[] = [
+  'auth',
+  'agent',
+  'docker',
+  'swarm',
+  'integration',
+  'settings',
+  'file',
+  'system',
+];
+
+/** Parse the shared audit filter params from a request URL. */
+function parseAuditQuery(req: IncomingMessage): AuditQuery {
+  const p = new URL(req.url ?? '/', 'http://localhost').searchParams;
+  const numParam = (k: string) => {
+    const v = p.get(k);
+    const n = v ? Number(v) : NaN;
+    return Number.isFinite(n) ? n : undefined;
+  };
+  const cat = p.get('category') as AuditCategory | null;
+  const actor = p.get('actor');
+  const level = p.get('level');
+  return {
+    from: numParam('from'),
+    to: numParam('to'),
+    category: cat && AUDIT_CATEGORIES.includes(cat) ? cat : undefined,
+    action: p.get('action') || undefined,
+    agentId: p.get('agentId') || undefined,
+    actorKind: actor === 'operator' || actor === 'agent' || actor === 'system' ? actor : undefined,
+    level: level === 'info' || level === 'warn' || level === 'error' ? level : undefined,
+    q: p.get('q') || undefined,
+    limit: numParam('limit'),
+    before: p.get('before') || undefined,
+  };
+}
+
+/** GET /api/audit — filtered, newest-first, paginated query of the event log. */
+function handleAudit(req: IncomingMessage, res: ServerResponse, method: string): boolean {
+  if (method !== 'GET') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+  const { events, hasMore } = auditLog.query(parseAuditQuery(req));
+  return (sendJson(res, 200, { events, hasMore, timezone: config.auditTimezone }), true);
+}
+
+/** GET /api/audit/stream — live NDJSON tail (same filters), recent events first
+ *  as a backfill, then each new event as it happens. */
+function handleAuditStream(req: IncomingMessage, res: ServerResponse, method: string): boolean {
+  if (method !== 'GET') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+  const query = parseAuditQuery(req);
+  res.writeHead(200, {
+    'content-type': 'application/x-ndjson; charset=utf-8',
+    'cache-control': 'no-cache, no-transform',
+    'access-control-allow-origin': config.corsOrigin,
+    'x-accel-buffering': 'no', // tell nginx/NPM not to buffer the stream
+  });
+  // Backfill the most recent matching events oldest→newest so a live tail starts
+  // populated and stays chronological.
+  const backfill = auditLog.query({ ...query, limit: Math.min(query.limit ?? 200, 500) }).events;
+  for (let i = backfill.length - 1; i >= 0; i--) res.write(JSON.stringify(backfill[i]) + '\n');
+  const unsub = auditLog.subscribe((ev: AuditEvent) => {
+    try {
+      res.write(JSON.stringify(ev) + '\n');
+    } catch {
+      /* socket gone */
+    }
+  }, query);
+  const heartbeat = setInterval(() => {
+    try {
+      res.write('\n');
+    } catch {
+      /* gone */
+    }
+  }, 25_000);
+  const cleanup = () => {
+    clearInterval(heartbeat);
+    unsub();
+  };
+  req.on('close', cleanup);
+  req.on('error', cleanup);
+  return true;
 }
 
 // /api/agents, /api/agents/:id, /api/agents/:id/(start|stop|compact|upgrade|paths|package)
@@ -161,6 +265,21 @@ export async function handleApi(
       if (method !== 'GET') return (sendJson(res, 405, { error: 'method not allowed' }), true);
       return (sendJson(res, 200, await manager.usageSnapshot()), true);
     }
+    // Audit / event log — operator-only (not in swarmTokenMayAccess).
+    if (pathname === '/api/audit') return handleAudit(req, res, method);
+    if (pathname === '/api/audit/stream') return handleAuditStream(req, res, method);
+    if (pathname === '/api/audit/meta') {
+      if (method !== 'GET') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+      return (
+        sendJson(res, 200, {
+          timezone: config.auditTimezone,
+          categories: AUDIT_CATEGORIES,
+          levels: ['info', 'warn', 'error'],
+          ...auditLog.stats(),
+        }),
+        true
+      );
+    }
     if (pathname === '/api/swarm/send') {
       if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
       const body = await readJson(req);
@@ -170,6 +289,15 @@ export async function handleApi(
         body.to ?? '',
         body.text ?? '',
       );
+      logEvent({
+        category: 'swarm',
+        action: 'swarm.send',
+        message: `message ${body.from || body.fromId || '?'} → ${body.to || '?'}`,
+        actor: agentActor(req, body),
+        agentId: body.fromId || undefined,
+        target: body.to || undefined,
+        meta: { chars: (body.text ?? '').length }, // metadata only, not content
+      });
       return (sendJson(res, 200, { ok: true }), true);
     }
     if (pathname === '/api/swarm/send-file') {
@@ -182,6 +310,14 @@ export async function handleApi(
         body.path ?? '',
         body.note,
       );
+      logEvent({
+        category: 'swarm',
+        action: 'swarm.send_file',
+        message: `file ${body.fromName || body.from || body.fromId || '?'} → ${body.to || '?'}: ${body.path ?? ''}`,
+        actor: agentActor(req, body),
+        agentId: body.fromId || undefined,
+        target: body.to || undefined,
+      });
       return (sendJson(res, 200, { ok: true, path: dest }), true);
     }
     if (pathname === '/api/swarm/manage') {
@@ -192,39 +328,113 @@ export async function handleApi(
         body.to ?? '',
         (body.action ?? '') as 'start' | 'stop',
       );
+      logEvent({
+        category: 'swarm',
+        action: 'swarm.manage',
+        message: `${body.fromId || '?'} ${body.action}ed peer ${body.to || '?'}`,
+        actor: agentActor(req, body),
+        agentId: body.fromId || undefined,
+        target: body.to || undefined,
+        meta: { peerAction: body.action },
+      });
       return (sendJson(res, 200, { ok: true, agent }), true);
     }
     if (pathname === '/api/swarm/view') {
       if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
       const body = await readJson(req);
       const savedPath = await manager.viewAgent(body.fromId ?? '', body.to ?? '');
+      logEvent({
+        category: 'swarm',
+        action: 'swarm.view',
+        message: `${body.fromId || '?'} captured peer ${body.to || '?'} screen`,
+        actor: agentActor(req, body),
+        agentId: body.fromId || undefined,
+        target: body.to || undefined,
+      });
       return (sendJson(res, 200, { ok: true, path: savedPath }), true);
     }
     if (pathname === '/api/swarm/compact') {
       if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
       const body = await readJson(req);
       const result = await manager.compactPeer(body.fromId ?? '', body.to ?? '');
+      logEvent({
+        category: 'swarm',
+        action: 'swarm.compact',
+        message: `${body.fromId || '?'} ran /compact on peer ${body.to || '?'}`,
+        actor: agentActor(req, body),
+        agentId: body.fromId || undefined,
+        target: body.to || undefined,
+      });
       return (sendJson(res, 200, result), true);
     }
     if (pathname === '/api/swarm/stats') {
       if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
       const body = await readJson(req);
       const stats = await manager.statsForPeer(body.fromId ?? '', body.to ?? '');
+      logEvent({
+        category: 'swarm',
+        action: 'swarm.stats',
+        message: `${body.fromId || '?'} read peer ${body.to || '?'} stats`,
+        actor: agentActor(req, body),
+        agentId: body.fromId || undefined,
+        target: body.to || undefined,
+      });
       return (sendJson(res, 200, stats), true);
     }
     if (pathname === '/api/swarm/usage') {
       if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
       const body = await readJson(req);
-      return (sendJson(res, 200, await manager.usageForAgent(body.fromId ?? '')), true);
+      const usage = await manager.usageForAgent(body.fromId ?? '');
+      logEvent({
+        category: 'swarm',
+        action: 'swarm.usage',
+        message: `${body.fromId || '?'} read swarm usage`,
+        actor: agentActor(req, body),
+        agentId: body.fromId || undefined,
+      });
+      return (sendJson(res, 200, usage), true);
     }
     if (pathname === '/api/swarm/desktop') {
       if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
       const body = await readJson(req);
       const enabled = body.desktop !== false; // any non-explicit-false = enable
-      return (
-        sendJson(res, 200, await manager.toggleDesktopSelf(body.fromId ?? '', enabled)),
-        true
-      );
+      const result = await manager.toggleDesktopSelf(body.fromId ?? '', enabled);
+      logEvent({
+        category: 'swarm',
+        action: 'swarm.desktop_toggle',
+        message: `${body.fromId || '?'} turned its desktop ${enabled ? 'on' : 'off'}`,
+        actor: agentActor(req, body),
+        agentId: body.fromId || undefined,
+        meta: { enabled },
+      });
+      return (sendJson(res, 200, result), true);
+    }
+    if (pathname === '/api/swarm/append-guidance') {
+      if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+      const body = await readJson(req);
+      const result = await manager.appendAgentGuidance(body.fromId ?? '', body.text ?? '');
+      logEvent({
+        category: 'swarm',
+        action: 'swarm.append_guidance',
+        message: `${body.fromId || '?'} appended to its own guidance`,
+        actor: agentActor(req, body),
+        agentId: body.fromId || undefined,
+        meta: { chars: (body.text ?? '').length },
+      });
+      return (sendJson(res, 200, result), true);
+    }
+    if (pathname === '/api/swarm/restart-self') {
+      if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+      const body = await readJson(req);
+      const result = await manager.restartSelf(body.fromId ?? '');
+      logEvent({
+        category: 'swarm',
+        action: 'swarm.restart_self',
+        message: `${body.fromId || '?'} requested a self-restart`,
+        actor: agentActor(req, body),
+        agentId: body.fromId || undefined,
+      });
+      return (sendJson(res, 200, result), true);
     }
     if (pathname === '/api/swarm/group-send') {
       if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
@@ -235,6 +445,15 @@ export async function handleApi(
         fromName: body.fromName ?? body.from,
         group: body.group ?? '',
         text: body.text ?? '',
+      });
+      logEvent({
+        category: 'swarm',
+        action: 'swarm.group_send',
+        message: `group message ${body.fromName || body.from || (body.fromId ? body.fromId : 'operator')} → group ${body.group || '?'}`,
+        actor: agentActor(req, body),
+        agentId: body.fromId || undefined,
+        target: body.group || undefined,
+        meta: { chars: (body.text ?? '').length },
       });
       return (sendJson(res, 200, { ok: true, message: msg }), true);
     }
@@ -254,7 +473,19 @@ export async function handleApi(
     if (pathname.startsWith('/api/agents')) return await handleAgents(req, res, manager, method);
     sendJson(res, 404, { error: 'unknown endpoint' });
   } catch (err) {
-    sendJson(res, errStatus(err), { error: err instanceof Error ? err.message : String(err) });
+    const status = errStatus(err);
+    // Audit unexpected server errors (5xx); 4xx are expected client/validation
+    // errors and would be noise.
+    if (status >= 500)
+      logEvent({
+        category: 'system',
+        action: 'system.error',
+        level: 'error',
+        message: `${method} ${pathname} → ${status}: ${err instanceof Error ? err.message : String(err)}`,
+        actor: opActor(req),
+        meta: { status, path: pathname },
+      });
+    sendJson(res, status, { error: err instanceof Error ? err.message : String(err) });
   }
   return true;
 }
@@ -279,7 +510,12 @@ async function handleAuth(
     if (isConfigured()) return (sendJson(res, 409, { error: 'already configured' }), true);
     const body = await readJson(req, MAX_AUTH_JSON_BYTES);
     setupCredentials(body.username ?? '', body.password ?? '');
-    console.log(`[auth] first-run setup completed from ${clientIp(req)}`);
+    logEvent({
+      category: 'auth',
+      action: 'auth.setup',
+      message: `first-run operator setup completed (user "${(body.username ?? '').trim()}")`,
+      actor: opActor(req),
+    });
     res.setHeader('set-cookie', sessionCookie(issueToken((body.username ?? '').trim()), isSecure));
     return (sendJson(res, 200, { ok: true }), true);
   }
@@ -290,6 +526,14 @@ async function handleAuth(
     const ip = clientIp(req);
     const throttle = loginThrottle(ip);
     if (throttle.blocked) {
+      logEvent({
+        category: 'auth',
+        action: 'auth.login.throttled',
+        level: 'warn',
+        message: `login blocked by rate limit (retry in ${throttle.retryAfterSec}s)`,
+        actor: { kind: 'operator', ip },
+        meta: { retryAfterSec: throttle.retryAfterSec },
+      });
       res.setHeader('retry-after', String(throttle.retryAfterSec));
       return (
         sendJson(res, 429, {
@@ -302,17 +546,35 @@ async function handleAuth(
     const body = await readJson(req, MAX_AUTH_JSON_BYTES);
     if (!verifyPassword(body.username ?? '', body.password ?? '')) {
       noteLoginFailure(ip);
-      console.warn(`[auth] failed login from ${ip}`);
+      logEvent({
+        category: 'auth',
+        action: 'auth.login.fail',
+        level: 'warn',
+        message: `failed login (user "${(body.username ?? '').trim() || '?'}")`,
+        actor: { kind: 'operator', ip },
+      });
       return (sendJson(res, 401, { error: 'invalid username or password' }), true);
     }
     noteLoginSuccess(ip);
-    console.log(`[auth] login ok from ${ip}`);
+    logEvent({
+      category: 'auth',
+      action: 'auth.login.success',
+      message: `login succeeded (user "${(body.username ?? '').trim()}")`,
+      actor: { kind: 'operator', ip },
+    });
     res.setHeader('set-cookie', sessionCookie(issueToken((body.username ?? '').trim()), isSecure));
     return (sendJson(res, 200, { ok: true }), true);
   }
   if (pathname === '/api/auth/logout') {
     if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
     res.setHeader('set-cookie', clearCookie(isSecure));
+    if (authed)
+      logEvent({
+        category: 'auth',
+        action: 'auth.logout',
+        message: 'operator signed out',
+        actor: opActor(req),
+      });
     return (sendJson(res, 200, { ok: true }), true);
   }
   if (pathname === '/api/auth/password') {
@@ -340,12 +602,23 @@ async function handleAuth(
       // (e.g. a too-short new password) don't arm the throttle.
       if ((err as { statusCode?: number })?.statusCode === 403) {
         noteLoginFailure(ip);
-        console.warn(`[auth] failed password change from ${ip}`);
+        logEvent({
+          category: 'auth',
+          action: 'auth.password.fail',
+          level: 'warn',
+          message: 'failed password change (wrong current password)',
+          actor: { kind: 'operator', ip },
+        });
       }
       throw err;
     }
     noteLoginSuccess(ip);
-    console.log(`[auth] password changed from ${ip}`);
+    logEvent({
+      category: 'auth',
+      action: 'auth.password.change',
+      message: 'operator password changed',
+      actor: { kind: 'operator', ip },
+    });
     // The change rotates the session secret (invalidating other sessions); mint a
     // fresh cookie so the operator who changed it stays logged in.
     const username = getSettings().auth?.username ?? '';
@@ -366,15 +639,27 @@ async function dispatchFileOp(
   res: ServerResponse,
   root: string,
   method: string,
+  ctx: { agentId?: string; target?: string } = {},
 ): Promise<boolean> {
   const url = new URL(req.url ?? '/', 'http://localhost');
   const op = url.searchParams.get('op') ?? '';
   const qpath = url.searchParams.get('path') ?? '';
+  const logFile = (action: string, detail: string, level?: 'info' | 'warn') =>
+    logEvent({
+      category: 'file',
+      action: `file.${action}`,
+      level,
+      message: `${action} ${detail}`,
+      actor: opActor(req),
+      agentId: ctx.agentId,
+      target: ctx.target ?? detail,
+    });
 
   if (method === 'GET') {
     if (op === 'list') return (sendJson(res, 200, listDir(root, qpath)), true);
     if (op === 'read') return (sendJson(res, 200, { content: readText(root, qpath) }), true);
     if (op === 'download') {
+      logFile('download', qpath);
       const { name, stream } = fileForDownload(root, qpath);
       res.writeHead(200, {
         'content-type': 'application/octet-stream',
@@ -385,6 +670,7 @@ async function dispatchFileOp(
       return true;
     }
     if (op === 'zip') {
+      logFile('zip', qpath || '(root)');
       const { name, stream } = zipDir(root, qpath);
       // Hold headers until the archive actually starts producing bytes: if 7z
       // fails to spawn or errors before any output, we can still return a 500
@@ -418,25 +704,30 @@ async function dispatchFileOp(
       }
       const name = url.searchParams.get('name') ?? 'upload';
       const saved = writeUpload(root, qpath, name, Buffer.concat(chunks));
+      logFile('upload', `${qpath ? qpath + '/' : ''}${saved} (${size} bytes)`);
       return (sendJson(res, 200, { ok: true, name: saved }), true);
     }
     const body = await readJson(req);
-    if (op === 'write')
-      return (
-        writeText(root, body.path ?? '', body.content ?? ''),
-        sendJson(res, 200, { ok: true }),
-        true
-      );
-    if (op === 'mkdir')
-      return (makeDir(root, body.path ?? ''), sendJson(res, 200, { ok: true }), true);
-    if (op === 'rename')
-      return (
-        moveFile(root, body.from ?? '', body.to ?? ''),
-        sendJson(res, 200, { ok: true }),
-        true
-      );
-    if (op === 'delete')
-      return (removeFile(root, body.path ?? ''), sendJson(res, 200, { ok: true }), true);
+    if (op === 'write') {
+      writeText(root, body.path ?? '', body.content ?? '');
+      logFile('write', body.path ?? '');
+      return (sendJson(res, 200, { ok: true }), true);
+    }
+    if (op === 'mkdir') {
+      makeDir(root, body.path ?? '');
+      logFile('mkdir', body.path ?? '');
+      return (sendJson(res, 200, { ok: true }), true);
+    }
+    if (op === 'rename') {
+      moveFile(root, body.from ?? '', body.to ?? '');
+      logFile('move', `${body.from ?? ''} → ${body.to ?? ''}`);
+      return (sendJson(res, 200, { ok: true }), true);
+    }
+    if (op === 'delete') {
+      removeFile(root, body.path ?? '');
+      logFile('delete', body.path ?? '', 'warn');
+      return (sendJson(res, 200, { ok: true }), true);
+    }
     return (sendJson(res, 400, { error: 'unknown op' }), true);
   }
   sendJson(res, 405, { error: 'method not allowed' });
@@ -453,7 +744,7 @@ async function handleAgentFiles(
   const id = AGENT_FILES_API.exec(url.pathname)?.[1];
   if (!id) return (sendJson(res, 404, { error: 'unknown endpoint' }), true);
   const root = manager.agentHome(id); // throws 404 if the agent disk is absent
-  return dispatchFileOp(req, res, root, method);
+  return dispatchFileOp(req, res, root, method, { agentId: id });
 }
 
 async function handleVolumeFiles(
@@ -466,7 +757,7 @@ async function handleVolumeFiles(
   const name = VOLUME_FILES_API.exec(url.pathname)?.[1];
   if (!name) return (sendJson(res, 404, { error: 'unknown endpoint' }), true);
   const root = manager.volumeHome(decodeURIComponent(name)); // 404 if unregistered
-  return dispatchFileOp(req, res, root, method);
+  return dispatchFileOp(req, res, root, method, { target: `volume:${decodeURIComponent(name)}` });
 }
 
 // /api/agents/:id/integrations[/:type[/(test|apply|disable)]]
@@ -487,10 +778,17 @@ async function handleIntegrations(
     if (method === 'GET') return (sendJson(res, 200, manager.listIntegrations(id)), true);
     if (method === 'POST') {
       const body = await readJson(req);
-      return (
-        sendJson(res, 201, manager.addIntegration(id, (body.type ?? 'discord') as IntegrationType)),
-        true
-      );
+      const t = (body.type ?? 'discord') as IntegrationType;
+      const added = manager.addIntegration(id, t);
+      logEvent({
+        category: 'integration',
+        action: 'integration.add',
+        message: `added ${t} integration to ${id}`,
+        actor: opActor(req),
+        agentId: id,
+        target: t,
+      });
+      return (sendJson(res, 201, added), true);
     }
   } else if (!op) {
     if (method === 'PATCH') {
@@ -499,20 +797,53 @@ async function handleIntegrations(
         credentials: body.credentials,
         rules: body.rules,
       });
+      logEvent({
+        category: 'integration',
+        action: 'integration.update',
+        message: `updated ${type} integration on ${id}`,
+        actor: opActor(req),
+        agentId: id,
+        target: type,
+        meta: {
+          changed: [body.credentials ? 'credentials' : null, body.rules ? 'rules' : null].filter(
+            Boolean,
+          ),
+        },
+      });
       return (sendJson(res, 200, patched), true);
     }
-    if (method === 'DELETE')
-      return (
-        await manager.removeIntegration(id, type as IntegrationType),
-        sendJson(res, 200, { ok: true }),
-        true
-      );
+    if (method === 'DELETE') {
+      await manager.removeIntegration(id, type as IntegrationType);
+      logEvent({
+        category: 'integration',
+        action: 'integration.remove',
+        level: 'warn',
+        message: `removed ${type} integration from ${id}`,
+        actor: opActor(req),
+        agentId: id,
+        target: type,
+      });
+      return (sendJson(res, 200, { ok: true }), true);
+    }
   } else if (method === 'POST') {
     const t = type as IntegrationType;
-    if (op === 'test') return (sendJson(res, 200, await manager.testIntegration(id, t)), true);
-    if (op === 'apply') return (sendJson(res, 200, await manager.applyIntegration(id, t)), true);
-    if (op === 'disable')
-      return (sendJson(res, 200, await manager.disableIntegration(id, t)), true);
+    if (op === 'test' || op === 'apply' || op === 'disable') {
+      const result =
+        op === 'test'
+          ? await manager.testIntegration(id, t)
+          : op === 'apply'
+            ? await manager.applyIntegration(id, t)
+            : await manager.disableIntegration(id, t);
+      logEvent({
+        category: 'integration',
+        action: `integration.${op}`,
+        message: `${op} ${t} integration on ${id}`,
+        actor: opActor(req),
+        agentId: id,
+        target: t,
+      });
+      return (sendJson(res, 200, result), true);
+    }
   }
   sendJson(res, 405, { error: 'method not allowed' });
   return true;
@@ -532,14 +863,21 @@ async function handleRoles(
     if (method === 'GET') return (sendJson(res, 200, listRoles()), true);
     if (method === 'POST') {
       const body = await readJson(req);
-      return (
-        sendJson(
-          res,
-          201,
-          createRole(body.name ?? '', body.description ?? '', Date.now(), body.permissions),
-        ),
-        true
+      const role = createRole(
+        body.name ?? '',
+        body.description ?? '',
+        Date.now(),
+        body.permissions,
       );
+      logEvent({
+        category: 'settings',
+        action: 'role.create',
+        message: `created role "${role.name}" (${role.id})`,
+        actor: opActor(req),
+        target: role.id,
+        meta: { permissions: role.permissions },
+      });
+      return (sendJson(res, 201, role), true);
     }
   } else if (method === 'PATCH') {
     const body = await readJson(req);
@@ -549,10 +887,25 @@ async function handleRoles(
       permissions: body.permissions,
     });
     await manager.refreshAgentsWithRole(id);
+    logEvent({
+      category: 'settings',
+      action: 'role.update',
+      message: `updated role "${role.name}" (${id})`,
+      actor: opActor(req),
+      target: id,
+    });
     return (sendJson(res, 200, role), true);
   } else if (method === 'DELETE') {
     deleteRole(id);
     await manager.refreshAgentsWithRole(id); // they no longer hold it → doc cleared
+    logEvent({
+      category: 'settings',
+      action: 'role.delete',
+      level: 'warn',
+      message: `deleted role ${id}`,
+      actor: opActor(req),
+      target: id,
+    });
     return (sendJson(res, 200, { ok: true }), true);
   }
   sendJson(res, 405, { error: 'method not allowed' });
@@ -580,19 +933,39 @@ async function handleGroups(
     if (method === 'GET') return (sendJson(res, 200, listGroups()), true);
     if (method === 'POST') {
       const body = await readJson(req);
-      return (
-        sendJson(res, 201, createGroup(body.name ?? '', body.description ?? '', Date.now())),
-        true
-      );
+      const group = createGroup(body.name ?? '', body.description ?? '', Date.now());
+      logEvent({
+        category: 'settings',
+        action: 'group.create',
+        message: `created group "${group.name}" (${group.id})`,
+        actor: opActor(req),
+        target: group.id,
+      });
+      return (sendJson(res, 201, group), true);
     }
   } else if (method === 'PATCH') {
     const body = await readJson(req);
-    return (
-      sendJson(res, 200, updateGroup(id, { name: body.name, description: body.description })),
-      true
-    );
+    const group = updateGroup(id, { name: body.name, description: body.description });
+    logEvent({
+      category: 'settings',
+      action: 'group.update',
+      message: `updated group "${group.name}" (${id})`,
+      actor: opActor(req),
+      target: id,
+    });
+    return (sendJson(res, 200, group), true);
   } else if (method === 'DELETE') {
-    return (deleteGroup(id), clearGroupMessages(id), sendJson(res, 200, { ok: true }), true);
+    deleteGroup(id);
+    clearGroupMessages(id);
+    logEvent({
+      category: 'settings',
+      action: 'group.delete',
+      level: 'warn',
+      message: `deleted group ${id}`,
+      actor: opActor(req),
+      target: id,
+    });
+    return (sendJson(res, 200, { ok: true }), true);
   }
   sendJson(res, 405, { error: 'method not allowed' });
   return true;
@@ -612,12 +985,30 @@ async function handleVolumes(
     if (method === 'GET') return (sendJson(res, 200, manager.listVolumes()), true);
     if (method === 'POST') {
       const body = await readJson(req);
-      return (sendJson(res, 201, await manager.createVolume(body.name, body.sizeMb)), true);
+      const vol = await manager.createVolume(body.name, body.sizeMb);
+      logEvent({
+        category: 'settings',
+        action: 'volume.create',
+        message: `created shared volume "${body.name}" (${body.sizeMb} MB)`,
+        actor: opActor(req),
+        target: body.name,
+      });
+      return (sendJson(res, 201, vol), true);
     }
     return (sendJson(res, 405, { error: 'method not allowed' }), true);
   }
-  if (method === 'DELETE')
-    return (await manager.deleteVolume(name), sendJson(res, 200, { ok: true }), true);
+  if (method === 'DELETE') {
+    await manager.deleteVolume(name);
+    logEvent({
+      category: 'settings',
+      action: 'volume.delete',
+      level: 'warn',
+      message: `deleted shared volume "${name}"`,
+      actor: opActor(req),
+      target: name,
+    });
+    return (sendJson(res, 200, { ok: true }), true);
+  }
   return (sendJson(res, 405, { error: 'method not allowed' }), true);
 }
 
@@ -639,9 +1030,9 @@ async function handleAgents(
       const created = await manager.create({
         hostname: body.hostname,
         username: body.username,
-        cpus: body.cpus,
-        memoryMb: body.memoryMb,
-        timezone: body.timezone,
+        cpus: body.cpus ?? undefined,
+        memoryMb: body.memoryMb ?? undefined,
+        timezone: body.timezone ?? undefined,
         provider: body.provider,
         model: body.model ?? undefined,
         roles: body.roles,
@@ -650,16 +1041,43 @@ async function handleAgents(
         avatarSeed: body.avatarSeed,
         volumes: body.volumes,
       });
+      logEvent({
+        category: 'agent',
+        action: 'agent.create',
+        message: `created agent ${created.id}${created.username && created.username !== created.id ? ` (${created.username})` : ''}`,
+        actor: opActor(req),
+        agentId: created.id,
+        meta: {
+          cpus: body.cpus,
+          memoryMb: body.memoryMb,
+          provider: body.provider,
+          model: body.model,
+        },
+      });
       return (sendJson(res, 201, created), true);
     }
   } else if (!action) {
     if (method === 'GET') return (sendJson(res, 200, await manager.getAgent(id)), true);
-    if (method === 'DELETE')
-      return (await manager.remove(id), sendJson(res, 200, { ok: true }), true);
+    if (method === 'DELETE') {
+      await manager.remove(id);
+      logEvent({
+        category: 'agent',
+        action: 'agent.remove',
+        level: 'warn',
+        message: `removed agent ${id} (container + persistent disk deleted)`,
+        actor: opActor(req),
+        agentId: id,
+      });
+      return (sendJson(res, 200, { ok: true }), true);
+    }
     if (method === 'PATCH') {
       const body = await readJson(req);
       const patch: {
         username?: string;
+        cpus?: number | null;
+        memoryMb?: number | null;
+        timezone?: string | null;
+        guidance?: string | null;
         autoCompactPct?: number | null;
         provider?: Provider;
         model?: string | null;
@@ -671,6 +1089,10 @@ async function handleAgents(
         volumes?: string[];
       } = {};
       if (body.username !== undefined) patch.username = body.username;
+      if (body.cpus !== undefined) patch.cpus = body.cpus;
+      if (body.memoryMb !== undefined) patch.memoryMb = body.memoryMb;
+      if (body.timezone !== undefined) patch.timezone = body.timezone;
+      if (body.guidance !== undefined) patch.guidance = body.guidance;
       if (body.autoCompactPct !== undefined) patch.autoCompactPct = body.autoCompactPct;
       if (body.provider !== undefined) patch.provider = body.provider;
       if (body.model !== undefined) patch.model = body.model;
@@ -680,17 +1102,45 @@ async function handleAgents(
       if (typeof body.desktop === 'boolean') patch.desktop = body.desktop;
       if (body.avatarSeed !== undefined) patch.avatarSeed = body.avatarSeed;
       if (Array.isArray(body.volumes)) patch.volumes = body.volumes;
-      return (sendJson(res, 200, await manager.patchAgent(id, patch)), true);
+      const updated = await manager.patchAgent(id, patch);
+      const fields = Object.keys(patch);
+      logEvent({
+        category: 'agent',
+        action: 'agent.patch',
+        message: `updated agent ${id} settings (${fields.join(', ') || 'no change'})`,
+        actor: opActor(req),
+        agentId: id,
+        meta: { fields }, // field NAMES only — never log guidance/token values
+      });
+      return (sendJson(res, 200, updated), true);
     }
   } else if (action === 'upgrade') {
     if (method === 'GET') return (sendJson(res, 200, await manager.upgradeInfo(id)), true);
-    if (method === 'POST') return (sendJson(res, 200, await manager.upgrade(id)), true);
+    if (method === 'POST') {
+      const info = await manager.upgrade(id);
+      logEvent({
+        category: 'agent',
+        action: 'agent.upgrade',
+        message: `upgraded agent ${id} (now v${info.installed}/${info.latest})`,
+        actor: opActor(req),
+        agentId: id,
+      });
+      return (sendJson(res, 200, info), true);
+    }
   } else if (action === 'paths') {
     if (method === 'GET') return (sendJson(res, 200, manager.listAgentPaths(id)), true);
   } else if (action === 'package') {
     if (method === 'POST') {
       const body = await readJson(req);
       const result = await manager.packageAgent(id, Array.isArray(body.paths) ? body.paths : []);
+      logEvent({
+        category: 'agent',
+        action: 'agent.package',
+        message: `packaged agent ${id} → ${result.file}`,
+        actor: opActor(req),
+        agentId: id,
+        target: result.file,
+      });
       return (sendJson(res, 200, result), true);
     }
   } else if (action === 'compact') {
@@ -699,12 +1149,37 @@ async function handleAgents(
       // landed less than 30s ago — the in-flight compaction is what the caller
       // wanted anyway, so the HTTP outcome is still {ok:true}).
       const fired = await manager.compactAgent(id);
+      logEvent({
+        category: 'agent',
+        action: 'agent.compact',
+        message: `ran /compact on ${id}${fired ? '' : ' (debounced)'}`,
+        actor: opActor(req),
+        agentId: id,
+        meta: { debounced: !fired },
+      });
       return (sendJson(res, 200, { ok: true, debounced: !fired }), true);
     }
   } else if (method === 'POST') {
-    if (action === 'recreate') return (sendJson(res, 200, await manager.recreate(id)), true);
+    if (action === 'recreate') {
+      const agent = await manager.recreate(id);
+      logEvent({
+        category: 'agent',
+        action: 'agent.recreate',
+        message: `recreated agent ${id} (fresh container, disk preserved)`,
+        actor: opActor(req),
+        agentId: id,
+      });
+      return (sendJson(res, 200, agent), true);
+    }
     if (action === 'start') await manager.start(id);
     else await manager.stop(id);
+    logEvent({
+      category: 'agent',
+      action: `agent.${action}`,
+      message: `${action === 'start' ? 'started' : 'stopped'} agent ${id}`,
+      actor: opActor(req),
+      agentId: id,
+    });
     return (sendJson(res, 200, { ok: true }), true);
   }
   sendJson(res, 405, { error: 'method not allowed' });
@@ -834,6 +1309,14 @@ async function handleSettings(
       return (sendJson(res, 400, { error: 'oauthToken (string) required' }), true);
     }
     const next = updateSettings({ oauthToken: body.oauthToken });
+    logEvent({
+      category: 'settings',
+      action: next.oauthToken ? 'settings.token.set' : 'settings.token.clear',
+      message: next.oauthToken
+        ? 'Claude OAuth token updated'
+        : 'Claude OAuth token cleared (falls back to env)',
+      actor: opActor(req),
+    });
     return (sendJson(res, 200, { hasToken: !!next.oauthToken }), true);
   }
   sendJson(res, 405, { error: 'method not allowed' });
@@ -875,6 +1358,13 @@ async function handleProviders(
     // Push the new (or removed) key onto every opencodeGo-provider agent's disk
     // so running agents pick it up on the next claude (re)spawn — no recreate.
     manager.writeOpencodeGoKeyAll();
+    logEvent({
+      category: 'settings',
+      action: 'settings.provider.set',
+      message: `OpenCode Go key ${next.opencodeGo ? 'updated' : 'cleared'}`,
+      actor: opActor(req),
+      target: 'opencodeGo',
+    });
     return (sendJson(res, 200, { ok: true }), true);
   }
   sendJson(res, 405, { error: 'method not allowed' });
@@ -935,10 +1425,31 @@ async function handleImageBuild(
     'access-control-allow-origin': config.corsOrigin,
     'x-content-type-options': 'nosniff',
   });
+  logEvent({
+    category: 'settings',
+    action: 'image.build',
+    message: `agent image build started (${config.agentImage})`,
+    actor: { kind: 'operator' },
+  });
   try {
     await manager.buildAgentImageStreaming((line) => res.write(line));
+    logEvent({
+      category: 'settings',
+      action: 'image.build',
+      message: `agent image build complete (${config.agentImage})`,
+      actor: { kind: 'operator' },
+      ok: true,
+    });
     res.end('\n✓ build complete\n');
   } catch (err) {
+    logEvent({
+      category: 'settings',
+      action: 'image.build',
+      level: 'error',
+      message: `agent image build failed: ${err instanceof Error ? err.message : String(err)}`,
+      actor: { kind: 'operator' },
+      ok: false,
+    });
     res.end(`\n✗ build failed: ${err instanceof Error ? err.message : String(err)}\n`);
   }
   return true;
@@ -961,9 +1472,10 @@ async function readJson(
   username?: string;
   oauthToken?: string;
   paths?: string[];
-  cpus?: number;
-  memoryMb?: number;
-  timezone?: string;
+  cpus?: number | null;
+  memoryMb?: number | null;
+  guidance?: string | null;
+  timezone?: string | null;
   autoCompactPct?: number | null;
   provider?: Provider;
   opencodeGo?: { apiKey?: string };
