@@ -30,61 +30,63 @@ from the web UI. No per-agent ports, no manual container wrangling.
   ideal for a server; macOS (Docker Desktop) works too.
 - **~20 GB free disk** — each agent runs a full Ubuntu GNOME desktop image.
 - A **Claude subscription** — you'll generate a Claude Code login token
-  (`claude setup-token`) in step 4.
+  (`claude setup-token`) during first run.
 - Standard (non-rootless) Docker that allows privileged containers. The dashboard
   needs the Docker socket. **Run this only on a host you trust** — see
   [Security](#security).
 
-### 1. Get the code
+### Install (one line)
+
+On any host with Docker + Docker Compose v2:
 
 ```bash
-git clone https://github.com/AlexZihaoXu/agent-swarm.git
-cd agent-swarm
+curl -fsSL https://raw.githubusercontent.com/AlexZihaoXu/agent-swarm/main/scripts/install.sh | bash
 ```
 
-### 2. Create the shared network (once)
+This clones the repo (into `./agent-swarm`), writes a `.env`, creates the shared
+`swarm-net` network, and brings the control plane up with `docker compose up
+--build -d` on port **8080**. It's **idempotent** — re-run it any time to update
+an existing install. On Linux it auto-detects and enables Sysbox
+(`AGENT_RUNTIME=sysbox-runc`, for unprivileged agents) and a GPU (`AGENT_GPU=1`).
+
+Prefer to read it before running (recommended for any `curl | bash`)?
 
 ```bash
-docker network create swarm-net
+curl -fsSLO https://raw.githubusercontent.com/AlexZihaoXu/agent-swarm/main/scripts/install.sh
+less install.sh && bash install.sh
 ```
 
-### 3. Start the dashboard
+<details>
+<summary>Or install by hand — exactly what the script automates</summary>
 
 ```bash
-docker compose up --build -d
+git clone https://github.com/AlexZihaoXu/agent-swarm.git && cd agent-swarm
+cp .env.example .env                 # optional: set CLAUDE_CODE_OAUTH_TOKEN, AGENT_RUNTIME=sysbox-runc, …
+docker network create swarm-net      # shared, external network (create once)
+docker compose up --build -d         # control plane → http://localhost:8080
 ```
 
-The control plane (gateway + UI) comes up as a single container on port **8080**.
-Open **`http://<your-server>:8080`**.
+</details>
 
-### 4. Create your login
+Open **`http://<your-server>:8080`** once it's up.
 
-On first open the dashboard prompts you to **create an operator login** — a
-username and password, Portainer-style. It's stored as a salted scrypt hash,
-never plaintext. After that, the dashboard, API, and every agent
-terminal/desktop require sign-in. Change the password or sign out from
-**Settings**.
+### First run
 
-### 5. Add your Claude token
-
-Generate a token on any machine that has [Claude Code](https://claude.com/claude-code):
-
-```bash
-claude setup-token        # prints an sk-ant-oat… token
-```
-
-Open **Settings** → paste the token → **Save**. (Or set `CLAUDE_CODE_OAUTH_TOKEN`
-in a `.env` file before step 3 — see [`.env.example`](.env.example).)
-
-### 6. Build the agent image + create your first agent
-
-In the dashboard:
-
-1. Click **Build image** on the "Agent image not built" banner — this builds the
-   agent runtime once (a few minutes; it's a full desktop image).
-2. Click **New agent**, give it a name, and **Create**.
-3. Watch it live — an **xterm.js terminal** (the `claude` session) and a **noVNC
-   desktop** (its GUI), both embedded in the dashboard.
+1. **Create your operator login** — on first open the dashboard prompts for a
+   username + password, Portainer-style. Stored as a salted scrypt hash, never
+   plaintext. After that the dashboard, API, and every agent terminal/desktop
+   require sign-in. Change it or sign out from **Settings**.
+2. **Add your Claude token** — generate one on any machine with
+   [Claude Code](https://claude.com/claude-code):
+   ```bash
+   claude setup-token        # prints an sk-ant-oat… token
+   ```
+   **Settings** → paste → **Save**. (Or set `CLAUDE_CODE_OAUTH_TOKEN` in `.env`
+   before installing — see [`.env.example`](.env.example).)
+3. **Build the agent image + create an agent** — click **Build image** on the
+   "Agent image not built" banner (a few minutes; it's a full desktop image),
+   then **New agent** → name → **Create**. Watch it live: an **xterm.js terminal**
+   (the `claude` session) and a **noVNC desktop**, both embedded in the dashboard.
 
 That's it. Agents persist on disk and the stack restarts with the host
 (`restart: unless-stopped`).
@@ -106,9 +108,24 @@ docker compose down --remove-orphans  # also tear down spawned agents
   `docker compose down` leaves them running — use the dashboard's **Remove** or
   `--remove-orphans`.
 
+### Uninstall
+
+From the install directory (`./agent-swarm`):
+
+```bash
+./scripts/uninstall.sh           # remove the stack + agents + network + images; KEEPS agent data
+./scripts/uninstall.sh --purge   # ALSO delete all agent disks (./.swarm_data) + control-plane state
+```
+
+Default keeps your agent disks and settings, so re-running the installer brings
+everything back. `--purge` is **irreversible**. Add `--yes` to skip the prompt.
+The script also works standalone (it falls back to Docker label/name filters), so
+`curl -fsSL …/scripts/uninstall.sh | bash` removes the stack from any host with
+the daemon — though `--purge` of `./.swarm_data` only runs from the clone.
+
 ### Remote access
 
-`:8080` is gated by the operator login (set in step 4), but it serves plain HTTP
+`:8080` is gated by the operator login (set on first run), but it serves plain HTTP
 with no TLS. For a remote mini-server, reach it over your LAN, an **SSH tunnel**
 (`ssh -L 8080:localhost:8080 user@server`), or a VPN (e.g. Tailscale); if you do
 expose it, put it behind a reverse proxy that adds **HTTPS** so the password and
@@ -231,6 +248,7 @@ agent-swarm/
 │           ├── public/index.html      # xterm.js multi-terminal UI
 │           └── package.json
 │
+├── scripts/                 # one-line install.sh + uninstall.sh (Docker Compose stack)
 ├── Dockerfile                # combined image: gateway + Next.js UI in one container
 ├── start.mjs                 # supervisor: runs Next (:3000) + gateway (:8080) together
 ├── compose.yml               # the dashboard stack (one service) on swarm-net
@@ -404,6 +422,10 @@ Agents publish **no host ports**.
 docker network create swarm-net 2>/dev/null || true   # shared, external network
 docker compose up --build -d        # the dashboard container → http://localhost:8080
 ```
+
+`scripts/install.sh` automates exactly this (plus `.env` setup + sysbox/GPU
+detection), and `scripts/uninstall.sh` reverses it — see
+[Install](#install-one-line) / [Uninstall](#uninstall).
 
 Then add your Claude token (dashboard **Settings**, or `CLAUDE_CODE_OAUTH_TOKEN`
 in `.env`) and click **Build image** in the UI to build the agent runtime. See
