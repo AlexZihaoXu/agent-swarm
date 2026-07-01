@@ -13,6 +13,9 @@
   "dependencies": {
     "@heroui/react": "^3.0.0",
     "@heroui/styles": "^3.0.0",
+    "@milkdown/crepe": "^7.21.2",
+    "@uiw/codemirror-extensions-langs": "^4.23.0",
+    "@uiw/react-codemirror": "^4.23.0",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-webgl": "^0.18.0",
     "@xterm/xterm": "^5.5.0",

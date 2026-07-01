@@ -381,7 +381,7 @@ export function FileExplorer({
     <Modal>
       <Modal.Backdrop isOpen={isOpen} onOpenChange={(o) => !o && onOpenChange(false)}>
         <Modal.Container placement="center">
-          <Modal.Dialog className="flex h-[80vh] max-h-[88vh] flex-col sm:max-w-[760px]">
+          <Modal.Dialog className="flex h-[88dvh] max-h-[88dvh] w-[min(1080px,94vw)] max-w-none flex-col sm:max-w-none">
             <Modal.CloseTrigger />
             <Modal.Header>
               <Modal.Heading>Files — {title}</Modal.Heading>

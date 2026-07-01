@@ -16,7 +16,8 @@ import {
   toast,
 } from '@heroui/react';
 import { useEffect, useState } from 'react';
-import { LuCircleHelp, LuDices, LuDownload, LuShuffle } from 'react-icons/lu';
+import { LuCircleHelp, LuDices, LuDownload, LuMaximize2, LuShuffle } from 'react-icons/lu';
+import { LargeEditorModal } from './LargeEditorModal';
 import { Identicon, downloadIdenticon, randomSeed } from '@/lib/identicon';
 import {
   getAgent,
@@ -113,6 +114,7 @@ export function AgentSettingsModal({
   const [agent, setAgent] = useState<Agent | null>(null);
   const [name, setName] = useState('');
   const [guidance, setGuidance] = useState(''); // this agent's own ~/.claude/CLAUDE.md
+  const [guidanceBig, setGuidanceBig] = useState(false);
   const [cpus, setCpus] = useState(0); // 0 = unlimited
   const [memGb, setMemGb] = useState(0); // 0 = unlimited
   const [maxCpus, setMaxCpus] = useState(8);
@@ -492,8 +494,23 @@ export function AgentSettingsModal({
                       </div>
 
                       <div className="space-y-2">
-                        <TextField value={guidance} onChange={setGuidance}>
-                          <Label className="text-sm">Guidance (CLAUDE.md)</Label>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-medium">Guidance (CLAUDE.md)</span>
+                          <Button
+                            size="sm"
+                            variant="tertiary"
+                            className="gap-1.5"
+                            onPress={() => setGuidanceBig(true)}
+                          >
+                            <LuMaximize2 className="size-3.5" />
+                            Expand
+                          </Button>
+                        </div>
+                        <TextField
+                          value={guidance}
+                          onChange={setGuidance}
+                          aria-label="Guidance (CLAUDE.md)"
+                        >
                           <TextArea
                             rows={5}
                             className="resize-y font-mono text-xs leading-relaxed"
@@ -502,6 +519,15 @@ export function AgentSettingsModal({
                             }
                           />
                         </TextField>
+                        <LargeEditorModal
+                          isOpen={guidanceBig}
+                          onOpenChange={setGuidanceBig}
+                          title="Guidance (CLAUDE.md)"
+                          value={guidance}
+                          markdown
+                          filename="CLAUDE.md"
+                          onSave={setGuidance}
+                        />
                         <p className="text-muted text-xs">
                           Written to this agent&apos;s own <code>~/.claude/CLAUDE.md</code> — its
                           user-level memory, separate from every other agent. Read by{' '}
