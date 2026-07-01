@@ -230,7 +230,9 @@
   --crepe-color-on-secondary: var(--surface-secondary-foreground);
   --crepe-color-hover: var(--surface-secondary);
   --crepe-color-selected: color-mix(in oklab, var(--accent) 22%, transparent);
-  --crepe-color-inline-code: var(--surface-secondary);
+  /* inline `code` text — a vibrant red (Crepe's own themes do the same) on a
+     subtle grey pill (a lighter red in dark mode, see below). */
+  --crepe-color-inline-code: oklch(52% 0.2 25);
   --crepe-color-inline-area: var(--surface-secondary);
   --crepe-color-error: var(--danger);
   --crepe-color-inverse: var(--foreground);
@@ -239,6 +241,11 @@
   background: transparent;
   color: var(--foreground);
   min-height: 100%;
+}
+/* Lighter red for inline code in dark mode (the light-mode red is too dark on
+   the dark pill). */
+.dark .milkdown-host .milkdown {
+  --crepe-color-inline-code: oklch(80% 0.12 25);
 }
 /* Crepe's default content padding (60px 120px) is far too roomy in the modal —
    more than halve it. */
