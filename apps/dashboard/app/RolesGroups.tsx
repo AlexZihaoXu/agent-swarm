@@ -15,8 +15,9 @@ import {
 } from '@heroui/react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useCallback, useEffect, useState } from 'react';
-import { LuPencil, LuPlus, LuTrash2, LuX } from 'react-icons/lu';
+import { LuMaximize2, LuPencil, LuPlus, LuTrash2, LuX } from 'react-icons/lu';
 import type { Capability, CapabilityInfo, Role } from '@/lib/gateway';
+import { LargeEditorModal } from './LargeEditorModal';
 
 /**
  * CRUD card for a global registry (roles or groups) — list with inline edit +
@@ -51,6 +52,7 @@ export function RegistryCard({
   const [editing, setEditing] = useState<string | null>(null); // id, or '' = new
   const [name, setName] = useState('');
   const [desc, setDesc] = useState('');
+  const [descBig, setDescBig] = useState(false);
   const [perms, setPerms] = useState<Capability[]>([]);
   const [busy, setBusy] = useState(false);
 
@@ -162,10 +164,30 @@ export function RegistryCard({
               <Label className="text-xs">Name</Label>
               <Input placeholder={`${noun} name`} autoFocus />
             </TextField>
-            <TextField value={desc} onChange={setDesc}>
-              <Label className="text-xs">Description</Label>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium">Description</span>
+              <Button
+                size="sm"
+                variant="tertiary"
+                className="h-6 gap-1 px-2 text-xs"
+                onPress={() => setDescBig(true)}
+              >
+                <LuMaximize2 className="size-3" />
+                Expand
+              </Button>
+            </div>
+            <TextField value={desc} onChange={setDesc} aria-label="Description">
               <TextArea rows={3} placeholder={`What this ${noun} is for…`} />
             </TextField>
+            <LargeEditorModal
+              isOpen={descBig}
+              onOpenChange={setDescBig}
+              title={`${noun.charAt(0).toUpperCase() + noun.slice(1)} description`}
+              value={desc}
+              markdown
+              filename="description.md"
+              onSave={setDesc}
+            />
             {capabilities && capabilities.length > 0 && (
               <CheckboxGroup
                 className="gap-2"
