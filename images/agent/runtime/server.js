@@ -1009,21 +1009,32 @@ function readTasks() {
   return tasks;
 }
 
+// Update Claude Code to the latest release right before launching the session,
+// so the agent always runs the newest version (the autoupdater is disabled in
+// the unit). Best-effort: `;` (not `&&`) means an offline/failed update still
+// falls through to the baked-in version. `sudo` because the global npm prefix
+// is root-owned; this runs synchronously in the claude pty BEFORE claude, and
+// only delays that session (the rest of the supervisor is already up).
+const CLAUDE_UPDATE_CMD =
+  'echo "Updating Claude Code…"; sudo /usr/bin/npm install -g @anthropic-ai/claude-code@latest --no-audit --no-fund 2>&1 | tail -n 1';
+
 // Resume across container restarts. The agent's home is a persistent disk, so
 // Claude's transcripts survive a restart. If one exists for the working dir,
 // continue the most recent conversation (with a fresh session as fallback if
 // the resume fails); on first boot there's nothing to continue, so start clean
 // (`--continue` errors with no prior conversation). An explicit FIRST_CMD wins.
 function claudeBootCommand() {
-  if (process.env.FIRST_CMD) return FIRST_CMD;
-  try {
-    const projDir = path.join(CLAUDE_DIR, 'projects', HOME.replace(/[^a-zA-Z0-9]/g, '-'));
-    if (fs.readdirSync(projDir).some((f) => f.endsWith('.jsonl')))
-      return `claude --continue --dangerously-skip-permissions || ${FIRST_CMD}`;
-  } catch {
-    /* no prior transcripts — start fresh */
+  let launch = FIRST_CMD;
+  if (!process.env.FIRST_CMD) {
+    try {
+      const projDir = path.join(CLAUDE_DIR, 'projects', HOME.replace(/[^a-zA-Z0-9]/g, '-'));
+      if (fs.readdirSync(projDir).some((f) => f.endsWith('.jsonl')))
+        launch = `claude --continue --dangerously-skip-permissions || ${FIRST_CMD}`;
+    } catch {
+      /* no prior transcripts — start fresh */
+    }
   }
-  return FIRST_CMD;
+  return `${CLAUDE_UPDATE_CMD}; ${launch}`;
 }
 
 function spawnPty(command) {
