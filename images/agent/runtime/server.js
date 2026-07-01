@@ -1016,7 +1016,7 @@ function readTasks() {
 // is root-owned; this runs synchronously in the claude pty BEFORE claude, and
 // only delays that session (the rest of the supervisor is already up).
 const CLAUDE_UPDATE_CMD =
-  'echo "Updating Claude Code…"; sudo /usr/bin/npm install -g @anthropic-ai/claude-code@latest --no-audit --no-fund 2>&1 | tail -n 1';
+  'echo "Updating Claude Code..."; sudo /usr/bin/npm install -g @anthropic-ai/claude-code@latest --no-audit --no-fund 2>&1 | tail -n 1';
 
 // Resume across container restarts. The agent's home is a persistent disk, so
 // Claude's transcripts survive a restart. If one exists for the working dir,

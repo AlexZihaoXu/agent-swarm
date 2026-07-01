@@ -309,9 +309,12 @@ RUN mkdir -p /home/agent/.local/share/keyrings \
 # seed created above; placed here so the node-pty build layer stays cached.
 # (claude-config.json also registers the computer-use + discord MCP servers.)
 COPY --chown=agent:agent claude-config.json /home/agent/.claude.json
-# Project guide the agent reads at session start: routing prefixes (how Discord
-# messages arrive) + how to reply via the discord MCP tools.
-COPY --chown=agent:agent agent-claude.md /home/agent/CLAUDE.md
+# /home/agent/CLAUDE.md is the agent's OWN persistent notes file (project memory,
+# survives restarts). The system guide (agent-claude.md) is written by the gateway
+# into ~/.claude/CLAUDE.md on every boot instead — see writeAgentGuidance. agent-
+# claude.md stays in the build context so the gateway (which bundles it as
+# /app/agent-context) can read + provision it.
+COPY --chown=agent:agent agent-home-claude.md /home/agent/CLAUDE.md
 
 # statusLine command: capture Claude's status payload (model, cost, lines) to a
 # file the dashboard reads, and print a concise in-TUI line. ~/.claude must be
