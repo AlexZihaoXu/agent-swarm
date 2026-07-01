@@ -221,7 +221,10 @@
   --crepe-color-surface-low: var(--surface-tertiary);
   --crepe-color-on-surface: var(--foreground);
   --crepe-color-on-surface-variant: var(--muted);
-  --crepe-color-outline: var(--separator);
+  /* Crepe reuses --outline as the muted icon/text color (toolbar, tooltips,
+     block handles, list/table controls), not just borders — so it needs real
+     contrast, not a faint separator tone that vanishes in dark mode. */
+  --crepe-color-outline: var(--muted);
   --crepe-color-primary: var(--accent);
   --crepe-color-secondary: var(--surface-secondary);
   --crepe-color-on-secondary: var(--surface-secondary-foreground);
@@ -236,6 +239,11 @@
   background: transparent;
   color: var(--foreground);
   min-height: 100%;
+}
+/* Crepe's default content padding (60px 120px) is far too roomy in the modal —
+   more than halve it. */
+.milkdown-host .milkdown .ProseMirror {
+  padding: 1.5rem 2.5rem;
 }
 /* CodeMirror inherits the modal surface (its theme still drives syntax colors). */
 .cm-large-editor .cm-editor,
