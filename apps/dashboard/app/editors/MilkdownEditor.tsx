@@ -2,7 +2,10 @@
 
 import { Crepe } from '@milkdown/crepe';
 import '@milkdown/crepe/theme/common/style.css';
-import '@milkdown/crepe/theme/frame-dark.css';
+// Base frame structure only — the colors are remapped onto the dashboard theme
+// tokens in globals.css (.milkdown-host .milkdown) so it matches the modal and
+// flips with light/dark.
+import '@milkdown/crepe/theme/frame.css';
 import { useEffect, useRef, type MutableRefObject } from 'react';
 
 export interface MilkdownApi {
