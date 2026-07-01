@@ -209,3 +209,39 @@
   background: #16130e !important;
   color: #e6e1d6 !important;
 }
+
+/* ── Large editor (Milkdown + CodeMirror) ────────────────────────────────────
+ * The bundled editors ship their own (dark) themes; remap them onto the
+ * dashboard tokens so they blend into the modal surface and flip with the
+ * light/dark theme instead of sitting as a dark box on a light modal. */
+.milkdown-host .milkdown {
+  --crepe-color-background: var(--overlay);
+  --crepe-color-on-background: var(--foreground);
+  --crepe-color-surface: var(--surface-secondary);
+  --crepe-color-surface-low: var(--surface-tertiary);
+  --crepe-color-on-surface: var(--foreground);
+  --crepe-color-on-surface-variant: var(--muted);
+  --crepe-color-outline: var(--separator);
+  --crepe-color-primary: var(--accent);
+  --crepe-color-secondary: var(--surface-secondary);
+  --crepe-color-on-secondary: var(--surface-secondary-foreground);
+  --crepe-color-hover: var(--surface-secondary);
+  --crepe-color-selected: color-mix(in oklab, var(--accent) 22%, transparent);
+  --crepe-color-inline-code: var(--surface-secondary);
+  --crepe-color-inline-area: var(--surface-secondary);
+  --crepe-color-error: var(--danger);
+  --crepe-color-inverse: var(--foreground);
+  --crepe-color-on-inverse: var(--overlay);
+  /* the editing surface itself inherits the modal background exactly */
+  background: transparent;
+  color: var(--foreground);
+  min-height: 100%;
+}
+/* CodeMirror inherits the modal surface (its theme still drives syntax colors). */
+.cm-large-editor .cm-editor,
+.cm-large-editor .cm-editor .cm-gutters {
+  background-color: transparent !important;
+}
+.cm-large-editor .cm-editor .cm-gutters {
+  border-right: 1px solid var(--separator);
+}

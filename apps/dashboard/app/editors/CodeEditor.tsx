@@ -2,6 +2,7 @@
 
 import CodeMirror, { EditorView } from '@uiw/react-codemirror';
 import { loadLanguage, type LanguageName } from '@uiw/codemirror-extensions-langs';
+import { useTheme } from 'next-themes';
 
 /** File extension → CodeMirror language (only names known to exist in the langs
  *  bundle; .js/.ts map to the jsx/tsx supersets). Unknown → plain text. */
@@ -56,17 +57,22 @@ export default function CodeEditor({
   onChange: (value: string) => void;
   filename?: string;
 }) {
+  const { resolvedTheme } = useTheme();
   const lang = languageExtension(filename);
   const extensions = [EditorView.lineWrapping, ...(lang ? [lang] : [])];
+  // Follow the dashboard's light/dark theme (syntax colors); globals.css makes
+  // the editor background inherit the modal surface via the wrapper class.
   return (
-    <CodeMirror
-      value={value}
-      onChange={onChange}
-      extensions={extensions}
-      theme="dark"
-      height="100%"
-      style={{ height: '100%', fontSize: 13 }}
-      basicSetup={{ lineNumbers: true, highlightActiveLine: true, foldGutter: true }}
-    />
+    <div className="cm-large-editor h-full">
+      <CodeMirror
+        value={value}
+        onChange={onChange}
+        extensions={extensions}
+        theme={resolvedTheme === 'dark' ? 'dark' : 'light'}
+        height="100%"
+        style={{ height: '100%', fontSize: 13 }}
+        basicSetup={{ lineNumbers: true, highlightActiveLine: true, foldGutter: true }}
+      />
+    </div>
   );
 }
