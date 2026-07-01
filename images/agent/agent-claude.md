@@ -58,6 +58,13 @@ the `desktop` MCP tools (mouse, keyboard, screenshots), plus a browser, VS Code,
 shell. Your home is `/home/agent` and **persists across restarts**; the rest of the container is
 ephemeral, so keep anything you want to survive under your home (and tidy — see Disk below).
 
+**Two files under your home are managed for you and rewritten on every restart**, so don't edit
+them to save anything: this guide, at `~/.claude/CLAUDE.md`, and your role doc, at
+`~/.swarm/roles.md` — both are regenerated from scratch each boot. Your **own** persistent notes
+belong in **`~/CLAUDE.md`** (`/home/agent/CLAUDE.md`), which survives restarts and Claude loads
+each session. For standing instructions you want the operator to see and that also survive restarts,
+use **`swarm_append_guidance`** (stored server-side and re-applied to `~/.claude/CLAUDE.md` every boot).
+
 You are one of possibly several agents in a **swarm**. A central **gateway** (the operator's
 dashboard) created you, can start/stop you, injects messages into this terminal, and lets the operator
 watch your terminal + desktop. You reach other agents with the `swarm` tools, may belong to **groups**,
@@ -208,6 +215,10 @@ if you have a raw channel ID instead.
   the human operator on the dashboard) receives it; you don't get a copy. Messages arrive tagged
   `[group://<name>]`.
 - `swarm_whoami()` — your own id + name in the swarm.
+- `swarm_append_guidance(text)` — append a note to your OWN standing guidance. It's stored
+  server-side and re-applied to `~/.claude/CLAUDE.md` on every restart, so use it to remember an
+  operator instruction or a lesson so it survives restarts (one append is capped at 4000 chars). It
+  takes effect on your next (re)start.
 - `swarm_manage_agent(to, action)` — start/stop another agent (never remove). **Only** if a role
   grants you the "manage agents" permission, and only for agents **in your group**, else refused (403).
 - `swarm_view_agent(to)` — capture another agent's live screen to an image in your `~/.swarm/views/`
@@ -223,7 +234,11 @@ if you have a raw channel ID instead.
 You can only message / share files with agents in **the same group** as you (`swarm_list_agents`
 already shows only those). If a send is refused for that reason, you don't share a group with them.
 Your `~/.swarm/roles.md` lists any special permissions your role(s) grant — check it before relying
-on `swarm_manage_agent` / `swarm_view_agent` / `swarm_compact_agent` / `swarm_agent_stats`.
+on `swarm_manage_agent` / `swarm_view_agent` / `swarm_compact_agent` / `swarm_agent_stats`. A few
+**self**-management tools are role-gated the same way and only appear once granted (in
+`~/.swarm/roles.md`): `swarm_restart_self` (restart your own container to apply changes),
+`swarm_toggle_desktop` (start/stop your GNOME desktop to save memory), and `swarm_dashboard_usage`
+(read the swarm's 5h/7d rate-limit + token/cost windows).
 
 **Received files are shared drops.** Files that arrive in `~/.swarm/shared-inbox/` (from peers) or
 `~/.swarm/discord-inbox/` (from Discord) may be auto-cleared to reclaim disk. If you want to keep or
