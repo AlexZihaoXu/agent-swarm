@@ -210,8 +210,12 @@ export function CreateAgentModal({
         New agent
       </Button>
       <Modal.Backdrop isOpen={open} onOpenChange={setOpen}>
-        <Modal.Container placement="center">
-          <Modal.Dialog className="sm:max-w-[440px]">
+        <Modal.Container placement="center" scroll="inside">
+          {/* Cap the height at 85dvh so a tall (advanced-settings-expanded) form
+              scrolls INSIDE the body — header + footer (Create/Cancel) stay
+              pinned — instead of pushing the footer off-screen. Wider so the
+              two sliders can sit side-by-side and trim the height. */}
+          <Modal.Dialog className="max-h-[85dvh] sm:max-w-[520px]">
             <Modal.CloseTrigger />
             <Modal.Header>
               <Modal.Heading>New agent</Modal.Heading>
@@ -346,22 +350,24 @@ export function CreateAgentModal({
 
                 {advanced && (
                   <div className="flex flex-col gap-5">
-                    <LimitSlider
-                      label="CPUs"
-                      value={cpus}
-                      onChange={setCpus}
-                      max={maxCpus}
-                      step={1}
-                      unit="cores"
-                    />
-                    <LimitSlider
-                      label="Max memory"
-                      value={memGb}
-                      onChange={setMemGb}
-                      max={maxMemGb}
-                      step={0.25}
-                      unit="GB"
-                    />
+                    <div className="grid grid-cols-1 gap-x-4 gap-y-5 sm:grid-cols-2">
+                      <LimitSlider
+                        label="CPUs"
+                        value={cpus}
+                        onChange={setCpus}
+                        max={maxCpus}
+                        step={1}
+                        unit="cores"
+                      />
+                      <LimitSlider
+                        label="Max memory"
+                        value={memGb}
+                        onChange={setMemGb}
+                        max={maxMemGb}
+                        step={0.25}
+                        unit="GB"
+                      />
+                    </div>
                     <TextField name="timezone" value={timezone} onChange={setTimezone}>
                       <Label>Timezone</Label>
                       <Input placeholder="e.g. America/Toronto" />

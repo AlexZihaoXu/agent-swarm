@@ -188,8 +188,10 @@ COPY novnc-index.html /usr/share/novnc/index.html
 # websockify (noVNC web) on 6080 -> VNC 5901, managed by systemd.
 COPY novnc.service /etc/systemd/system/novnc.service
 
-# Boot-time updater that keeps Claude Code current on each container launch.
-COPY claude-code-update.service /etc/systemd/system/claude-code-update.service
+# (Claude Code is kept current by the agent-runtime: it runs `npm i -g
+# @anthropic-ai/claude-code@latest` synchronously right before launching the
+# claude session — see claudeBootCommand in runtime/server.js. No separate
+# boot service, which used to race the session and could update too late.)
 
 # Apply the agent's timezone (from the TZ env the gateway sets) before the
 # desktop session comes up, so the GNOME clock and CLI tools agree.
@@ -338,7 +340,6 @@ RUN install -d /etc/systemd/system/tigervncserver@:1.service.d \
 RUN systemctl set-default multi-user.target \
     && systemctl enable tigervncserver@:1.service \
     && systemctl enable novnc.service \
-    && systemctl enable claude-code-update.service \
     && systemctl enable agent-timezone.service \
     && systemctl enable agent-gpu.service \
     && systemctl enable agent-terminals.service \
