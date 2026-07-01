@@ -7,7 +7,7 @@ import { useSelectedLayoutSegment } from 'next/navigation';
 import { use, useState, type ComponentProps, type ReactNode } from 'react';
 import { LuChevronLeft, LuFolderOpen, LuMonitor, LuSettings, LuTerminal } from 'react-icons/lu';
 import { AgentSettingsModal } from '@/app/AgentSettingsModal';
-import { AgentStatsBar } from '@/app/AgentStats';
+import { AgentStatsBar, AgentStatsProvider } from '@/app/AgentStats';
 import { FileExplorer } from '@/app/FileExplorer';
 import { agentFilesBase } from '@/lib/gateway';
 import { ChatWidget } from './ChatWidget';
@@ -44,76 +44,78 @@ export default function AgentLayout({
       animate={{ opacity: 1 }}
       transition={{ duration: 0.18, ease: 'easeOut' }}
     >
-      <DesktopLockProvider>
-        <header className="border-separator flex flex-wrap items-center gap-x-3 gap-y-2 border-b py-2 pr-4 pl-4">
-          <Link
-            href="/"
-            className={`${buttonVariants({ variant: 'tertiary', size: 'sm' })} gap-1.5`}
-          >
-            <LuChevronLeft className="size-4" />
-            Dashboard
-          </Link>
-          <span className="hidden text-sm font-semibold sm:inline">{id}</span>
-          <Tabs selectedKey={segment} className="ml-2">
-            <Tabs.ListContainer>
-              <Tabs.List aria-label="Agent views">
-                <Tabs.Tab id="desktop" href={`/agents/${id}/desktop`} render={asLink}>
-                  <span className="flex items-center gap-1.5">
-                    <LuMonitor className="size-4" />
-                    Desktop
-                  </span>
-                  <Tabs.Indicator />
-                </Tabs.Tab>
-                <Tabs.Tab id="terminal" href={`/agents/${id}/terminal`} render={asLink}>
-                  <span className="flex items-center gap-1.5">
-                    <LuTerminal className="size-4" />
-                    Terminal
-                  </span>
-                  <Tabs.Indicator />
-                </Tabs.Tab>
-              </Tabs.List>
-            </Tabs.ListContainer>
-          </Tabs>
-          <Button
-            size="sm"
-            variant="tertiary"
-            className="gap-1.5"
-            aria-label="Files"
-            onPress={() => setFilesOpen(true)}
-          >
-            <LuFolderOpen className="size-4" />
-            <span className="hidden sm:inline">Files</span>
-          </Button>
-          <Button
-            size="sm"
-            variant="tertiary"
-            aria-label="Agent settings"
-            onPress={() => setSettingsOpen(true)}
-          >
-            <LuSettings className="size-4" />
-          </Button>
-          <div className="ml-auto hidden min-w-0 md:flex">
-            <AgentStatsBar agentId={id} />
-          </div>
-          {segment === 'desktop' && (
-            <div className="ml-auto md:ml-0">
-              <DesktopLockButton />
+      <AgentStatsProvider agentId={id}>
+        <DesktopLockProvider>
+          <header className="border-separator flex flex-wrap items-center gap-x-3 gap-y-2 border-b py-2 pr-4 pl-4">
+            <Link
+              href="/"
+              className={`${buttonVariants({ variant: 'tertiary', size: 'sm' })} gap-1.5`}
+            >
+              <LuChevronLeft className="size-4" />
+              Dashboard
+            </Link>
+            <span className="hidden text-sm font-semibold sm:inline">{id}</span>
+            <Tabs selectedKey={segment} className="ml-2">
+              <Tabs.ListContainer>
+                <Tabs.List aria-label="Agent views">
+                  <Tabs.Tab id="desktop" href={`/agents/${id}/desktop`} render={asLink}>
+                    <span className="flex items-center gap-1.5">
+                      <LuMonitor className="size-4" />
+                      Desktop
+                    </span>
+                    <Tabs.Indicator />
+                  </Tabs.Tab>
+                  <Tabs.Tab id="terminal" href={`/agents/${id}/terminal`} render={asLink}>
+                    <span className="flex items-center gap-1.5">
+                      <LuTerminal className="size-4" />
+                      Terminal
+                    </span>
+                    <Tabs.Indicator />
+                  </Tabs.Tab>
+                </Tabs.List>
+              </Tabs.ListContainer>
+            </Tabs>
+            <Button
+              size="sm"
+              variant="tertiary"
+              className="gap-1.5"
+              aria-label="Files"
+              onPress={() => setFilesOpen(true)}
+            >
+              <LuFolderOpen className="size-4" />
+              <span className="hidden sm:inline">Files</span>
+            </Button>
+            <Button
+              size="sm"
+              variant="tertiary"
+              aria-label="Agent settings"
+              onPress={() => setSettingsOpen(true)}
+            >
+              <LuSettings className="size-4" />
+            </Button>
+            <div className="ml-auto hidden min-w-0 md:flex">
+              <AgentStatsBar agentId={id} />
             </div>
-          )}
-        </header>
+            {segment === 'desktop' && (
+              <div className="ml-auto md:ml-0">
+                <DesktopLockButton />
+              </div>
+            )}
+          </header>
 
-        <div className="min-h-0 flex-1">{children}</div>
-      </DesktopLockProvider>
-      <AgentSettingsModal agentId={id} isOpen={settingsOpen} onOpenChange={setSettingsOpen} />
-      <FileExplorer
-        apiBase={agentFilesBase(id)}
-        title={id}
-        copyPathRoot="/home/agent"
-        defaultPath="Desktop"
-        isOpen={filesOpen}
-        onOpenChange={setFilesOpen}
-      />
-      <ChatWidget agentId={id} />
+          <div className="min-h-0 flex-1">{children}</div>
+        </DesktopLockProvider>
+        <AgentSettingsModal agentId={id} isOpen={settingsOpen} onOpenChange={setSettingsOpen} />
+        <FileExplorer
+          apiBase={agentFilesBase(id)}
+          title={id}
+          copyPathRoot="/home/agent"
+          defaultPath="Desktop"
+          isOpen={filesOpen}
+          onOpenChange={setFilesOpen}
+        />
+        <ChatWidget agentId={id} />
+      </AgentStatsProvider>
     </motion.div>
   );
 }

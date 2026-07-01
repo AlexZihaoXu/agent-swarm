@@ -143,6 +143,9 @@ server.listen(config.port, () => {
   void manager.reconnectAllIntegrations();
   // Begin sampling per-agent cpu/mem into the 12h history for the dashboard.
   manager.startUsageSampling();
+  // Warm the metrics cache in the background so the first dashboard load after a
+  // (re)start hits a ready snapshot instead of paying the cold transcript scan.
+  void manager.metrics().catch(() => {});
   // Re-mount shared volumes (loop images) — they don't survive a host reboot
   // on their own; agents' rslave binds pick the remount up live.
   void manager.ensureVolumesMounted();
