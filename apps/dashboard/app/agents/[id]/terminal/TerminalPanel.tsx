@@ -87,20 +87,37 @@ export function TerminalPanel({ agentId }: { agentId: string }) {
     let disposed = false;
     let onResize: (() => void) | undefined;
     void (async () => {
-      const [{ Terminal }, { FitAddon }] = await Promise.all([
+      const [{ Terminal }, { FitAddon }, { WebglAddon }] = await Promise.all([
         import('@xterm/xterm'),
         import('@xterm/addon-fit'),
+        import('@xterm/addon-webgl'),
       ]);
       if (disposed || !containerRef.current) return;
       const term = new Terminal({
         cursorBlink: true,
         fontSize: 13,
-        scrollback: 10000,
+        // The Claude TUI redraws the whole viewport constantly; a big scrollback
+        // makes each DOM-fallback repaint heavier without much benefit (the chat
+        // view is the place to scroll history). 4k is plenty for the terminal.
+        scrollback: 4000,
         theme: { background: '#16130e' },
       });
       const fit = new FitAddon();
       term.loadAddon(fit);
       term.open(containerRef.current);
+      // GPU renderer: the DOM renderer (xterm's default) rebuilds a per-cell DOM
+      // grid on every frame, which is what makes a busy TUI feel laggy. WebGL
+      // composites on the GPU instead (~5-10× faster paints). If the context is
+      // lost (GPU reset, backgrounded tab) dispose it so xterm falls back to the
+      // DOM renderer rather than blanking; guard construction in case WebGL is
+      // unavailable at all.
+      try {
+        const webgl = new WebglAddon();
+        webgl.onContextLoss(() => webgl.dispose());
+        term.loadAddon(webgl);
+      } catch {
+        /* no WebGL — xterm keeps its DOM renderer */
+      }
       fit.fit();
       term.onData((d: string) => {
         const ws = wsRef.current;

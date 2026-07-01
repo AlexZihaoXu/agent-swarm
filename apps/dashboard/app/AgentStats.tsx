@@ -2,7 +2,15 @@
 
 import { ProgressCircle, Tooltip } from '@heroui/react';
 import { motion } from 'framer-motion';
-import { useEffect, useRef, useState } from 'react';
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import {
   LuArrowDown,
   LuArrowUp,
@@ -109,6 +117,38 @@ export function useAgentStats(
     };
   }, [agentId, enabled]);
   return stats;
+}
+
+/** Shared per-agent stats. The agent page mounts the stat bar, the chat dock and
+ *  (when open) the chat panel — all needing the same live stats. Left un-shared
+ *  they'd each open a 1Hz stats WebSocket to the agent, and every push drives a
+ *  full transcript re-read in the container (2-3× the load per page open).
+ *  Wrapping the agent page in <AgentStatsProvider> collapses that to one socket. */
+const AgentStatsContext = createContext<{ stats: AgentStats | null } | undefined>(undefined);
+
+export function AgentStatsProvider({
+  agentId,
+  children,
+}: {
+  agentId: string;
+  children: ReactNode;
+}) {
+  const stats = useAgentStats(agentId);
+  const value = useMemo(() => ({ stats }), [stats]);
+  return <AgentStatsContext.Provider value={value}>{children}</AgentStatsContext.Provider>;
+}
+
+/** Read the shared stats when under an AgentStatsProvider; otherwise fall back to
+ *  a private subscription (e.g. the dashboard chat, which has no provider). Always
+ *  calls useAgentStats to honour the rules of hooks, but disables it when a
+ *  provider already supplies the data so no extra socket opens. */
+export function useAgentStatsShared(
+  agentId: string,
+  opts: { enabled?: boolean } = {},
+): AgentStats | null {
+  const ctx = useContext(AgentStatsContext);
+  const own = useAgentStats(agentId, { enabled: ctx === undefined && (opts.enabled ?? true) });
+  return ctx === undefined ? own : ctx.stats;
 }
 
 /**
@@ -415,7 +455,7 @@ export function AgentStatsInline({ stats: s }: { stats: AgentStats | null }) {
 
 /** Fuller readout for the agent view header. */
 export function AgentStatsBar({ agentId }: { agentId: string }) {
-  const s = useAgentStats(agentId);
+  const s = useAgentStatsShared(agentId);
   if (!s) return null;
   const t = s.tokens;
   // New tokens (exclude cache reads — repeated re-reads of the same context).

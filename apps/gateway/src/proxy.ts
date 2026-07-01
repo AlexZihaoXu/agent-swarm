@@ -50,6 +50,13 @@ export function relayWs(
   path: string,
 ): void {
   const upstream = net.connect(port, host, () => {
+    // Terminal keystrokes (up) and cursor/redraw deltas (down) are tiny, latency-
+    // sensitive writes. Disable Nagle on both legs so they aren't held ~40ms
+    // waiting to coalesce — that delay is what makes the console feel laggy. Also
+    // helps noVNC input. setNoDelay exists on both sockets (clientSocket is the
+    // upgrade's TCP socket); guard defensively in case a non-TCP duplex appears.
+    upstream.setNoDelay(true);
+    (clientSocket as Partial<net.Socket>).setNoDelay?.(true);
     const lines = [`${req.method ?? 'GET'} ${path} HTTP/1.1`];
     const h = req.rawHeaders;
     for (let i = 0; i < h.length; i += 2) lines.push(`${h[i]}: ${h[i + 1]}`);

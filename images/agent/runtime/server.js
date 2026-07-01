@@ -21,6 +21,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const cp = require('child_process');
+const { StringDecoder } = require('string_decoder');
 const { WebSocketServer } = require('ws');
 const pty = require('node-pty');
 const { Terminal } = require('@xterm/headless');
@@ -367,76 +368,141 @@ function modelContextLimit(model) {
   return 0;
 }
 
-// Same cache strategy as readTranscript — keyed by (path, mtimeMs, size). The
-// stats WebSocket pushes once per second per client, so for idle agents we
-// were re-parsing a 40+ MB file 5×/sec.
+// Incremental, chunked Claude-session stats. We must NEVER read a whole
+// transcript into a string: past Node's ~512MiB max string length,
+// readFileSync('utf8') throws ERR_STRING_TOO_LONG — which silently zeroed stats
+// for large transcripts, and because the gateway's auto-compact watchdog reads
+// `context` from here, that ALSO stopped auto-compaction, letting the file grow
+// unbounded (atlas reached 591MB). Instead we keep a running per-message usage
+// map and only parse the bytes appended since the last call.
+//
+// Two reasons claude writes the same `message.id` more than once:
+//   1. `claude --continue` replays prior assistant messages into the resume;
+//   2. streaming providers flush the record on message_start (usage=0) and again
+//      on message_delta (final usage).
+// So we key by id and keep the MAX of each field (final values strictly grow vs.
+// partial ones), and pick `context` from the latest non-empty turn.
+const EMPTY_STATS = () => ({
+  totals: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
+  model: null,
+  turns: 0,
+  lastTs: null,
+  context: 0,
+  cost: 0,
+});
+// Running incremental state for the newest transcript.
+let statsState = null; // { path, size, byId:Map, leftover, order, lastTs }
+// Memoized aggregation keyed by (path, mtime, size) — an unchanged file is free.
 let transcriptStatsCache = { key: null, value: null };
 
+function accumulateStatsLine(state, line) {
+  if (!line || !line.trim()) return;
+  let o;
+  try {
+    o = JSON.parse(line);
+  } catch {
+    return;
+  }
+  if (o.timestamp) state.lastTs = o.timestamp;
+  if (o.type !== 'assistant' || !o.message) return;
+  const mid = o.message.id || `__noid_${state.order}`; // unique key for missing ids
+  const usage = o.message.usage || {};
+  const cur = state.byId.get(mid) || {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheCreation: 0,
+    model: null,
+    order: state.order++,
+  };
+  cur.input = Math.max(cur.input, usage.input_tokens || 0);
+  cur.output = Math.max(cur.output, usage.output_tokens || 0);
+  cur.cacheRead = Math.max(cur.cacheRead, usage.cache_read_input_tokens || 0);
+  cur.cacheCreation = Math.max(cur.cacheCreation, usage.cache_creation_input_tokens || 0);
+  if (o.message.model) cur.model = o.message.model;
+  state.byId.set(mid, cur);
+}
+
 function transcriptStats() {
-  const totals = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
-  let model = null;
-  let lastTs = null;
-  let cost = 0;
-  let context = 0;
   const newest = newestFile(path.join(CLAUDE_DIR, 'projects'), '.jsonl');
-  if (!newest) return { totals, model, turns: 0, lastTs, context, cost };
+  if (!newest) return EMPTY_STATS();
   let st;
   try {
     st = fs.statSync(newest.path);
   } catch {
-    return { totals, model, turns: 0, lastTs, context, cost };
+    return EMPTY_STATS();
   }
   const cacheKey = `${newest.path}:${st.mtimeMs}:${st.size}`;
   if (transcriptStatsCache.key === cacheKey) return transcriptStatsCache.value;
-  // Two reasons claude can write the same `message.id` more than once:
-  //   1. `claude --continue` replays prior assistant messages into the resumed
-  //      transcript;
-  //   2. Streaming providers (e.g. OpenCode Go via oc-go-cc) flush the message
-  //      record on `message_start` (usage=0) and again on `message_delta`
-  //      (final usage). The first naïve `seen.has(id)` dedup picks #1, which
-  //      is zero — and `context` (the latest turn's input) ends up 0 even
-  //      after a 30k-token turn. Track per-id usage and keep the MAX of each
-  //      field — final values always strictly grow vs. partial ones.
-  // NOTE on accuracy: transcriptStats needs to SUM over all turns (not just
-  // tail), so we cannot tail-read here. The (mtime, size) cache keeps the
-  // expensive full read to a once-per-actual-change cadence, which is what
-  // makes the disk pressure go away.
-  const byId = new Map(); // id → { input, output, cacheRead, cacheCreation, model, order }
-  let order = 0;
-  const raw = safeRead(newest.path);
-  if (!raw) return { totals, model, turns: 0, lastTs, context, cost };
-  for (const line of raw.split('\n')) {
-    if (!line.trim()) continue;
-    let o;
-    try {
-      o = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (o.timestamp) lastTs = o.timestamp;
-    if (o.type !== 'assistant' || !o.message) continue;
-    const mid = o.message.id || `__noid_${order}`; // unique key for missing ids
-    const usage = o.message.usage || {};
-    const cur = byId.get(mid) || {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheCreation: 0,
-      model: null,
-      order: order++,
-    };
-    cur.input = Math.max(cur.input, usage.input_tokens || 0);
-    cur.output = Math.max(cur.output, usage.output_tokens || 0);
-    cur.cacheRead = Math.max(cur.cacheRead, usage.cache_read_input_tokens || 0);
-    cur.cacheCreation = Math.max(cur.cacheCreation, usage.cache_creation_input_tokens || 0);
-    if (o.message.model) cur.model = o.message.model;
-    byId.set(mid, cur);
+
+  // Reuse the running state when the same file only grew (append); otherwise
+  // (new session file, or the file shrank/rotated) start clean.
+  let state = statsState;
+  if (!state || state.path !== newest.path || st.size < state.size) {
+    state = { path: newest.path, size: 0, byId: new Map(), leftover: '', order: 0, lastTs: null };
   }
-  // Sum once per id (now with the max usage), and pick `context` from the
-  // latest non-empty message — partial 0/0 entries shouldn't reset the ring
-  // mid-turn.
-  const entries = [...byId.values()].sort((a, b) => a.order - b.order);
-  for (const e of entries) {
+  // Read only [state.size .. st.size) in chunks, decoding UTF-8 across chunk
+  // boundaries so we never materialise the whole (possibly >512MiB) file.
+  let fd;
+  try {
+    fd = fs.openSync(newest.path, 'r');
+    const CHUNK = 4 * 1024 * 1024;
+    const buf = Buffer.allocUnsafe(CHUNK);
+    const decoder = new StringDecoder('utf8');
+    let pos = state.size;
+    while (pos < st.size) {
+      const n = fs.readSync(fd, buf, 0, Math.min(CHUNK, st.size - pos), pos);
+      if (n <= 0) break;
+      pos += n;
+      const text = state.leftover + decoder.write(buf.subarray(0, n));
+      const lines = text.split('\n');
+      state.leftover = lines.pop() || '';
+      for (const line of lines) accumulateStatsLine(state, line);
+    }
+    state.leftover += decoder.end();
+  } catch {
+    /* keep whatever we accumulated */
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  state.size = st.size;
+  statsState = state;
+
+  // Aggregate from the per-id map. Include the trailing not-yet-newline-
+  // terminated record (if valid) as a tentative entry so the most recent turn
+  // shows immediately; it becomes a permanent byId entry once its '\n' arrives.
+  const totals = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
+  let model = null;
+  let context = 0;
+  let cost = 0;
+  const entries = [...state.byId.values()].sort((a, b) => a.order - b.order);
+  let tentative = null;
+  if (state.leftover && state.leftover.trim()) {
+    try {
+      const o = JSON.parse(state.leftover);
+      if (o.timestamp) state.lastTs = o.timestamp;
+      if (o.type === 'assistant' && o.message && !state.byId.has(o.message.id)) {
+        const u = o.message.usage || {};
+        tentative = {
+          input: u.input_tokens || 0,
+          output: u.output_tokens || 0,
+          cacheRead: u.cache_read_input_tokens || 0,
+          cacheCreation: u.cache_creation_input_tokens || 0,
+          model: o.message.model || null,
+        };
+      }
+    } catch {
+      /* partial line — ignore until complete */
+    }
+  }
+  const all = tentative ? [...entries, tentative] : entries;
+  for (const e of all) {
     totals.input += e.input;
     totals.output += e.output;
     totals.cacheRead += e.cacheRead;
@@ -448,7 +514,7 @@ function transcriptStats() {
     cost +=
       (e.input * r.in + e.output * r.out + e.cacheCreation * r.cw + e.cacheRead * r.cr) / 1_000_000;
   }
-  const result = { totals, model, turns: entries.length, lastTs, context, cost };
+  const result = { totals, model, turns: all.length, lastTs: state.lastTs, context, cost };
   transcriptStatsCache = { key: cacheKey, value: result };
   return result;
 }

@@ -3,7 +3,7 @@
 import { AnimatePresence, motion, useDragControls } from 'framer-motion';
 import { useState } from 'react';
 import { LuMessageSquare, LuX } from 'react-icons/lu';
-import { useAgentStats } from '@/app/AgentStats';
+import { useAgentStatsShared } from '@/app/AgentStats';
 import { ChatPanel } from '@/app/ChatPanel';
 
 /**
@@ -14,7 +14,7 @@ import { ChatPanel } from '@/app/ChatPanel';
 export function ChatWidget({ agentId }: { agentId: string }) {
   const [open, setOpen] = useState(false);
   const dragControls = useDragControls();
-  const stats = useAgentStats(agentId);
+  const stats = useAgentStatsShared(agentId);
   const working = stats?.status === 'busy';
 
   return (

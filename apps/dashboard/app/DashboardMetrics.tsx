@@ -371,18 +371,26 @@ export function DashboardMetrics() {
     };
   }, [rangeHours]);
 
-  // Live resource usage refreshes fast (cheap snapshot) for the headline numbers.
+  // Live resource usage for the headline numbers. Recursive timeout (not
+  // setInterval) with the next tick scheduled only after the previous settles,
+  // so a slow poll can't stack up — the old 500ms interval fired 2×/s and each
+  // call hits the gateway's docker.listContainers, so bursts piled up whenever
+  // the event loop stalled. 2s is ample (the gateway samples cpu/mem ~1/s).
   useEffect(() => {
     let alive = true;
-    const load = () =>
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = () => {
       getUsage()
         .then((u) => alive && setUsage(u))
-        .catch(() => {});
-    void load();
-    const t = setInterval(load, 500);
+        .catch(() => {})
+        .finally(() => {
+          if (alive) timer = setTimeout(tick, 2000);
+        });
+    };
+    tick();
     return () => {
       alive = false;
-      clearInterval(t);
+      clearTimeout(timer);
     };
   }, []);
 

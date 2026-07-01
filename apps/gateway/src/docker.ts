@@ -9,6 +9,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  readSync,
   renameSync,
   rmdirSync,
   rmSync,
@@ -18,6 +19,7 @@ import {
 } from 'node:fs';
 import { basename, dirname, join, sep } from 'node:path';
 import type { Readable } from 'node:stream';
+import { StringDecoder } from 'node:string_decoder';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -166,6 +168,39 @@ export function resolveHostPort(ports: PortBindings, internalPort: number): Prox
   }
   return { host: '127.0.0.1', port: Number(binding.HostPort) };
 }
+
+/** One assistant turn's token usage, extracted from a transcript line. */
+type TokenEvent = {
+  ts: number;
+  mid: string | null;
+  inp: number;
+  out: number;
+  cr: number;
+  cc: number;
+  model?: string;
+};
+
+/** The dashboard metrics payload (per-agent + hourly token/cost totals, the
+ *  account rate-limit windows, and downsampled per-agent resource history). */
+type MetricsResult = {
+  rateLimits: {
+    fiveHour: { usedPercent: number; resetsAt: number };
+    sevenDay: { usedPercent: number; resetsAt: number };
+    /** When the rate-limit values last changed (= last API activity). The
+     *  dashboard greys the rings as "outdated" when this is >5m old. */
+    updatedAt: number;
+  } | null;
+  /** The window in hours the response covers (1..168). */
+  rangeHours: number;
+  agents: { id: string; name: string; tokens: number; cost: number }[];
+  buckets: { t: number; tokens: number; cost: number }[];
+  /** Per-agent live-resource history over the window (cpu% + memory bytes),
+   *  downsampled to ≤300 points for any range. */
+  usage: {
+    series: { id: string; name: string }[];
+    points: { t: number; cpu: Record<string, number>; mem: Record<string, number> }[];
+  };
+};
 
 /** Drives the Docker engine for agent lifecycle + proxy target resolution. */
 export class AgentManager {
@@ -999,37 +1034,144 @@ export class AgentManager {
     }
   }
 
+  /** Per-file cache of the assistant token-usage events in a transcript, keyed by
+   *  (mtime,size). Metrics used to `readFileSync('utf8')` every transcript in full
+   *  on every poll — O(all bytes), and it THREW `ERR_STRING_TOO_LONG` on files
+   *  >512MiB (silently zeroing that agent, e.g. atlas's 591MB transcript). Caching
+   *  by mtime/size means idle transcripts are never re-read. */
+  private tokenEventCache = new Map<
+    string,
+    { mtimeMs: number; size: number; events: TokenEvent[]; leftover: string }
+  >();
+
+  /** Parse the assistant token-usage events out of one transcript file, chunked so
+   *  we never allocate a >512MiB string. Incremental: an unchanged file returns
+   *  its cached events; a file that only grew is read from its previous size
+   *  onward and the new events appended. Anything else → full re-parse. */
+  private readTokenEvents(file: string): TokenEvent[] {
+    let st;
+    try {
+      st = statSync(file);
+    } catch {
+      this.tokenEventCache.delete(file);
+      return [];
+    }
+    const cached = this.tokenEventCache.get(file);
+    if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) return cached.events;
+    // Append-only fast path (transcripts only grow via appended lines). Otherwise
+    // (first sight, or the file shrank/rotated) parse the whole thing from 0.
+    const append = !!cached && st.size > cached.size;
+    const events: TokenEvent[] = append ? cached!.events : [];
+    let leftover = append ? cached!.leftover : '';
+    let pos = append ? cached!.size : 0;
+    const decoder = new StringDecoder('utf8');
+    let fd: number | undefined;
+    try {
+      fd = openSync(file, 'r');
+      const CHUNK = 4 * 1024 * 1024;
+      const buf = Buffer.allocUnsafe(CHUNK);
+      while (pos < st.size) {
+        const n = readSync(fd, buf, 0, Math.min(CHUNK, st.size - pos), pos);
+        if (n <= 0) break;
+        pos += n;
+        const text = leftover + decoder.write(buf.subarray(0, n));
+        const lines = text.split('\n');
+        leftover = lines.pop() ?? '';
+        for (const line of lines) this.pushTokenEvent(line, events);
+      }
+      leftover += decoder.end();
+      this.pushTokenEvent(leftover, events);
+      leftover = '';
+    } catch {
+      /* partial parse beats none — keep whatever we accumulated */
+    } finally {
+      if (fd !== undefined) {
+        try {
+          closeSync(fd);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    this.tokenEventCache.set(file, { mtimeMs: st.mtimeMs, size: st.size, events, leftover });
+    return events;
+  }
+
+  /** Parse one transcript line and push a token event if it's a usable assistant
+   *  turn (has usage + a finite timestamp). Kept separate for readability. */
+  private pushTokenEvent(line: string, sink: TokenEvent[]): void {
+    if (!line) return;
+    let o: {
+      type?: string;
+      timestamp?: string;
+      message?: { id?: string; usage?: Record<string, number>; model?: string };
+    };
+    try {
+      o = JSON.parse(line);
+    } catch {
+      return;
+    }
+    const u = o.message?.usage;
+    const ts = o.timestamp ? Date.parse(o.timestamp) : NaN;
+    if (o.type !== 'assistant' || !u || !Number.isFinite(ts)) return;
+    sink.push({
+      ts,
+      mid: o.message?.id ?? null,
+      inp: u.input_tokens || 0,
+      out: u.output_tokens || 0,
+      cr: u.cache_read_input_tokens || 0,
+      cc: u.cache_creation_input_tokens || 0,
+      model: o.message?.model,
+    });
+  }
+
+  private static readonly METRICS_TTL_MS = 15_000;
+  private metricsCache: { hours: number; at: number; value: MetricsResult } | null = null;
+  private metricsInFlight: Promise<MetricsResult> | null = null;
+
   /**
-   * Global usage metrics for the dashboard, read straight off the agent disks:
+   * Global usage metrics for the dashboard. Cached with a short TTL and served
+   * stale-while-revalidate: a poll returns the last snapshot instantly and kicks
+   * a background refresh, so the (potentially multi-second) transcript scan never
+   * blocks the request — nor the terminal proxy sharing this event loop, which is
+   * what used to make the console hitch whenever the dashboard polled metrics.
+   */
+  async metrics(opts: { hours?: number } = {}): Promise<MetricsResult> {
+    const hours = Math.max(1, Math.min(168, opts.hours ?? 12));
+    const now = Date.now();
+    const cache = this.metricsCache;
+    if (cache && cache.hours === hours && now - cache.at < AgentManager.METRICS_TTL_MS)
+      return cache.value;
+    const refresh = (): Promise<MetricsResult> => {
+      const p = this.computeMetrics(hours)
+        .then((v) => {
+          this.metricsCache = { hours, at: Date.now(), value: v };
+          return v;
+        })
+        .finally(() => {
+          if (this.metricsInFlight === p) this.metricsInFlight = null;
+        });
+      this.metricsInFlight = p;
+      return p;
+    };
+    // Same-window snapshot on hand → serve it now, refresh behind it.
+    if (cache && cache.hours === hours) {
+      if (!this.metricsInFlight) void refresh();
+      return cache.value;
+    }
+    // Cold, or the window changed → compute now (coalescing concurrent callers).
+    return this.metricsInFlight ?? refresh();
+  }
+
+  /**
+   * Compute usage metrics straight off the agent disks:
    *  - per-agent 24h totals (tokens + computed cost) — x=agent bar chart;
    *  - 24 hourly slots summed across agents (tokens + cost) — x=time chart;
    *  - the account-level 5h / 7d rate-limit windows (from any agent's
    *    statusline.json — they're shared across agents on one account).
    */
-  async metrics(opts: { hours?: number } = {}): Promise<{
-    rateLimits: {
-      fiveHour: { usedPercent: number; resetsAt: number };
-      sevenDay: { usedPercent: number; resetsAt: number };
-      /** When the rate-limit values last changed (= last API activity). The
-       *  dashboard greys the rings as "outdated" when this is >5m old. */
-      updatedAt: number;
-    } | null;
-    /** The window in hours the response covers (1..168). The dashboard echoes
-     *  this in titles so the user can see what they asked for round-tripped. */
-    rangeHours: number;
-    agents: { id: string; name: string; tokens: number; cost: number }[];
-    buckets: { t: number; tokens: number; cost: number }[];
-    /** Per-agent live-resource history over the requested window (cpu% +
-     *  memory bytes). Downsampled to ≤300 points for any range. */
-    usage: {
-      series: { id: string; name: string }[];
-      points: { t: number; cpu: Record<string, number>; mem: Record<string, number> }[];
-    };
-  }> {
+  private async computeMetrics(requested: number): Promise<MetricsResult> {
     const HOUR = 3_600_000;
-    // Clamp to the data we actually keep (usage history retains 7d; transcripts
-    // go further back but the bar chart loses meaning past a week).
-    const requested = Math.max(1, Math.min(168, opts.hours ?? 12));
     const WINDOW_H = requested;
     // Bucket size: target ≤24 bars so the chart stays readable as the range
     // grows. 12h → 1h × 12; 24h → 1h × 24; 3d (72h) → 3h × 24; 7d (168h) →
@@ -1050,6 +1192,7 @@ export class AgentManager {
     } | null = null;
     let rlMtime = 0;
 
+    const walked = new Set<string>();
     for (const a of await this.list()) {
       let tokens = 0;
       let cost = 0;
@@ -1058,49 +1201,28 @@ export class AgentManager {
       // Counting every line double-counts (~2x here) — dedupe by message.id.
       const seen = new Set<string>();
       for (const file of this.walkJsonl(join(this.agentDataDir(a.id), '.claude', 'projects'))) {
-        let raw: string;
-        try {
-          raw = readFileSync(file, 'utf8');
-        } catch {
-          continue;
-        }
-        for (const line of raw.split('\n')) {
-          if (!line) continue;
-          let o: {
-            type?: string;
-            timestamp?: string;
-            message?: { id?: string; usage?: Record<string, number>; model?: string };
-          };
-          try {
-            o = JSON.parse(line);
-          } catch {
-            continue;
+        walked.add(file);
+        for (const ev of this.readTokenEvents(file)) {
+          if (ev.mid) {
+            if (seen.has(ev.mid)) continue;
+            seen.add(ev.mid);
           }
-          const u = o.message?.usage;
-          const ts = o.timestamp ? Date.parse(o.timestamp) : NaN;
-          if (o.type !== 'assistant' || !u || !Number.isFinite(ts)) continue;
-          const mid = o.message?.id;
-          if (mid) {
-            if (seen.has(mid)) continue;
-            seen.add(mid);
-          }
-          const inp = u.input_tokens || 0;
-          const out = u.output_tokens || 0;
-          const cr = u.cache_read_input_tokens || 0;
-          const cc = u.cache_creation_input_tokens || 0;
           // Tokens "burnt" = new tokens (fresh input + output + cache writes).
           // cache_read is the SAME context re-read every turn — summing it over
           // turns wildly over-counts — but it IS billed, so cost below keeps it.
-          const tk = inp + out + cc;
-          const idx = Math.floor((ts - base) / BUCKET_MS);
+          const tk = ev.inp + ev.out + ev.cc;
+          const idx = Math.floor((ev.ts - base) / BUCKET_MS);
           if (idx < 0 || idx >= bucketCount) continue;
-          const r = modelRates(o.message?.model, inp + cr + cc);
-          const c = (inp * r.in + out * r.out + cc * r.cw + cr * r.cr) / 1_000_000;
+          const r = modelRates(ev.model, ev.inp + ev.cr + ev.cc);
+          const c = (ev.inp * r.in + ev.out * r.out + ev.cc * r.cw + ev.cr * r.cr) / 1_000_000;
           tokens += tk;
           cost += c;
           buckets[idx]!.tokens += tk;
           buckets[idx]!.cost += c;
         }
+        // Yield between files so a large (re)parse never blocks the event loop
+        // (and the terminal proxy) for more than one file at a time.
+        await new Promise((res) => setImmediate(res));
       }
       agents.push({ id: a.id, name: a.username || a.id, tokens, cost });
 
@@ -1134,6 +1256,10 @@ export class AgentManager {
         /* no statusline for this agent */
       }
     }
+    // Drop cached token events for transcripts that no longer exist (deleted
+    // agents) so the cache can't grow without bound.
+    for (const key of this.tokenEventCache.keys())
+      if (!walked.has(key)) this.tokenEventCache.delete(key);
     // Claude only writes rate_limits after API activity, so a freshly-(re)started
     // idle agent may lack it. They're account-global and change slowly, so cache
     // the last seen and fall back to it rather than dropping the rings. We stamp

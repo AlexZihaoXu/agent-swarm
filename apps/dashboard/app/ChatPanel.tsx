@@ -37,7 +37,7 @@ import {
   type ChatTodo,
   type ChatTurn,
 } from '@/lib/gateway';
-import { useAgentStats } from './AgentStats';
+import { useAgentStatsShared } from './AgentStats';
 
 /** The plain-text of a transcript turn, trimmed — for matching queued sends. */
 const userTurnText = (t: ChatTurn): string =>
@@ -454,7 +454,7 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
   // (e.g. queued while the agent is busy). Rendered as "queued" so they don't
   // vanish when the 2s poll replaces `turns` with the server transcript.
   const [pending, setPending] = useState<{ text: string; ts: number; threshold: number }[]>([]);
-  const stats = useAgentStats(agentId);
+  const stats = useAgentStatsShared(agentId, { enabled: active });
   const working = stats?.status === 'busy';
   const tasks = stats?.tasks ?? [];
 

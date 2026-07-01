@@ -2,6 +2,7 @@
 
 import { Button, buttonVariants, Card, Spinner } from '@heroui/react';
 import { AnimatePresence, motion } from 'framer-motion';
+import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { LuPackage, LuScrollText, LuSettings } from 'react-icons/lu';
@@ -9,7 +10,12 @@ import { getImageStatus, listAgents, type Agent } from '@/lib/gateway';
 import { AgentCard } from './AgentCard';
 import { CreateAgentModal } from './CreateAgentModal';
 import { DashboardChat } from './DashboardChat';
-import { DashboardMetrics } from './DashboardMetrics';
+// Lazy-loaded so recharts/d3 (heavy, and below the fold) stay out of the initial
+// client bundle — the dashboard shell becomes interactive without waiting on them.
+const DashboardMetrics = dynamic(
+  () => import('./DashboardMetrics').then((m) => m.DashboardMetrics),
+  { ssr: false },
+);
 import { DashboardSettingsProvider } from './DashboardSettings';
 import { ImageBanner } from './ImageBanner';
 import { PackagesModal } from './PackagesModal';
