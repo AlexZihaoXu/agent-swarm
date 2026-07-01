@@ -714,7 +714,7 @@ export function AgentSettingsModal({
                         </p>
                       )}
 
-                      <div className="space-y-3">
+                      <div className="border-separator space-y-3 border-t pt-5">
                         <Switch isSelected={desktop} onChange={setDesktop}>
                           <Switch.Control>
                             <Switch.Thumb />
@@ -730,7 +730,7 @@ export function AgentSettingsModal({
                         </Switch>
                       </div>
 
-                      <div className="space-y-3">
+                      <div className="border-separator space-y-3 border-t pt-5">
                         <Switch isSelected={override} onChange={setOverride}>
                           <Switch.Control>
                             <Switch.Thumb />
