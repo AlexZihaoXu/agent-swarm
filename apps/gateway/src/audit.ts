@@ -89,7 +89,7 @@ export function formatAuditLine(ev: AuditEvent, tz: string = config.auditTimezon
     ev.actor.kind === 'operator'
       ? `operator${ev.actor.ip ? `@${ev.actor.ip}` : ''}`
       : ev.actor.kind === 'agent'
-        ? (ev.actor.name ?? ev.actor.id ?? 'agent')
+        ? `${ev.actor.name ?? ev.actor.id ?? 'agent'}${ev.actor.ip ? `@${ev.actor.ip}` : ''}`
         : 'system';
   return `[${formatTimestamp(ev.ts, tz)}] [${ev.category.toUpperCase()}/${ev.level.toUpperCase()}] (${actor}): ${ev.message}`;
 }
