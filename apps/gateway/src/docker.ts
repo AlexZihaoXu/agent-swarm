@@ -3002,6 +3002,13 @@ export class AgentManager {
     return { ok: true };
   }
 
+  /** Set the caller's OWN Discord bot custom status ("status quote"). Self only,
+   *  no capability required. Returns false when the bot isn't connected (Discord
+   *  not configured, or the connection is offline). */
+  setDiscordStatus(fromId: string, text: string): boolean {
+    return this.discord.setCustomStatus(fromId, text);
+  }
+
   /** Capability-gated live-stats read of a peer (the `view_stats` role
    *  permission), scoped to agents that share a group with the caller. Returns a
    *  compact summary of the target's session (context-window usage, model,
