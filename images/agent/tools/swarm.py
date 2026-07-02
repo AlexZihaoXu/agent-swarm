@@ -402,6 +402,25 @@ def restart_self(_args: dict) -> dict:
     )
 
 
+def set_discord_status(args: dict) -> dict:
+    text = str(args.get("text") or "").strip()
+    me = _identity()
+    try:
+        _http("POST", "/api/swarm/discord-status", {"fromId": me["id"], "text": text})
+    except urllib.error.HTTPError as e:
+        if e.code == 409:
+            return _err(
+                "Your Discord bot isn't connected — no Discord integration is configured for you "
+                "(or it's offline). Ask the operator to set it up in the dashboard → Integrations."
+            )
+        return _err(f"HTTP {e.code}: {e.read().decode()[:200]}")
+    except Exception as e:  # noqa: BLE001
+        return _err(str(e))
+    if text:
+        return _ok(f'Discord custom status set to "{text}".')
+    return _ok("Discord custom status cleared.")
+
+
 TOOLS = [
     ("swarm_whoami", "Your own identity (id + name) within the swarm.", {}, [], whoami),
     (
@@ -560,6 +579,22 @@ TOOLS = [
         {},
         [],
         restart_self,
+    ),
+    (
+        "swarm_set_discord_status",
+        "Set (or clear) YOUR OWN Discord bot's custom status — the short 'status quote' shown under "
+        'your name in Discord (like "\U0001f4b8 claude tokens go brrrrrrr"). Self-only, no special '
+        "permission needed. Pass an empty string to clear it. Put an emoji at the START of the text "
+        "if you want one (up to 128 chars total). Needs a Discord integration configured for you "
+        "(otherwise it reports the bot isn't connected).",
+        {
+            "text": {
+                "type": "string",
+                "description": "Custom status text (lead with an emoji if you like). Empty string clears it.",
+            },
+        },
+        [],
+        set_discord_status,
     ),
 ]
 HANDLERS = {name: fn for name, _d, _p, _r, fn in TOOLS}

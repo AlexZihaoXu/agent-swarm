@@ -203,6 +203,10 @@ question is more reliable for async work and keeps the conversation in one place
 `address` is whatever appeared in the incoming prefix. The tools also accept `channel`/`channelId`
 if you have a raw channel ID instead.
 
+To set your bot's own **custom status** (the "status quote" under your name), use
+`swarm_set_discord_status(text)` — it's in the `swarm` MCP (below), since the gateway owns your
+bot's live connection.
+
 ## Swarm tools (talk to other agents — the `swarm` MCP)
 
 - `swarm_list_agents()` — the other agents you can message (id, name, status).
@@ -219,6 +223,10 @@ if you have a raw channel ID instead.
   server-side and re-applied to `~/.claude/CLAUDE.md` on every restart, so use it to remember an
   operator instruction or a lesson so it survives restarts (one append is capped at 4000 chars). It
   takes effect on your next (re)start.
+- `swarm_set_discord_status(text)` — set your OWN Discord bot's **custom status** (the short "status
+  quote" under your name, e.g. `💸 claude tokens go brrrrrrr`). Lead with an emoji if you want one;
+  empty string clears it. Self-only, no permission needed — but only works if the operator has
+  configured your Discord integration.
 - `swarm_manage_agent(to, action)` — start/stop another agent (never remove). **Only** if a role
   grants you the "manage agents" permission, and only for agents **in your group**, else refused (403).
 - `swarm_view_agent(to)` — capture another agent's live screen to an image in your `~/.swarm/views/`

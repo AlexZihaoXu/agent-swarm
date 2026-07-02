@@ -4,7 +4,15 @@
 // terminal — exactly like the dashboard "send" does. Outgoing actions are NOT
 // here; those go through the in-agent Discord MCP server (REST). See
 // docs/discord-mcp-plan.md §4–5.
-import { Client, Events, GatewayIntentBits, Partials, REST, Routes } from 'discord.js';
+import {
+  ActivityType,
+  Client,
+  Events,
+  GatewayIntentBits,
+  Partials,
+  REST,
+  Routes,
+} from 'discord.js';
 import type { DiscordRules, IntegrationTestResult } from './types.js';
 
 /** One accepted inbound Discord message, ready to deliver to the agent. */
@@ -68,6 +76,7 @@ const WAKE_CHECK_MS = 60_000;
 interface Conn {
   client: Client;
   timer: ReturnType<typeof setInterval>;
+  setCustom: (text: string) => void;
 }
 
 export class DiscordBridge {
@@ -75,6 +84,16 @@ export class DiscordBridge {
 
   isConnected(agentId: string): boolean {
     return this.conns.has(agentId);
+  }
+
+  /** Set (or clear, with an empty string) this agent's bot custom status — the
+   *  little "status quote" under its name. Returns false when the bot isn't
+   *  connected (Discord not configured, or offline). */
+  setCustomStatus(agentId: string, text: string): boolean {
+    const conn = this.conns.get(agentId);
+    if (!conn) return false;
+    conn.setCustom(text);
+    return true;
   }
 
   /**
@@ -104,16 +123,33 @@ export class DiscordBridge {
 
     let onlineUntil = 0; // attentive until this timestamp; 0 = idle
     let presence: 'online' | 'idle' | null = null;
+    let customStatus: string | null = null; // the agent's own "status quote"
     const unread = new Map<string, number>(); // channelId -> messages buffered while idle
 
-    const setPresence = (s: 'online' | 'idle') => {
-      if (presence === s) return;
-      presence = s;
+    // Apply the current status + custom activity to the bot's Discord presence.
+    const applyPresence = () => {
       try {
-        client.user?.setPresence({ status: s });
+        client.user?.setPresence({
+          status: presence ?? 'idle',
+          activities: customStatus
+            ? [{ name: 'Custom Status', type: ActivityType.Custom, state: customStatus }]
+            : [],
+        });
       } catch {
         /* presence is best-effort */
       }
+    };
+    const setPresence = (s: 'online' | 'idle') => {
+      if (presence === s) return;
+      presence = s;
+      applyPresence();
+    };
+    // Agent-set custom status. Empty clears it; re-applied on every presence
+    // change. Lives for this connection (reset if the bot reconnects).
+    const setCustom = (text: string) => {
+      const t = (text || '').trim();
+      customStatus = t.length ? t.slice(0, 128) : null; // Discord caps custom status at 128
+      applyPresence();
     };
     const bumpOnline = () => {
       onlineUntil = Date.now() + ONLINE_MS;
@@ -209,7 +245,7 @@ export class DiscordBridge {
     }, WAKE_CHECK_MS);
 
     await client.login(token);
-    this.conns.set(agentId, { client, timer });
+    this.conns.set(agentId, { client, timer, setCustom });
   }
 
   async disconnect(agentId: string): Promise<void> {

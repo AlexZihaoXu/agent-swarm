@@ -436,6 +436,26 @@ export async function handleApi(
       });
       return (sendJson(res, 200, result), true);
     }
+    if (pathname === '/api/swarm/discord-status') {
+      if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+      const body = await readJson(req);
+      const text = String(body.text ?? '');
+      const applied = manager.setDiscordStatus(body.fromId ?? '', text);
+      logEvent({
+        category: 'swarm',
+        action: 'swarm.discord_status',
+        message: `${body.fromId || '?'} set its Discord status${text ? `: ${text.slice(0, 60)}` : ' (cleared)'}`,
+        actor: agentActor(req, body),
+        agentId: body.fromId || undefined,
+      });
+      return (
+        sendJson(res, applied ? 200 : 409, {
+          ok: applied,
+          error: applied ? undefined : 'discord bot not connected',
+        }),
+        true
+      );
+    }
     if (pathname === '/api/swarm/group-send') {
       if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
       const body = await readJson(req);
