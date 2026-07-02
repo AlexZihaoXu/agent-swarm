@@ -101,7 +101,9 @@ function agentActor(
 ): AuditActor {
   const id = body.fromId?.trim();
   if (!id) return opActor(req);
-  return { kind: 'agent', id, name: body.from || body.fromName || undefined };
+  // Record the source IP too, so every request-driven event carries one (an
+  // agent's is its container IP — useful if one ever acts from an unexpected host).
+  return { kind: 'agent', id, name: body.from || body.fromName || undefined, ip: clientIp(req) };
 }
 
 /** Whether the request reached us over HTTPS — gates the `Secure` cookie. Direct
@@ -1079,13 +1081,16 @@ async function handleAgents(
   } else if (!action) {
     if (method === 'GET') return (sendJson(res, 200, await manager.getAgent(id)), true);
     if (method === 'DELETE') {
+      // Capture the display name BEFORE removal (the disk/identity is gone after).
+      const name = (await manager.getAgent(id).catch(() => null))?.username;
       await manager.remove(id);
       logEvent({
         category: 'agent',
         action: 'agent.remove',
         level: 'warn',
-        message: `removed agent ${id} (container + persistent disk deleted)`,
+        message: `removed agent ${name && name !== id ? `${name} (${id})` : id} (container + persistent disk deleted)`,
         actor: opActor(req),
+        meta: { name },
         agentId: id,
       });
       return (sendJson(res, 200, { ok: true }), true);

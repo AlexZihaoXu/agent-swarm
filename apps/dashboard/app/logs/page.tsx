@@ -58,7 +58,7 @@ function actorLabel(ev: AuditEvent): string {
   const a = ev.actor;
   if (!a) return 'system';
   if (a.kind === 'operator') return `operator${a.ip ? `@${a.ip}` : ''}`;
-  if (a.kind === 'agent') return a.name ?? a.id ?? 'agent';
+  if (a.kind === 'agent') return `${a.name ?? a.id ?? 'agent'}${a.ip ? `@${a.ip}` : ''}`;
   return 'system';
 }
 
