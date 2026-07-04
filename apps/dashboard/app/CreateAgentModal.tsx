@@ -16,6 +16,7 @@ import { useState } from 'react';
 import { LuChevronRight, LuDices, LuRefreshCw } from 'react-icons/lu';
 import {
   createAgent,
+  EFFORT_OPTIONS,
   listVolumes,
   getHostInfo,
   listGroups,
@@ -118,6 +119,7 @@ export function CreateAgentModal({
   const [timezone, setTimezone] = useState('');
   const [provider, setProvider] = useState<Provider>('anthropic');
   const [model, setModel] = useState(''); // '' = claude default
+  const [effort, setEffort] = useState(''); // '' = claude default
   const [roles, setRoles] = useState<string[]>([]);
   const [groups, setGroups] = useState<string[]>([]);
   const [allRoles, setAllRoles] = useState<Role[]>([]);
@@ -146,6 +148,7 @@ export function CreateAgentModal({
     setTimezone(systemTimezone());
     setProvider('anthropic');
     setModel('');
+    setEffort('');
     setRoles([]);
     setGroups([]);
     setAvatarSeed(randomSeed());
@@ -190,6 +193,7 @@ export function CreateAgentModal({
         timezone: timezone.trim() || undefined,
         provider,
         model: model || undefined,
+        effort: effort || undefined,
         roles,
         groups,
         avatarSeed: avatarSeed || undefined,
@@ -335,6 +339,43 @@ export function CreateAgentModal({
                       </ListBox>
                     </Select.Popover>
                   </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Select
+                    fullWidth
+                    value={effort || MODEL_DEFAULT_KEY}
+                    onChange={(v) => {
+                      const k = String(v ?? MODEL_DEFAULT_KEY);
+                      setEffort(k === MODEL_DEFAULT_KEY ? '' : k);
+                    }}
+                  >
+                    <Label className="text-sm">Effort</Label>
+                    <Select.Trigger>
+                      <Select.Value />
+                      <Select.Indicator />
+                    </Select.Trigger>
+                    <Select.Popover>
+                      <ListBox>
+                        {EFFORT_OPTIONS.map((opt) => (
+                          <ListBox.Item
+                            key={opt.value || MODEL_DEFAULT_KEY}
+                            id={opt.value || MODEL_DEFAULT_KEY}
+                            textValue={opt.label}
+                          >
+                            {opt.label}
+                            <ListBox.ItemIndicator />
+                          </ListBox.Item>
+                        ))}
+                      </ListBox>
+                    </Select.Popover>
+                  </Select>
+                  {effort === 'ultracode' && (
+                    <p className="text-muted text-xs">
+                      Max effort + multi-agent Workflow orchestration. Best on agents sized up
+                      beyond the 2-core / 4 GB default.
+                    </p>
+                  )}
                 </div>
 
                 <button

@@ -1057,6 +1057,7 @@ async function handleAgents(
         timezone: body.timezone ?? undefined,
         provider: body.provider,
         model: body.model ?? undefined,
+        effort: body.effort ?? undefined,
         roles: body.roles,
         groups: body.groups,
         desktop: body.desktop,
@@ -1106,6 +1107,7 @@ async function handleAgents(
         autoCompactPct?: number | null;
         provider?: Provider;
         model?: string | null;
+        effort?: string | null;
         roles?: string[];
         groups?: string[];
         permissions?: Capability[];
@@ -1121,6 +1123,7 @@ async function handleAgents(
       if (body.autoCompactPct !== undefined) patch.autoCompactPct = body.autoCompactPct;
       if (body.provider !== undefined) patch.provider = body.provider;
       if (body.model !== undefined) patch.model = body.model;
+      if (body.effort !== undefined) patch.effort = body.effort;
       if (body.roles !== undefined) patch.roles = body.roles;
       if (body.groups !== undefined) patch.groups = body.groups;
       if (Array.isArray(body.permissions)) patch.permissions = body.permissions as Capability[];
@@ -1505,6 +1508,7 @@ async function readJson(
   provider?: Provider;
   opencodeGo?: { apiKey?: string };
   model?: string | null;
+  effort?: string | null;
   type?: IntegrationType;
   credentials?: { botToken?: string };
   rules?: Partial<DiscordRules>;

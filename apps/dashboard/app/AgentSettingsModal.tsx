@@ -20,6 +20,7 @@ import { LuCircleHelp, LuDices, LuDownload, LuMaximize2, LuShuffle } from 'react
 import { LargeEditorModal } from './LargeEditorModal';
 import { Identicon, downloadIdenticon, randomSeed } from '@/lib/identicon';
 import {
+  EFFORT_OPTIONS,
   getAgent,
   getHostInfo,
   startAgent,
@@ -124,6 +125,7 @@ export function AgentSettingsModal({
   const [pct, setPct] = useState(DEFAULT_PCT);
   const [provider, setProvider] = useState<Provider>('anthropic');
   const [model, setModel] = useState(''); // '' = claude default
+  const [effort, setEffort] = useState(''); // '' = claude default
   const [roles, setRoles] = useState<string[]>([]);
   const [groups, setGroups] = useState<string[]>([]);
   const [avatarSeed, setAvatarSeed] = useState('');
@@ -186,6 +188,7 @@ export function AgentSettingsModal({
         setPct(has ? a.autoCompactPct! : DEFAULT_PCT);
         setProvider(a.provider ?? 'anthropic');
         setModel(a.model ?? '');
+        setEffort(a.effort ?? '');
         setRoles(a.roles ?? []);
         setGroups(a.groups ?? []);
         setPermissions(a.permissions ?? []);
@@ -245,6 +248,7 @@ export function AgentSettingsModal({
         autoCompactPct: nextPct,
         provider,
         model: model || null,
+        effort: effort || null,
         roles,
         groups,
         permissions,
@@ -490,6 +494,43 @@ export function AgentSettingsModal({
                           {provider === 'opencodeGo'
                             ? "Picked from OpenCode Go's catalog. Switches live on save."
                             : 'The model this agent\'s claude runs — switches live. "Default" uses claude\'s own default.'}
+                        </p>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Select
+                          fullWidth
+                          value={effort || MODEL_DEFAULT_KEY}
+                          onChange={(v) => {
+                            const k = String(v ?? MODEL_DEFAULT_KEY);
+                            setEffort(k === MODEL_DEFAULT_KEY ? '' : k);
+                          }}
+                        >
+                          <Label className="text-sm">Effort</Label>
+                          <Select.Trigger>
+                            <Select.Value />
+                            <Select.Indicator />
+                          </Select.Trigger>
+                          <Select.Popover>
+                            <ListBox>
+                              {EFFORT_OPTIONS.map((opt) => (
+                                <ListBox.Item
+                                  key={opt.value || MODEL_DEFAULT_KEY}
+                                  id={opt.value || MODEL_DEFAULT_KEY}
+                                  textValue={opt.label}
+                                >
+                                  {opt.label}
+                                  <ListBox.ItemIndicator />
+                                </ListBox.Item>
+                              ))}
+                            </ListBox>
+                          </Select.Popover>
+                        </Select>
+                        <p className="text-muted text-xs">
+                          Reasoning effort — switches live on save.{' '}
+                          {effort === 'ultracode'
+                            ? 'Ultracode = max effort + multi-agent Workflow orchestration; best on agents sized up beyond the 2-core / 4 GB default.'
+                            : '"Default" uses claude\'s own.'}
                         </p>
                       </div>
 

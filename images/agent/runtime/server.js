@@ -101,6 +101,13 @@ function settingsEnv() {
       env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = String(Math.round(pct));
     if (typeof identity.model === 'string' && identity.model.trim())
       env.ANTHROPIC_MODEL = identity.model.trim();
+    // Reasoning effort. CLAUDE_CODE_EFFORT_LEVEL (unlike the --effort flag)
+    // accepts "ultracode" (= max effort + Workflow orchestration). Unset →
+    // claude's default effort.
+    if (typeof identity.effort === 'string' && identity.effort.trim()) {
+      env.CLAUDE_CODE_EFFORT_LEVEL = identity.effort.trim().toLowerCase();
+      env.CLAUDE_CODE_ALWAYS_ENABLE_EFFORT = '1';
+    }
   }
   // Bound ultracode/Workflow subagent fan-out to what the container's real
   // cgroup limits can hold, so a big workflow doesn't OOM-kill the session (the

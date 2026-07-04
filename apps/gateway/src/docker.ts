@@ -71,6 +71,9 @@ const MEMORY_LABEL = 'swarm.memoryMb';
 const TZ_LABEL = 'swarm.timezone';
 /** Hostname-safe id: alphanumerics + hyphens, 1–31 chars. */
 const VALID_ID = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,30}$/;
+/** Accepted CLAUDE_CODE_EFFORT_LEVEL values (the `--effort` flag rejects
+ *  "ultracode", but the env + `/effort` slash command accept it). */
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'];
 /** How long the persisted cpu/mem resource history is kept (7 days). */
 const USAGE_RETAIN_MS = 7 * 24 * 3_600_000;
 /** Hard cap on a single agent's guidance (chars) — bounds the file claude loads
@@ -107,6 +110,10 @@ interface AgentIdentity {
   /** ANTHROPIC_MODEL the agent's claude runs (alias like "opus"/"sonnet"/"haiku"
    *  or a full model id); null/empty = the claude default. */
   model?: string | null;
+  /** Reasoning effort for the agent's claude session (CLAUDE_CODE_EFFORT_LEVEL):
+   *  one of low/medium/high/xhigh/max/ultracode; null/empty = the claude default.
+   *  "ultracode" = max effort + multi-agent Workflow orchestration. */
+  effort?: string | null;
   /** Assigned role ids + group ids (resolved against the global registries). */
   roles?: string[];
   groups?: string[];
@@ -281,6 +288,7 @@ export class AgentManager {
         patch.autoCompactPct !== undefined ? patch.autoCompactPct : (cur?.autoCompactPct ?? null),
       provider: patch.provider !== undefined ? patch.provider : (cur?.provider ?? 'anthropic'),
       model: patch.model !== undefined ? patch.model : (cur?.model ?? null),
+      effort: patch.effort !== undefined ? patch.effort : (cur?.effort ?? null),
       roles: patch.roles !== undefined ? patch.roles : (cur?.roles ?? []),
       groups: patch.groups !== undefined ? patch.groups : (cur?.groups ?? []),
       permissions: patch.permissions !== undefined ? patch.permissions : (cur?.permissions ?? []),
@@ -330,6 +338,7 @@ export class AgentManager {
       autoCompactPct?: number | null;
       provider?: Provider;
       model?: string | null;
+      effort?: string | null;
       roles?: string[];
       groups?: string[];
       permissions?: Capability[];
@@ -388,6 +397,10 @@ export class AgentManager {
       const m = patch.model?.trim();
       idPatch.model = m ? m : null; // empty/whitespace → clear back to default
     }
+    if (patch.effort !== undefined) {
+      const e = patch.effort?.trim().toLowerCase();
+      idPatch.effort = e && EFFORT_LEVELS.includes(e) ? e : null; // unknown/empty → default
+    }
     if (Array.isArray(patch.roles)) idPatch.roles = patch.roles;
     if (Array.isArray(patch.groups)) idPatch.groups = patch.groups;
     if (Array.isArray(patch.permissions)) idPatch.permissions = patch.permissions as Capability[];
@@ -401,6 +414,7 @@ export class AgentManager {
     // to the image default (UTC). Like cpus/mem, it applies on the next recreate.
     if (patch.timezone !== undefined) idPatch.timezone = patch.timezone?.trim() || null;
     const prevModel = this.readIdentity(id)?.model ?? null;
+    const prevEffort = this.readIdentity(id)?.effort ?? null;
     const prevProvider = this.readIdentity(id)?.provider ?? 'anthropic';
     const prevDesktop = this.readIdentity(id)?.desktop !== false;
     const prevRoles = JSON.stringify(this.readIdentity(id)?.roles ?? []);
@@ -458,6 +472,12 @@ export class AgentManager {
       } else {
         void this.injectToTerminal(id, `/model ${idPatch.model || 'default'}`).catch(() => {});
       }
+    }
+    // Switch the effort LIVE via the `/effort` slash command (accepts ultracode,
+    // unlike the --effort flag). CLAUDE_CODE_EFFORT_LEVEL persists it across the
+    // next (re)spawn; this makes the change take effect now without a restart.
+    if (patch.effort !== undefined && idPatch.effort !== prevEffort && info.State.Running) {
+      void this.injectToTerminal(id, `/effort ${idPatch.effort || 'default'}`).catch(() => {});
     }
     // Desktop toggle: sync the on-disk marker (boot-time gate) and, when the
     // agent is running, also live-stop/-start the desktop units via docker
@@ -2089,6 +2109,8 @@ export class AgentManager {
         : undefined;
     const timezone = opts.timezone?.trim() || undefined;
     const model = opts.model?.trim() || undefined;
+    const effortRaw = opts.effort?.trim().toLowerCase();
+    const effort = effortRaw && EFFORT_LEVELS.includes(effortRaw) ? effortRaw : undefined;
     const name = this.containerName(id);
 
     // Tag with the stack's compose project so Docker UIs (Portainer) nest the
@@ -2113,6 +2135,7 @@ export class AgentManager {
       memoryMb: memoryMb ?? null,
       provider: opts.provider ?? 'anthropic',
       model: model ?? null,
+      effort: effort ?? null,
       roles: Array.isArray(opts.roles) ? opts.roles : [],
       groups: Array.isArray(opts.groups) ? opts.groups : [],
       desktop: opts.desktop !== false,
@@ -2405,6 +2428,7 @@ export class AgentManager {
         autoCompactPct: identity?.autoCompactPct ?? null,
         provider: identity?.provider ?? 'anthropic',
         model: identity?.model ?? null,
+        effort: identity?.effort ?? null,
         roles: identity?.roles ?? [],
         groups: identity?.groups ?? [],
         permissions: identity?.permissions ?? [],
@@ -3500,6 +3524,7 @@ export class AgentManager {
       autoCompactPct: this.readIdentity(id)?.autoCompactPct ?? null,
       provider: this.readIdentity(id)?.provider ?? 'anthropic',
       model: this.readIdentity(id)?.model ?? null,
+      effort: this.readIdentity(id)?.effort ?? null,
       roles: this.readIdentity(id)?.roles ?? [],
       groups: this.readIdentity(id)?.groups ?? [],
       permissions: this.readIdentity(id)?.permissions ?? [],

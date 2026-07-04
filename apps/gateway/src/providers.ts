@@ -21,6 +21,7 @@ const ANTHROPIC: ProviderInfo = {
     { label: 'Opus', value: 'opus' },
     { label: 'Sonnet', value: 'sonnet' },
     { label: 'Haiku', value: 'haiku' },
+    { label: 'Fable', value: 'fable' },
   ],
 };
 
