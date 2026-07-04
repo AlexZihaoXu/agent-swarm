@@ -6,9 +6,9 @@ import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { LuPackage, LuScrollText, LuSettings } from 'react-icons/lu';
-import { getImageStatus, listAgents, type Agent } from '@/lib/gateway';
-import { AgentCard } from './AgentCard';
+import { getImageStatus, listAgents, listGroups, type Agent, type Group } from '@/lib/gateway';
 import { CreateAgentModal } from './CreateAgentModal';
+import { FleetView } from './FleetView';
 import { DashboardChat } from './DashboardChat';
 // Lazy-loaded so recharts/d3 (heavy, and below the fold) stay out of the initial
 // client bundle — the dashboard shell becomes interactive without waiting on them.
@@ -27,6 +27,7 @@ const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
 export default function HomePage() {
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [groups, setGroups] = useState<Group[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [imagePresent, setImagePresent] = useState<boolean | null>(null);
@@ -43,6 +44,16 @@ export default function HomePage() {
     }
   }, []);
 
+  // Groups change rarely — fetch once up front (and on demand via refresh) so the
+  // "group by group" view has names for each section.
+  const refreshGroups = useCallback(async () => {
+    try {
+      setGroups(await listGroups());
+    } catch {
+      /* keep last-known groups */
+    }
+  }, []);
+
   const refreshImage = useCallback(async () => {
     try {
       setImagePresent((await getImageStatus()).present);
@@ -55,9 +66,10 @@ export default function HomePage() {
   useEffect(() => {
     void refresh();
     void refreshImage();
+    void refreshGroups();
     const t = setInterval(() => void refresh(), 4000);
     return () => clearInterval(t);
-  }, [refresh, refreshImage]);
+  }, [refresh, refreshImage, refreshGroups]);
 
   return (
     <DashboardSettingsProvider>
@@ -168,26 +180,13 @@ export default function HomePage() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.25, ease: EASE }}
-              className="grid grid-cols-1 gap-4 xl:grid-cols-2"
             >
-              <AnimatePresence mode="popLayout">
-                {agents.map((a, i) => (
-                  <motion.div
-                    key={a.id}
-                    layout
-                    initial={{ opacity: 0, y: 12, scale: 0.98 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.96 }}
-                    transition={{ duration: 0.4, ease: EASE, delay: Math.min(i, 8) * 0.06 }}
-                  >
-                    <AgentCard
-                      agent={a}
-                      onChanged={() => void refresh()}
-                      taken={agents.map((x) => x.username || x.id)}
-                    />
-                  </motion.div>
-                ))}
-              </AnimatePresence>
+              <FleetView
+                agents={agents}
+                groups={groups}
+                onChanged={() => void refresh()}
+                taken={agents.map((x) => x.username || x.id)}
+              />
             </motion.div>
           )}
         </AnimatePresence>

@@ -11,6 +11,8 @@ import {
   LuFolderOpen,
   LuMonitor,
   LuPackage,
+  LuPin,
+  LuPinOff,
   LuScrollText,
   LuSettings,
   LuTrash2,
@@ -76,11 +78,17 @@ export function AgentCard({
   agent,
   onChanged,
   taken = [],
+  pinned = false,
+  onTogglePin,
 }: {
   agent: Agent;
   onChanged: () => void;
   /** Display names in use across the fleet — the rename generator avoids them. */
   taken?: string[];
+  /** Whether this agent is pinned "always on top" (fleet layout). */
+  pinned?: boolean;
+  /** Toggle the pin (omitted when the card isn't in the pinnable fleet view). */
+  onTogglePin?: () => void;
 }) {
   const router = useRouter();
   const running = agent.status === 'running';
@@ -115,7 +123,8 @@ export function AgentCard({
 
   const onAction = (key: string) => {
     setMenuPos(null);
-    if (key === 'open') router.push(`/agents/${agent.id}/desktop`);
+    if (key === 'pin') onTogglePin?.();
+    else if (key === 'open') router.push(`/agents/${agent.id}/desktop`);
     else if (key === 'logs') router.push(`/logs?agent=${encodeURIComponent(agent.id)}`);
     else if (key === 'start') void act(() => startAgent(agent.id));
     else if (key === 'compact') void act(() => compactAgent(agent.id));
@@ -158,12 +167,37 @@ export function AgentCard({
               title={agent.username || agent.id}
               className="size-6 shrink-0 rounded-md"
             />
-            <h3 className="truncate font-semibold">{agent.username || agent.id}</h3>
+            {/* Name → open the agent page (pointer + underline on hover). */}
+            <Link
+              href={`/agents/${agent.id}/desktop`}
+              className="decoration-muted/60 min-w-0 truncate font-semibold hover:underline hover:underline-offset-2"
+            >
+              {agent.username || agent.id}
+            </Link>
+            {/* Pin toggle (only in the fleet view, which supplies onTogglePin).
+                Accent = pinned; the colour conveys state, so no extra glyph. */}
+            {onTogglePin && (
+              <button
+                aria-label={pinned ? 'Unpin agent' : 'Pin agent to top'}
+                title={pinned ? 'Pinned — click to unpin' : 'Pin to top'}
+                aria-pressed={pinned}
+                className={`ml-auto shrink-0 rounded p-1 transition-colors ${
+                  pinned
+                    ? 'text-accent hover:bg-surface-secondary'
+                    : 'text-muted hover:text-foreground hover:bg-surface-secondary'
+                }`}
+                onClick={onTogglePin}
+              >
+                <LuPin className={`size-4 ${pinned ? 'fill-current' : ''}`} />
+              </button>
+            )}
             {/* Tap target for the actions menu — on touch there's no right-click. */}
             <button
               aria-label={`Actions for ${agent.username || agent.id}`}
               title="Actions"
-              className="text-muted hover:text-foreground hover:bg-surface-secondary ml-auto shrink-0 rounded p-1"
+              className={`text-muted hover:text-foreground hover:bg-surface-secondary shrink-0 rounded p-1 ${
+                onTogglePin ? '' : 'ml-auto'
+              }`}
               onClick={(e) => {
                 const r = e.currentTarget.getBoundingClientRect();
                 setMenuPos({ x: r.right, y: r.bottom });
@@ -224,6 +258,18 @@ export function AgentCard({
                 </span>
                 <Label>Open</Label>
               </Dropdown.Item>
+              {onTogglePin ? (
+                <Dropdown.Item id="pin" textValue={pinned ? 'Unpin' : 'Pin'}>
+                  <span className="flex items-center justify-center">
+                    {pinned ? (
+                      <LuPinOff className="text-muted size-4 shrink-0" />
+                    ) : (
+                      <LuPin className="text-muted size-4 shrink-0" />
+                    )}
+                  </span>
+                  <Label>{pinned ? 'Unpin' : 'Pin to top'}</Label>
+                </Dropdown.Item>
+              ) : null}
               {running ? (
                 <Dropdown.Item id="stop" textValue="Stop">
                   <span className="flex items-center justify-center">
