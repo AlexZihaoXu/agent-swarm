@@ -223,12 +223,9 @@ export function AgentCard({
                 Desktop off
               </span>
             )}
+            {/* Inline next to the activity line; the bar adapts to the width left. */}
+            {agent.compacting && <CompactingBadge progress={agent.compactingProgress ?? 0} />}
           </div>
-          {agent.compacting && (
-            <div className="mt-2">
-              <CompactingBadge progress={agent.compactingProgress ?? 0} />
-            </div>
-          )}
         </div>
       </div>
 
