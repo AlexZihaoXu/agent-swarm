@@ -102,6 +102,11 @@ function settingsEnv() {
     if (typeof identity.model === 'string' && identity.model.trim())
       env.ANTHROPIC_MODEL = identity.model.trim();
   }
+  // Bound ultracode/Workflow subagent fan-out to what the container's real
+  // cgroup limits can hold, so a big workflow doesn't OOM-kill the session (the
+  // container's /proc over-reports host cpu/mem — see toolConcurrencyCap).
+  const cap = toolConcurrencyCap();
+  if (cap !== null) env.CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY = String(cap);
   return env;
 }
 
@@ -280,6 +285,48 @@ function cgroupMemLimit() {
     /* cgroup v1 / unreadable — fall through */
   }
   return os.totalmem();
+}
+
+// Real CPU quota (cores) from cgroup v2's cpu.max ("quota period"). null when
+// uncapped. Like memory, the container's /proc/cpuinfo reports the HOST's cores,
+// so this is the only honest per-agent core count.
+function cgroupCpuQuota() {
+  try {
+    const v = fs.readFileSync('/sys/fs/cgroup/cpu.max', 'utf8').trim();
+    const [q, p] = v.split(/\s+/);
+    if (q && q !== 'max') {
+      const quota = parseInt(q, 10);
+      const period = parseInt(p, 10) || 100000;
+      if (quota > 0 && period > 0) return quota / period;
+    }
+  } catch {
+    /* cgroup v1 / unreadable */
+  }
+  return null;
+}
+
+// Cap on concurrent tool/subagent spawns for this agent's claude.
+//
+// The container's /proc reports the HOST's cpu + memory (e.g. 16 cores / 30 GB)
+// even though cgroups hard-cap it far lower (default 2 cores / 4 GB). Claude
+// Code's ultracode/Workflow orchestration sizes its subagent fan-out from that
+// inflated core count (~min(16, cores-2) = 14 subagents) and believes it has
+// 30 GB — so a workflow spawns far more subagent processes (~0.5 GB RSS each)
+// than fit and the cgroup OOM-kills the whole session. We derive a cap from the
+// REAL cgroup limits and export it as CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY so
+// fan-out scales to what actually fits, regardless of the agent's size.
+function toolConcurrencyCap() {
+  const memBytes = cgroupMemLimit(); // real cap, or host total if uncapped
+  const cores = cgroupCpuQuota(); // real quota (cores), or null if uncapped
+  const memCapped = memBytes < os.totalmem() * 0.95;
+  // Genuinely unconstrained (bare metal / no limits) → let claude decide.
+  if (!memCapped && cores === null) return null;
+  const memMB = memBytes / (1024 * 1024);
+  const RESERVE_MB = 2048; // parent claude + GNOME desktop + supervisor headroom
+  const PER_AGENT_MB = 550; // ~RSS of one extra claude subagent
+  const byMem = Math.floor((memMB - RESERVE_MB) / PER_AGENT_MB);
+  const byCpu = cores ? Math.max(1, Math.round(cores) * 2) : 12;
+  return Math.max(1, Math.min(byMem, byCpu, 12));
 }
 
 function systemSnapshot() {
