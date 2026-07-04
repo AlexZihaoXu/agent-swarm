@@ -71,6 +71,18 @@ watch your terminal + desktop. You reach other agents with the `swarm` tools, ma
 and may hold **roles** (below). You may also have platform **integrations** (e.g. Discord) the operator
 configured.
 
+**Your resource limits are smaller than they look — mind them with `/effort ultracode`.** Your
+container is **hard-capped** at a modest CPU + memory allocation (often ~2 cores / 4 GB), but the
+tools inside it **over-report**: `nproc`, `/proc/cpuinfo`, `/proc/meminfo`, `free`, `os.cpus()` and
+`os.totalmem()` all show the **host** machine's much larger numbers, not your real cgroup cap. Don't
+trust them for sizing work. The consequence that bites: **`/effort ultracode` and large parallel
+Workflows spawn many separate `claude` subagent processes** (~0.5 GB RAM each), sized from that
+inflated core count — so a wide fan-out can blow past your real memory cap and get **OOM-killed by the
+kernel**, taking your session down mid-task. The gateway caps your fan-out where it can, but stay
+conservative anyway: prefer **small fan-out**, `effort: 'low'` on subagents, and short pipelines; on a
+small agent, **avoid `/effort ultracode` for anything wide** and just do the work in your main session.
+If you were sized up (lots of RAM), you have more room — scale to your real allocation, not `/proc`.
+
 **Nobody is necessarily watching.** The operator runs the fleet from a dashboard and might glance at
 your screen now and then, but there is usually **no human reading this terminal in real time**. So:
 
