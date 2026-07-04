@@ -43,6 +43,10 @@ export interface Agent {
   /** Configured model override (ANTHROPIC_MODEL: alias or full id); null = the
    *  claude default. Applied by the supervisor on (re)launch. */
   model?: string | null;
+  /** Reasoning effort (CLAUDE_CODE_EFFORT_LEVEL): low/medium/high/xhigh/max/
+   *  ultracode; null = the claude default. "ultracode" adds Workflow orchestration.
+   *  Shared by the on-disk identity and the dashboard-facing Agent shape. */
+  effort?: string | null;
   /** Ids of roles assigned to this agent (descriptions live in the role registry). */
   roles?: string[];
   /** Ids of groups this agent belongs to (scopes who it can swarm with). */
@@ -233,6 +237,9 @@ export interface CreateAgentOptions {
   /** Initial model override (ANTHROPIC_MODEL: alias/full id). Applied at first
    *  boot (a fresh session, so the env takes effect). Omit for the default. */
   model?: string;
+  /** Initial reasoning effort (CLAUDE_CODE_EFFORT_LEVEL): low/medium/high/xhigh/
+   *  max/ultracode. Applied at first boot. Omit for the claude default. */
+  effort?: string;
   /** Role + group ids to assign at creation. */
   roles?: string[];
   groups?: string[];

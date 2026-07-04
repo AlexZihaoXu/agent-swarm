@@ -19,6 +19,8 @@ export interface Agent {
   provider?: Provider;
   /** Configured model override (ANTHROPIC_MODEL); null = claude default. */
   model?: string | null;
+  /** Reasoning effort (CLAUDE_CODE_EFFORT_LEVEL); null = claude default. */
+  effort?: string | null;
   /** Assigned role ids + group ids. */
   roles?: string[];
   groups?: string[];
@@ -150,6 +152,8 @@ export interface CreateAgentOptions {
   provider?: Provider;
   /** Initial model override (ANTHROPIC_MODEL alias/id); omit for default. */
   model?: string;
+  /** Initial reasoning effort (low/medium/high/xhigh/max/ultracode); omit for default. */
+  effort?: string;
   /** Role + group ids to assign at creation. */
   roles?: string[];
   groups?: string[];
@@ -656,6 +660,18 @@ export const METRICS_RANGES: { key: string; label: string; hours: number }[] = [
   { key: '3d', label: '3 days', hours: 72 },
   { key: '7d', label: '7 days', hours: 168 },
 ];
+
+/** Reasoning-effort options for the agent's claude session. `''` = the model's
+ *  default. "ultracode" is max effort + multi-agent Workflow orchestration. */
+export const EFFORT_OPTIONS: { label: string; value: string }[] = [
+  { label: 'Default', value: '' },
+  { label: 'Low', value: 'low' },
+  { label: 'Medium', value: 'medium' },
+  { label: 'High', value: 'high' },
+  { label: 'Extra high', value: 'xhigh' },
+  { label: 'Max', value: 'max' },
+  { label: 'Ultracode', value: 'ultracode' },
+];
 /** Global usage metrics over the requested window (defaults to 12h). */
 export const getMetrics = (hours = 12) => api<Metrics>(`/api/metrics?hours=${hours}`);
 
@@ -786,6 +802,9 @@ export const updateAgent = (
     autoCompactPct?: number | null;
     provider?: Provider;
     model?: string | null;
+    /** Reasoning effort (low/medium/high/xhigh/max/ultracode); empty clears it.
+     *  Switches live via `/effort`, and persists across the next restart. */
+    effort?: string | null;
     roles?: string[];
     groups?: string[];
     permissions?: Capability[];
