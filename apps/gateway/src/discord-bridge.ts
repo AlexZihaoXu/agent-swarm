@@ -179,11 +179,21 @@ export class DiscordBridge {
         /* presence is best-effort */
       }
     };
-    const setPresence = (s: 'online' | 'idle') => {
-      if (presence === s) return;
+    /** Apply unconditionally. Needed wherever Discord may have discarded our
+     *  presence — a session that can't RESUME re-IDENTIFYs, and Discord then
+     *  defaults the bot to online — because the equality guard in setPresence
+     *  would otherwise leave Discord and the dashboard disagreeing. */
+    const forcePresence = (s: 'online' | 'idle') => {
       presence = s;
       applyPresence();
     };
+    const setPresence = (s: 'online' | 'idle') => {
+      if (presence === s) return;
+      forcePresence(s);
+    };
+    /** What our presence SHOULD be right now, from the attention model. */
+    const intendedPresence = (): 'online' | 'idle' =>
+      Date.now() < onlineUntil ? 'online' : 'idle';
     // Agent-set custom status. Empty clears it; re-applied on every presence
     // change. Lives for this connection (reset if the bot reconnects).
     const setCustom = (text: string) => {
@@ -235,7 +245,12 @@ export class DiscordBridge {
       nudgeTimer.unref?.();
     };
 
-    client.once(Events.ClientReady, () => setPresence('idle'));
+    // `on`, not `once`: discord.js reconnects on its own, and every fresh
+    // IDENTIFY resets the bot's presence server-side. Re-asserting on each
+    // ready/resume is what keeps Discord and the dashboard in agreement.
+    client.on(Events.ClientReady, () => forcePresence(intendedPresence()));
+    client.on(Events.ShardReady, () => forcePresence(intendedPresence()));
+    client.on(Events.ShardResume, () => forcePresence(intendedPresence()));
 
     // The agent reacting to a message counts as a response.
     client.on(Events.MessageReactionAdd, (_reaction, user) => {
@@ -340,8 +355,10 @@ export class DiscordBridge {
     // brings the agent back online to catch up. Only fires while unread > 0.
     const timer = setInterval(() => {
       try {
+        // Re-assert every sweep so any drift self-heals within a minute rather
+        // than persisting until the next reconnect.
+        forcePresence(intendedPresence());
         if (Date.now() < onlineUntil) return; // still online
-        setPresence('idle');
         const total = [...unread.values()].reduce((a, b) => a + b, 0);
         if (total === 0) return;
         const channels = [...unread.keys()];

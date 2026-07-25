@@ -117,7 +117,7 @@ export default function AgentLayout({
             >
               <LuSettings className="size-4" />
             </Button>
-            <div className="ml-auto hidden min-w-0 md:flex">
+            <div className="ml-auto hidden min-w-0 flex-1 justify-end sm:flex">
               <AgentStatsBar agentId={id} />
             </div>
             {segment === 'desktop' && (

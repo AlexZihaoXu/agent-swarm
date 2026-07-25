@@ -12,6 +12,7 @@ import {
   type ReactNode,
 } from 'react';
 import {
+  LuEllipsis,
   LuArrowDown,
   LuArrowUp,
   LuCoins,
@@ -456,14 +457,39 @@ export function AgentStatsInline({ stats: s }: { stats: AgentStats | null }) {
 /** Fuller readout for the agent view header. */
 export function AgentStatsBar({ agentId }: { agentId: string }) {
   const s = useAgentStatsShared(agentId);
+  /** Available width vs. the bar's natural width. */
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const measureRef = useRef<HTMLDivElement>(null);
+  const [collapsed, setCollapsed] = useState(false);
+
+  // Collapse when the full bar can't fit. The measurement is taken from a
+  // hidden copy that ALWAYS renders the full content, never the collapsed
+  // form — measuring the visible node instead would shrink it on collapse,
+  // making it fit again, and the bar would oscillate forever.
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    const probe = measureRef.current;
+    if (!wrap || !probe) return;
+    const check = () => {
+      const need = probe.scrollWidth;
+      const have = wrap.clientWidth;
+      // A few px of hysteresis so a borderline fit doesn't flicker.
+      setCollapsed((prev) => (prev ? need > have - 8 : need > have));
+    };
+    const ro = new ResizeObserver(check);
+    ro.observe(wrap);
+    ro.observe(probe);
+    check();
+    return () => ro.disconnect();
+  }, [s]);
+
   if (!s) return null;
   const t = s.tokens;
   // New tokens (exclude cache reads — repeated re-reads of the same context).
   const total = t.input + t.output + t.cacheCreation;
-  return (
-    <div className="text-muted ml-auto flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-      {s.model && <span className="text-foreground font-semibold">{s.model}</span>}
-      {s.status && <ActivityBadge status={s.status} />}
+
+  const metrics = (
+    <>
       {total > 0 && (
         <>
           <Metric icon={<LuArrowUp className="size-3" />} title="input tokens">
@@ -487,7 +513,6 @@ export function AgentStatsBar({ agentId }: { agentId: string }) {
           </Metric>
         </>
       )}
-      {s.context > 0 && <ContextCircle used={s.context} model={s.model} limit={s.contextLimit} />}
       {s.cost != null && s.cost > 0 && (
         <Metric icon={<LuDollarSign className="size-3" />} title="session cost (USD)">
           <Cost value={s.cost} />
@@ -500,6 +525,51 @@ export function AgentStatsBar({ agentId }: { agentId: string }) {
         </span>
       )}
       {s.exceeds200k && <span className="text-warning">200k+</span>}
+    </>
+  );
+
+  /** Kept visible even when collapsed — the identity and the one number you'd
+   *  actually watch (how full the context is). */
+  const essentials = (
+    <>
+      {s.model && <span className="text-foreground font-semibold">{s.model}</span>}
+      {s.status && <ActivityBadge status={s.status} />}
+      {s.context > 0 && <ContextCircle used={s.context} model={s.model} limit={s.contextLimit} />}
+    </>
+  );
+
+  return (
+    <div ref={wrapRef} className="relative ml-auto min-w-0 flex-1">
+      {/* Hidden probe: the full bar at its natural width, used only for
+          measurement. aria-hidden so it isn't announced twice. */}
+      <div
+        ref={measureRef}
+        aria-hidden
+        className="text-muted pointer-events-none invisible absolute top-0 left-0 flex items-center gap-x-3 text-xs whitespace-nowrap"
+      >
+        {essentials}
+        {metrics}
+      </div>
+
+      <div className="text-muted flex items-center justify-end gap-x-3 text-xs whitespace-nowrap">
+        {essentials}
+        {collapsed ? (
+          // Everything that didn't fit, one hover away.
+          <Tooltip>
+            <Tooltip.Trigger className="hover:text-foreground cursor-pointer px-1 leading-none">
+              <LuEllipsis className="size-4" />
+            </Tooltip.Trigger>
+            <Tooltip.Content showArrow className="max-w-[320px]">
+              <Tooltip.Arrow />
+              <div className="text-muted flex flex-wrap items-center gap-x-3 gap-y-1 px-1 py-1.5 text-xs">
+                {metrics}
+              </div>
+            </Tooltip.Content>
+          </Tooltip>
+        ) : (
+          metrics
+        )}
+      </div>
     </div>
   );
 }
