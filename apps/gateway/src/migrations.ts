@@ -191,6 +191,21 @@ export const migrations: Migration[] = [
       await ctx.exec('chown agent:agent /home/agent/CLAUDE.md; systemctl restart agent-terminals');
     },
   },
+  {
+    version: 16,
+    name: 'swarm tools: swarm_set_effort (self-enable ultracode at runtime)',
+    apply: async (ctx) => {
+      // Ship the MCP tool script itself, not the whole tools/ dir — the image
+      // builds discord-mcp's node_modules in place under /opt/agent-tools, and
+      // a putDir would overwrite that tree with the un-built source.
+      await ctx.putFile('tools/swarm.py', '/opt/agent-tools/swarm.py');
+      // Restart the claude session so it re-registers the swarm MCP tool list
+      // (transcript persists).
+      await ctx.exec(
+        'chown agent:agent /opt/agent-tools/swarm.py; systemctl restart agent-terminals',
+      );
+    },
+  },
 ];
 
 /** Highest migration version (the version a fully up-to-date agent is at). */

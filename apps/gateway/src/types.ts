@@ -99,6 +99,7 @@ export type Capability =
   | 'view_stats'
   | 'dashboard_alerts'
   | 'toggle_desktop'
+  | 'set_effort'
   | 'restart_self';
 
 /** Which upstream the agent's claude session uses. 'anthropic' = direct OAuth

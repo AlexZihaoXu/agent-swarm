@@ -2968,6 +2968,37 @@ export class AgentManager {
     return { ok: true, desktop: enabled };
   }
 
+  /** Capability-gated SELF effort switch (the `set_effort` role permission) —
+   *  how an agent turns ultracode on for a hard task and back down afterwards.
+   *  Self-scoped, like the desktop toggle above.
+   *
+   *  Deliberately routes through patchAgent rather than injecting `/effort`
+   *  directly: patchAgent both persists identity.effort (so the level survives
+   *  the next claude respawn via CLAUDE_CODE_EFFORT_LEVEL) AND runs the slash
+   *  command live. Injecting alone would apply now but silently revert on the
+   *  next respawn, leaving the stored setting and the running session out of
+   *  sync — the exact bug the operator-side Effort select already avoids. */
+  async setEffortSelf(fromId: string, effortRaw: string): Promise<{ ok: true; effort: string }> {
+    if (!this.agentCan(fromId, 'set_effort'))
+      throw Object.assign(new Error('your role does not permit changing your reasoning effort'), {
+        statusCode: 403,
+      });
+    const effort = String(effortRaw ?? '')
+      .trim()
+      .toLowerCase();
+    // '' / 'default' both clear the override back to the account default.
+    const normalized = effort === 'default' ? '' : effort;
+    if (normalized && !EFFORT_LEVELS.includes(normalized))
+      throw Object.assign(
+        new Error(
+          `unknown effort "${effort}" — use one of ${EFFORT_LEVELS.join(', ')}, or default`,
+        ),
+        { statusCode: 400 },
+      );
+    await this.patchAgent(fromId, { effort: normalized });
+    return { ok: true, effort: normalized || 'default' };
+  }
+
   /** Append to the CALLER'S OWN guidance (its ~/.claude/CLAUDE.md). Append-only
    *  and size-capped: an agent can record something for its future self but can't
    *  rewrite or wipe what's there — the operator can, from the agent's Settings.

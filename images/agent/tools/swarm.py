@@ -271,6 +271,39 @@ def toggle_desktop(args: dict) -> dict:
     )
 
 
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max", "ultracode", "default")
+
+
+def set_effort(args: dict) -> dict:
+    level = str(args.get("effort") or "").strip().lower()
+    if level not in EFFORT_LEVELS:
+        return _err(f"'effort' must be one of: {', '.join(EFFORT_LEVELS)}")
+    me = _identity()
+    try:
+        r = _http("POST", "/api/swarm/effort", {"fromId": me["id"], "effort": level})
+    except urllib.error.HTTPError as e:
+        if e.code == 403:
+            return _err(
+                "your role lacks the 'set own reasoning effort' capability — ask the operator to "
+                "grant it to one of your roles."
+            )
+        return _err(f"HTTP {e.code}: {e.read().decode()[:200]}")
+    except Exception as e:  # noqa: BLE001
+        return _err(str(e))
+    now = (r or {}).get("effort") or "default"
+    tail = (
+        " Ultracode is max effort PLUS multi-agent Workflow orchestration — much slower and far "
+        "more tokens, and it wants more than the default 2-core / 4 GB. Drop back down when the "
+        "hard part is done."
+        if now == "ultracode"
+        else ""
+    )
+    return _ok(
+        f"reasoning effort is now {now}. It applies from your next turn and persists across a "
+        f"session respawn.{tail}"
+    )
+
+
 def agent_stats(args: dict) -> dict:
     to = str(args.get("agent") or "").strip()
     if not to:
@@ -551,6 +584,30 @@ TOOLS = [
         },
         ["enabled"],
         toggle_desktop,
+    ),
+    (
+        "swarm_set_effort",
+        "Change YOUR OWN reasoning-effort level at runtime — this is how you self-enable "
+        "'ultracode' for a genuinely hard task, and how you drop back down afterwards. Runs "
+        "Claude Code's /effort <level> in your own session, so it applies from your very next "
+        "turn with no restart, and it is persisted so it survives a session respawn. "
+        "'ultracode' = max effort plus multi-agent Workflow orchestration: substantially slower, "
+        "far more tokens, and it wants headroom beyond the default 2-core / 4 GB agent — pick it "
+        "deliberately, not by default. 'default' clears the override. "
+        "Self-only — cannot change a peer's effort. Requires a role with the "
+        "'set own reasoning effort' permission (403 otherwise).",
+        {
+            "effort": {
+                "type": "string",
+                "enum": list(EFFORT_LEVELS),
+                "description": (
+                    "Effort level: low | medium | high | xhigh | max | ultracode | default "
+                    "(default clears the override)"
+                ),
+            },
+        },
+        ["effort"],
+        set_effort,
     ),
     (
         "swarm_append_guidance",

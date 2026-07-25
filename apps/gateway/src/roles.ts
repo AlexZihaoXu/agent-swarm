@@ -63,6 +63,14 @@ export const CAPABILITIES: {
       "Tool: swarm_toggle_desktop(enabled). `enabled` = true to bring the GNOME + noVNC stack up, false to stop it (saves ~2 GB RSS — gnome-shell, mutter, chrome, etc.). Scope: self only — you can't toggle a peer's desktop. The change takes effect immediately via systemctl start/stop tigervncserver@:1 novnc, and the marker on disk also gates the next boot. Your claude TUI session keeps running through the toggle.",
   },
   {
+    key: 'set_effort',
+    label: 'Set own reasoning effort',
+    description:
+      "Change this agent's own reasoning-effort level at runtime — including turning on ultracode for a hard task, and turning it back down when done. Scope: self only.",
+    mcpHelp:
+      "Tool: swarm_set_effort(effort). `effort` = one of low, medium, high, xhigh, max, ultracode, or default (clears the override). Runs Claude Code's `/effort <level>` slash command in your own TUI, so it applies to your very next turn — no restart. The level is also persisted to your identity, so it survives a session respawn instead of silently reverting. Scope: self only — you can never change a peer's effort. Ultracode means max effort plus multi-agent Workflow orchestration: it is substantially slower and burns far more tokens, and it wants headroom beyond the default 2-core / 4 GB agent, so switch to it deliberately for genuinely hard work and drop back down afterwards.",
+  },
+  {
     key: 'restart_self',
     label: 'Restart self',
     description:

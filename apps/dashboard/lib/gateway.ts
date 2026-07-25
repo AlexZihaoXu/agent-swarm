@@ -56,7 +56,9 @@ export type Capability =
   | 'compact_agents'
   | 'view_stats'
   | 'dashboard_alerts'
-  | 'toggle_desktop';
+  | 'toggle_desktop'
+  | 'set_effort'
+  | 'restart_self';
 
 export interface Role {
   id: string;

@@ -418,6 +418,20 @@ export async function handleApi(
       });
       return (sendJson(res, 200, result), true);
     }
+    if (pathname === '/api/swarm/effort') {
+      if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
+      const body = await readJson(req);
+      const result = await manager.setEffortSelf(body.fromId ?? '', String(body.effort ?? ''));
+      logEvent({
+        category: 'swarm',
+        action: 'swarm.set_effort',
+        message: `${body.fromId || '?'} set its reasoning effort to ${result.effort}`,
+        actor: agentActor(req, body),
+        agentId: body.fromId || undefined,
+        meta: { effort: result.effort },
+      });
+      return (sendJson(res, 200, result), true);
+    }
     if (pathname === '/api/swarm/append-guidance') {
       if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
       const body = await readJson(req);
