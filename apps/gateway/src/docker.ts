@@ -3660,12 +3660,6 @@ export class AgentManager {
   }
 
   /**
-   * Run every pending migration in order against a live agent, recording the
-   * version after each so a failure leaves a known state. Migrations restart the
-   * terminal supervisor (and thus the always-on claude session — its transcript
-   * is preserved on disk); no recreate.
-   */
-  /**
    * Upgrades in flight, keyed by agent id. A second click JOINS the first
    * instead of racing it.
    *
@@ -3693,37 +3687,95 @@ export class AgentManager {
       .sort((a, b) => a.version - b.version);
     if (!pending.length) return this.upgradeInfo(id);
 
-    // Migrations run `systemctl restart` / `chown` inside the container, which
-    // needs it RUNNING — docker exec can't touch a stopped one. So boot a
-    // stopped agent just for the upgrade and put it back exactly as we found
-    // it. Raw start/stop on purpose, not this.start()/this.stop(): the manager's
+    const info = await container.inspect();
+    const wasRunning = !!info.State.Running;
+
+    // Under SYSBOX a migration cannot be applied in a single container state,
+    // because the two things it needs are available in opposite states
+    // (measured against this fleet):
+    //
+    //                     running     stopped
+    //   putArchive (cp in)  404        works
+    //   docker exec         works      409
+    //
+    // The daemon's archive API can't reach a running sysbox container's
+    // filesystem at all — which is why upgrades silently never worked here; the
+    // agents were only ever stamped at create time. So we split each migration:
+    // copy its files with the container STOPPED, then boot and replay its shell
+    // steps. Every migration is already written as "copy files, then chown +
+    // systemctl restart", so recording the exec calls and replaying them in
+    // order preserves their semantics.
+    //
+    // On plain runc, putArchive works fine on a running container, so we keep
+    // the cheaper in-place path and never bounce a running agent.
+    const splitPhases = info.HostConfig?.Runtime === 'sysbox-runc';
+
+    // Raw start/stop on purpose, not this.start()/this.stop(): the manager's
     // versions re-provision the disk, reconnect Discord, and drop a deliberate-
-    // restart marker that would make the agent announce it was restarted by the
-    // operator — none of which should happen for a maintenance boot.
-    const wasRunning = !!(await container.inspect()).State.Running;
-    if (!wasRunning) {
+    // restart marker that would make the agent announce an operator restart it
+    // never had.
+    const bootFor = (why: string) =>
       logEvent({
         category: 'docker',
         action: 'agent.upgrade.boot',
-        message: `starting stopped agent ${id} to apply ${pending.length} migration(s)`,
+        message: `${why} ${id} to apply ${pending.length} migration(s)`,
         actor: SYSTEM_ACTOR,
         agentId: id,
         target: this.containerName(id),
       });
-      await container.start();
-      await this.waitForSystemd(container);
-    }
+
     try {
-      for (const m of pending) {
-        await m.apply(ctx);
-        await ctx.exec(`echo ${m.version} > ${VERSION_MARKER}`);
+      if (splitPhases) {
+        // ── Phase 1: file copies, container STOPPED ──────────────────────────
+        if (wasRunning) {
+          bootFor('stopping running agent');
+          await this.discord.disconnect(id).catch(() => {});
+          await container.stop().catch(() => {});
+        }
+        const queued: { version: number; cmd: string }[] = [];
+        for (const m of pending) {
+          await m.apply({
+            putDir: ctx.putDir,
+            putFile: ctx.putFile,
+            // Recorded, not run — there is no process to exec into yet.
+            exec: async (cmd) => {
+              queued.push({ version: m.version, cmd });
+              return '';
+            },
+          });
+        }
+
+        // ── Phase 2: shell steps, container RUNNING ──────────────────────────
+        bootFor('starting agent');
+        await container.start();
+        await this.waitForSystemd(container);
+        for (const m of pending) {
+          for (const q of queued.filter((x) => x.version === m.version)) await ctx.exec(q.cmd);
+          // Stamp only after that migration's shell steps actually ran.
+          await ctx.exec(`echo ${m.version} > ${VERSION_MARKER}`);
+        }
+      } else {
+        if (!wasRunning) {
+          bootFor('starting stopped agent');
+          await container.start();
+          await this.waitForSystemd(container);
+        }
+        for (const m of pending) {
+          await m.apply(ctx);
+          await ctx.exec(`echo ${m.version} > ${VERSION_MARKER}`);
+        }
       }
     } finally {
-      // Restore the original state even if a migration threw — a stopped agent
-      // must not be left running because an upgrade failed halfway.
-      if (!wasRunning) {
+      // Put the container back the way we found it, in BOTH directions and even
+      // if a migration threw: a stopped agent must not be left running, and an
+      // agent we stopped for phase 1 must not be left down by a failure there.
+      const now = await container.inspect().catch(() => null);
+      const running = !!now?.State.Running;
+      if (!wasRunning && running) {
         await this.discord.disconnect(id).catch(() => {});
         await container.stop().catch(() => {});
+      } else if (wasRunning && !running) {
+        await container.start().catch(() => {});
       }
     }
     return this.upgradeInfo(id);
