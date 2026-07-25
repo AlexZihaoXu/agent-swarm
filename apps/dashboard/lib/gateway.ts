@@ -373,6 +373,9 @@ export interface DiscordMessage {
   id: string;
   channelId: string;
   content: string;
+  /** Discord message type; anything other than 0/19 is a system event whose
+   *  text Discord synthesizes client-side (see SYSTEM_TEXT in DiscordClient). */
+  type: number;
   timestamp: string;
   editedTimestamp: string | null;
   author: DiscordAuthor;

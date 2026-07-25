@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } fr
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
+  LuArrowRight,
   LuCopy,
   LuCornerUpLeft,
   LuDownload,
@@ -86,6 +87,53 @@ function fmtBytes(n: number): string {
 const chronological = (msgs: DiscordMessage[]) => [...msgs].reverse();
 
 const isImage = (a: DiscordAttachment) => !!a.contentType?.startsWith('image/');
+
+/**
+ * Discord synthesizes system-event text CLIENT-side from the message type — the
+ * payload carries no content at all. A renderer that only prints `content`
+ * therefore shows a blank row, which is exactly what #general's two join
+ * messages were doing.
+ */
+const SYSTEM_TEXT: Record<number, (who: string) => string> = {
+  1: (w) => `${w} added someone to the group.`,
+  2: (w) => `${w} removed someone from the group.`,
+  4: (w) => `${w} changed the channel name.`,
+  5: (w) => `${w} changed the channel icon.`,
+  6: (w) => `${w} pinned a message to this channel.`,
+  7: (w) => `${w} joined the server.`,
+  8: (w) => `${w} boosted the server!`,
+  9: (w) => `${w} boosted the server!`,
+  10: (w) => `${w} boosted the server!`,
+  11: (w) => `${w} boosted the server!`,
+  12: (w) => `${w} added a channel follow here.`,
+  18: (w) => `${w} started a thread.`,
+  21: (w) => `${w} started a thread from a message.`,
+  46: (w) => `A poll from ${w} closed.`,
+};
+/** 0 = normal, 19 = reply; everything else is a system event. */
+const isSystem = (m: DiscordMessage) => m.type !== 0 && m.type !== 19;
+/** True when we'd otherwise render an entirely empty row. */
+const isEmpty = (m: DiscordMessage) =>
+  !m.content.trim() && !m.embeds.length && !m.attachments.length;
+
+/** One-line system event, styled like Discord's: indented, muted, no avatar. */
+function SystemLine({ msg }: { msg: DiscordMessage }) {
+  const who = msg.author.displayName;
+  const text = SYSTEM_TEXT[msg.type]?.(who);
+  return (
+    <div className="text-muted flex items-baseline gap-2 px-4 py-1 text-sm">
+      <LuArrowRight className="text-success size-3.5 shrink-0 translate-y-0.5" />
+      <span className="min-w-0 flex-1">
+        {text ?? (
+          // Never render nothing: an unknown system type still says what it is,
+          // so a blank row can't silently reappear.
+          <span className="italic opacity-70">unsupported message type {msg.type}</span>
+        )}
+      </span>
+      <span className="shrink-0 text-xs opacity-70">{timeLabel(msg.timestamp)}</span>
+    </div>
+  );
+}
 
 /** Pick a file glyph from the MIME type, falling back to the extension. */
 function fileIcon(a: DiscordAttachment) {
@@ -234,7 +282,7 @@ function Embed({
     embed.color !== null ? `#${embed.color.toString(16).padStart(6, '0')}` : 'var(--separator)';
   return (
     <div
-      className="bg-surface-secondary/60 mt-1 max-w-[520px] rounded border-l-4 px-3 py-2"
+      className="bg-surface-secondary/60 mt-1.5 max-w-[520px] rounded border-l-4 px-4 py-3"
       style={{ borderLeftColor: accent }}
     >
       {embed.authorName && <p className="text-xs font-semibold">{embed.authorName}</p>}
@@ -314,7 +362,7 @@ function MessageBlock({
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.18, ease: 'easeOut' }}
       onContextMenu={(e) => onContextMenu(e, msg)}
-      className={`hover:bg-surface-secondary/40 px-4 transition-colors duration-100 ${grouped ? 'py-0.5' : 'mt-4 py-0.5'}`}
+      className={`hover:bg-surface-secondary/40 px-4 transition-colors duration-100 ${grouped ? 'py-1' : 'mt-6 py-1'}`}
     >
       {msg.replyTo && (
         <div className="text-muted mb-1 flex items-center gap-1.5 pl-12 text-xs">
@@ -323,7 +371,7 @@ function MessageBlock({
           <span className="truncate opacity-80">{msg.replyTo.content || '(no text)'}</span>
         </div>
       )}
-      <div className="flex gap-3">
+      <div className="flex gap-4">
         {grouped ? (
           <span className="w-10 shrink-0" />
         ) : (
@@ -336,8 +384,10 @@ function MessageBlock({
         )}
         <div className="min-w-0 flex-1">
           {!grouped && (
-            <div className="flex items-baseline gap-2">
-              <span className="text-foreground text-sm font-medium">{msg.author.displayName}</span>
+            <div className="mb-0.5 flex items-baseline gap-2">
+              <span className="text-foreground text-[0.95rem] font-medium">
+                {msg.author.displayName}
+              </span>
               {msg.author.bot && (
                 <span className="bg-accent text-accent-foreground rounded px-1 py-px text-[10px] font-semibold">
                   BOT
@@ -800,7 +850,7 @@ export function DiscordClient({ agentId }: { agentId: string }) {
             </>
           ) : (
             grouped.map((group) => (
-              <div key={group.category ?? '_'} className="mb-2">
+              <div key={group.category ?? '_'} className="mb-3">
                 {group.category && (
                   <p className="text-muted px-3 py-1 text-[11px] font-semibold tracking-wide uppercase">
                     {group.category}
@@ -814,7 +864,7 @@ export function DiscordClient({ agentId }: { agentId: string }) {
                       setResults(null);
                       setTarget({ kind: 'channel', id: c.id, name: c.name });
                     }}
-                    className={`hover:bg-surface-tertiary mx-2 flex w-[calc(100%-1rem)] cursor-pointer items-center gap-1.5 rounded px-2 py-1 text-left text-sm transition-colors duration-100 ${
+                    className={`hover:bg-surface-tertiary mx-2 flex w-[calc(100%-1rem)] cursor-pointer items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm transition-colors duration-100 ${
                       target?.id === c.id
                         ? 'bg-surface-tertiary text-foreground'
                         : 'text-muted hover:text-foreground'
@@ -960,6 +1010,7 @@ export function DiscordClient({ agentId }: { agentId: string }) {
                   !m.replyTo &&
                   new Date(m.timestamp).getTime() - new Date(prev.timestamp).getTime() <
                     GROUP_WINDOW_MS;
+                if (isSystem(m) && isEmpty(m)) return <SystemLine key={m.id} msg={m} />;
                 return (
                   <MessageBlock
                     key={m.id}
@@ -1011,7 +1062,7 @@ export function DiscordClient({ agentId }: { agentId: string }) {
               }
             }}
           >
-            <div className="max-h-40 min-h-[2.25rem] flex-1 overflow-y-auto">
+            <div className="discord-composer max-h-40 min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
               <MilkdownEditor key={composerKey} defaultValue="" apiRef={editorRef} />
             </div>
             <button

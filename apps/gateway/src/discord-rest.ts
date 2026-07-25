@@ -73,6 +73,10 @@ export interface DiscordMessage {
   id: string;
   channelId: string;
   content: string;
+  /** Discord message type. 0/19 are normal; the rest are SYSTEM events (joins,
+   *  pins, boosts...) that carry NO content — Discord synthesizes their text
+   *  client-side, so a renderer that only prints `content` shows a blank row. */
+  type: number;
   timestamp: string;
   editedTimestamp: string | null;
   author: DiscordAuthor;
@@ -162,6 +166,7 @@ interface RawMessage {
   id: string;
   channel_id: string;
   content: string;
+  type?: number;
   timestamp: string;
   edited_timestamp: string | null;
   author: RawUser;
@@ -201,6 +206,7 @@ function normalizeMessage(m: RawMessage, selfId?: string): DiscordMessage {
     id: m.id,
     channelId: m.channel_id,
     content: m.content ?? '',
+    type: typeof m.type === 'number' ? m.type : 0,
     timestamp: m.timestamp,
     editedTimestamp: m.edited_timestamp ?? null,
     author: toAuthor(m.author),

@@ -189,8 +189,8 @@
    Discord's own look: sans (not serif), tight leading, and a hard cap on
    heading sizes so a `#` in a chat message can't blow up the message list. */
 .discord-md {
-  font-size: 0.875rem;
-  line-height: 1.45;
+  font-size: 0.9rem;
+  line-height: 1.6;
   word-break: break-word;
   white-space: normal;
 }
@@ -201,7 +201,7 @@
   margin-bottom: 0;
 }
 .discord-md p {
-  margin: 0.15rem 0;
+  margin: 0.25rem 0;
 }
 .discord-md h1,
 .discord-md h2,
@@ -233,7 +233,7 @@
   list-style: decimal;
 }
 .discord-md li {
-  margin: 0.1rem 0;
+  margin: 0.18rem 0;
 }
 .discord-md a {
   color: var(--link);
@@ -296,6 +296,54 @@
 .discord-md .discord-mention:hover {
   background: color-mix(in oklab, var(--link) 40%, transparent);
 }
+/* The Discord composer reuses the CLAUDE.md Milkdown editor, which is sized for
+   a full-page document view — far too large and airy for a chat input. Shrink
+   the type and strip the frame padding, and clamp the width so ProseMirror's
+   content can't push a horizontal scrollbar into the composer. */
+.discord-composer .milkdown-host,
+.discord-composer .milkdown {
+  height: auto;
+  overflow: visible;
+  background: transparent;
+}
+.discord-composer .milkdown .ProseMirror {
+  padding: 0.25rem 0.35rem;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  min-height: 1.75rem;
+  /* Long URLs and code spans would otherwise widen the editor indefinitely. */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.discord-composer .milkdown .ProseMirror p {
+  margin: 0.1rem 0;
+}
+.discord-composer .milkdown .ProseMirror > :first-child {
+  margin-top: 0;
+}
+.discord-composer .milkdown .ProseMirror > :last-child {
+  margin-bottom: 0;
+}
+/* Crepe ships headings at document scale; cap them so a stray '#' doesn't
+   blow the composer's height open. */
+.discord-composer .milkdown .ProseMirror h1,
+.discord-composer .milkdown .ProseMirror h2,
+.discord-composer .milkdown .ProseMirror h3 {
+  font-size: 1rem;
+  margin: 0.2rem 0;
+  line-height: 1.3;
+}
+.discord-composer .milkdown .ProseMirror pre,
+.discord-composer .milkdown .ProseMirror table {
+  max-width: 100%;
+  overflow-x: auto;
+}
+/* Nothing inside the composer may cause horizontal overflow. */
+.discord-composer,
+.discord-composer * {
+  max-width: 100%;
+}
+
 .discord-md table {
   border-collapse: collapse;
   margin: 0.3rem 0;
