@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } fr
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
+  LuArrowDown,
   LuArrowRight,
   LuCopy,
   LuCornerUpLeft,
@@ -535,7 +536,12 @@ export function DiscordClient({ agentId }: { agentId: string }) {
 
   const editorRef = useRef<MilkdownApi | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  /** Ref drives the autoscroll decision (read inside effects without
+   *  re-rendering); the state drives the jump-to-bottom button. */
   const atBottomRef = useRef(true);
+  const [atBottom, setAtBottom] = useState(true);
+  /** Messages that arrived while the user was scrolled away. */
+  const [missed, setMissed] = useState(0);
 
   // Identity + guilds + the DM allow-list (our only source of DM targets).
   useEffect(() => {
@@ -625,15 +631,26 @@ export function DiscordClient({ agentId }: { agentId: string }) {
     setMessages([]);
     setExhausted(false);
     setReplyTo(null);
+    setMissed(0);
+    setAtBottom(true);
+    lastIdRef.current = null;
     atBottomRef.current = true;
     void load();
     const t = setInterval(() => void load(), POLL_MS);
     return () => clearInterval(t);
   }, [target, load]);
 
+  const lastIdRef = useRef<string | null>(null);
   useEffect(() => {
+    const newest = messages[messages.length - 1];
+    const isNew = !!newest && newest.id !== lastIdRef.current;
+    lastIdRef.current = newest?.id ?? null;
     if (atBottomRef.current && scrollRef.current) {
       scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight });
+    } else if (isNew) {
+      // Scrolled away and something landed — surface it on the button rather
+      // than yanking the viewport out from under the reader.
+      setMissed((n) => n + 1);
     }
   }, [messages]);
 
@@ -669,8 +686,20 @@ export function DiscordClient({ agentId }: { agentId: string }) {
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
-    atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    const bottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    atBottomRef.current = bottom;
+    setAtBottom(bottom);
+    if (bottom) setMissed(0);
     if (el.scrollTop < 120) void loadOlder();
+  };
+
+  const jumpToBottom = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    atBottomRef.current = true;
+    setAtBottom(true);
+    setMissed(0);
   };
 
   const openDm = async (userId: string) => {
@@ -697,6 +726,8 @@ export function DiscordClient({ agentId }: { agentId: string }) {
       setReplyTo(null);
       setComposerKey((k) => k + 1); // remount clears the editor
       atBottomRef.current = true;
+      setAtBottom(true);
+      setMissed(0);
       await load();
     } catch (e) {
       setError(String((e as Error)?.message ?? e));
@@ -975,58 +1006,79 @@ export function DiscordClient({ agentId }: { agentId: string }) {
           <p className="text-danger border-separator border-b px-4 py-2 text-sm">{error}</p>
         )}
 
-        <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto pb-4">
-          {loading && <Skeleton />}
-          {paging && (
-            <div className="text-muted flex items-center justify-center gap-2 py-2 text-xs">
-              <LuLoaderCircle className="size-3 animate-spin" /> Loading older messages…
-            </div>
-          )}
-          {exhausted && !results && messages.length > 0 && (
-            <p className="text-muted px-4 py-3 text-xs">Beginning of the conversation.</p>
-          )}
-          {!loading && target && shown.length === 0 && (
-            <div className="text-muted flex flex-col items-center gap-2 py-16 text-sm">
-              <LuMessagesSquare className="size-8 opacity-40" />
-              {results ? 'No matches.' : 'No messages here yet.'}
-            </div>
-          )}
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.div
-              // Keyed by conversation (or the search view) so switching
-              // cross-fades instead of swapping content under the scroll.
-              key={results ? `search:${query}` : (target?.id ?? 'none')}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.12, ease: 'easeOut' }}
-            >
-              {shown.map((m, i) => {
-                const prev = shown[i - 1];
-                const isGrouped =
-                  !results &&
-                  !!prev &&
-                  prev.author.id === m.author.id &&
-                  !m.replyTo &&
-                  new Date(m.timestamp).getTime() - new Date(prev.timestamp).getTime() <
-                    GROUP_WINDOW_MS;
-                if (isSystem(m) && isEmpty(m)) return <SystemLine key={m.id} msg={m} />;
-                return (
-                  <MessageBlock
-                    key={m.id}
-                    msg={m}
-                    grouped={isGrouped}
-                    users={userNames}
-                    channels={channelNames}
-                    onImage={setLightbox}
-                    onContextMenu={(e, msg) => {
-                      e.preventDefault();
-                      setMenu({ x: e.clientX, y: e.clientY, msg });
-                    }}
-                  />
-                );
-              })}
-            </motion.div>
+        <div className="relative min-h-0 flex-1">
+          <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto pb-4">
+            {loading && <Skeleton />}
+            {paging && (
+              <div className="text-muted flex items-center justify-center gap-2 py-2 text-xs">
+                <LuLoaderCircle className="size-3 animate-spin" /> Loading older messages…
+              </div>
+            )}
+            {exhausted && !results && messages.length > 0 && (
+              <p className="text-muted px-4 py-3 text-xs">Beginning of the conversation.</p>
+            )}
+            {!loading && target && shown.length === 0 && (
+              <div className="text-muted flex flex-col items-center gap-2 py-16 text-sm">
+                <LuMessagesSquare className="size-8 opacity-40" />
+                {results ? 'No matches.' : 'No messages here yet.'}
+              </div>
+            )}
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.div
+                // Keyed by conversation (or the search view) so switching
+                // cross-fades instead of swapping content under the scroll.
+                key={results ? `search:${query}` : (target?.id ?? 'none')}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.12, ease: 'easeOut' }}
+              >
+                {shown.map((m, i) => {
+                  const prev = shown[i - 1];
+                  const isGrouped =
+                    !results &&
+                    !!prev &&
+                    prev.author.id === m.author.id &&
+                    !m.replyTo &&
+                    new Date(m.timestamp).getTime() - new Date(prev.timestamp).getTime() <
+                      GROUP_WINDOW_MS;
+                  if (isSystem(m) && isEmpty(m)) return <SystemLine key={m.id} msg={m} />;
+                  return (
+                    <MessageBlock
+                      key={m.id}
+                      msg={m}
+                      grouped={isGrouped}
+                      users={userNames}
+                      channels={channelNames}
+                      onImage={setLightbox}
+                      onContextMenu={(e, msg) => {
+                        e.preventDefault();
+                        setMenu({ x: e.clientX, y: e.clientY, msg });
+                      }}
+                    />
+                  );
+                })}
+              </motion.div>
+            </AnimatePresence>
+          </div>
+
+          {/* Jump to present — Discord's floating pill, shown only once the
+              reader has scrolled away from the newest message. */}
+          <AnimatePresence>
+            {!atBottom && shown.length > 0 && (
+              <motion.button
+                type="button"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 8 }}
+                transition={{ duration: 0.14, ease: 'easeOut' }}
+                onClick={jumpToBottom}
+                className="bg-surface-tertiary border-separator hover:bg-surface-secondary absolute right-6 bottom-3 flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium shadow-lg transition-colors"
+              >
+                <LuArrowDown className="size-3.5" />
+                {missed > 0 ? `${missed} new message${missed === 1 ? '' : 's'}` : 'Jump to present'}
+              </motion.button>
+            )}
           </AnimatePresence>
         </div>
 
