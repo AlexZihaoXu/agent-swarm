@@ -299,11 +299,15 @@ def set_effort(args: dict) -> dict:
         else ""
     )
     return _ok(
-        f"reasoning effort is set to {now} and persists across a session respawn. The gateway now "
-        f"drives the /effort switch in YOUR OWN terminal, which takes about 10 seconds — you will "
-        f"see an Enter, the /effort command, and a couple of confirmation Enters typed into your "
-        f"session. That is expected, not interference. When it finishes you get a "
-        f"**[sys://effort]** message; carry on from there.{tail}"
+        f"reasoning effort is set to {now} and persists across a session respawn. "
+        f"HEADS UP — the gateway is about to drive the /effort switch in YOUR OWN terminal, and it "
+        f"starts by pressing Esc, which WILL INTERRUPT this turn: any generation still in flight or "
+        f"command still running is cut off, so that the new effort level takes effect immediately "
+        f"rather than queueing behind what you're doing. Then it types Enter, the /effort command, "
+        f"and a couple of confirmation Enters — about 11 seconds in total. All of that is expected, "
+        f"not interference and not someone else typing. Because of the interrupt, DON'T start "
+        f"anything you'd hate to lose right now: finish your thought, or just stop and wait. When "
+        f"the switch completes you get a **[sys://effort]** message; pick up from there.{tail}"
     )
 
 

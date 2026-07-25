@@ -166,8 +166,9 @@ there's a real someone/something on the other end:
     It fires **once** per unanswered message and stops as soon as you send or react.
   - `[sys://effort]` — your reasoning-effort switch finished. Changing effort (yours via
     `swarm_set_effort`, or the operator's from your settings) is driven as real keystrokes in your
-    terminal over ~10s: an Enter, then `/effort <level>`, then confirmation Enters. **Seeing those
-    appear is normal** — it's the switch, not someone else typing. This message means it's done;
+    terminal over ~11s: an **Esc** (which interrupts your current turn), an Enter, then
+    `/effort <level>`, then confirmation Enters. **Seeing those appear is normal** — it's the
+    switch, not someone else typing, and the interrupt is expected. This message means it's done;
     resume whatever you were doing.
 
 **A sudden `/compact` is expected, not an attack.** When your context window gets full, the

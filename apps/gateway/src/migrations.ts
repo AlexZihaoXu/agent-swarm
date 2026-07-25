@@ -234,6 +234,19 @@ export const migrations: Migration[] = [
       await ctx.exec('chown -R agent:agent /opt/agent-runtime; systemctl restart agent-terminals');
     },
   },
+  {
+    version: 19,
+    name: 'swarm_set_effort: warn that the switch interrupts the current turn',
+    apply: async (ctx) => {
+      // The /effort switch now leads with Esc so the new level applies
+      // immediately. That interrupts whatever the agent is doing, so the tool
+      // reply — the last thing it reads before being cut off — has to say so.
+      await ctx.putFile('tools/swarm.py', '/opt/agent-tools/swarm.py');
+      await ctx.exec(
+        'chown agent:agent /opt/agent-tools/swarm.py; systemctl restart agent-terminals',
+      );
+    },
+  },
 ];
 
 /** Highest migration version (the version a fully up-to-date agent is at). */

@@ -3022,8 +3022,14 @@ export class AgentManager {
    * selector that redraws, and the caller is often the agent itself, mid-turn,
    * with a partially-typed line in the composer. So the script is
    *
-   *   Enter (clear the line) → type `/effort <level>` → 5s → Enter → 3s →
-   *   Enter → 2s → the sys nudge
+   *   Esc (interrupt whatever is in flight) → 1s → Enter (clear the line) →
+   *   type `/effort <level>` → 5s → Enter → 3s → Enter → 2s → the sys nudge
+   *
+   * The leading Esc is what makes the switch take effect NOW: it interrupts
+   * whatever is in flight — ongoing generation or a running command — so the
+   * slash command reaches an idle composer instead of queueing behind the turn
+   * (or being swallowed by it). Cutting the caller's turn short is the point,
+   * and is exactly why the trailing nudge tells it to resume where it left off.
    *
    * The waits are generous on purpose — this races a redrawing TUI, and being
    * early is what breaks it. The whole script holds the runtime's per-session
@@ -3035,6 +3041,8 @@ export class AgentManager {
    */
   private async applyEffortLive(id: string, level: string): Promise<void> {
     await this.injectKeys(id, [
+      { key: 'esc' },
+      { waitMs: 1_000 },
       { key: 'enter' },
       { text: `/effort ${level}` },
       { waitMs: 5_000 },
@@ -3047,9 +3055,11 @@ export class AgentManager {
     // path — and so a failure to confirm can't leave the switch half-applied.
     await this.injectToTerminal(
       id,
-      `**[sys://effort]** Your reasoning effort is now ${level}. The switch is complete and ` +
-        `applies from your next turn. If it interrupted you, pick up where you left off and ` +
-        `continue what you were doing.`,
+      `**[sys://effort]** Your reasoning effort is now ${level} and applies from this point on. ` +
+        `The switch began with an Esc, so if you were generating or running something it was ` +
+        `interrupted on purpose — that's how the change takes effect immediately instead of ` +
+        `waiting for your turn to end. Nothing is wrong. Pick up where you left off and finish ` +
+        `what you were doing.`,
     );
   }
 

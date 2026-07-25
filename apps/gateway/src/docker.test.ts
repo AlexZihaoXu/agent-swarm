@@ -156,7 +156,7 @@ function stubEffortManager() {
   return { manager, keys, texts };
 }
 
-test('applyEffortLive drives Enter → command → 5s → Enter → 3s → Enter → 2s', async () => {
+test('applyEffortLive drives Esc → 1s → Enter → command → 5s → Enter → 3s → Enter → 2s', async () => {
   const { manager, keys } = stubEffortManager();
   await (
     manager as unknown as { applyEffortLive: (id: string, level: string) => Promise<void> }
@@ -165,6 +165,8 @@ test('applyEffortLive drives Enter → command → 5s → Enter → 3s → Enter
   assert.equal(keys.length, 1, 'one scripted sequence');
   assert.equal(keys[0]?.id, 'alpha');
   assert.deepEqual(keys[0]?.steps, [
+    { key: 'esc' },
+    { waitMs: 1_000 },
     { key: 'enter' },
     { text: '/effort ultracode' },
     { waitMs: 5_000 },
@@ -192,7 +194,12 @@ test('applyEffortLive carries the level through, including default', async () =>
   await (
     manager as unknown as { applyEffortLive: (id: string, level: string) => Promise<void> }
   ).applyEffortLive('beta', 'default');
-  assert.deepEqual(keys[0]?.steps?.[1], { text: '/effort default' });
+  // Find the typed step rather than indexing, so adding a leading key to the
+  // script doesn't silently break this into a false pass.
+  const typed = (keys[0]?.steps ?? []).find(
+    (s) => typeof (s as { text?: string }).text === 'string',
+  );
+  assert.deepEqual(typed, { text: '/effort default' });
   assert.match(texts[0]?.text ?? '', /effort is now default/);
 });
 
