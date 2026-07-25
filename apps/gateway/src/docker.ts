@@ -78,7 +78,7 @@ const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'];
 const USAGE_RETAIN_MS = 7 * 24 * 3_600_000;
 /** Hard cap on a single agent's guidance (chars) — bounds the file claude loads
  *  at session start and the growth from the agent's own self-appends. */
-const AGENT_GUIDANCE_MAX = 20_000;
+const AGENT_GUIDANCE_MAX = 100_000;
 /** Cap on one swarm_append_guidance call so a single append can't fill the budget. */
 const GUIDANCE_APPEND_MAX = 4_000;
 
