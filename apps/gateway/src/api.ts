@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { basename } from 'node:path';
 import type { AgentManager } from './docker.js';
 import { config } from './config.js';
+import * as discord from './discord-rest.js';
 import {
   getSettings,
   updateSettings,
@@ -223,6 +224,8 @@ const AGENT_FILES_API = /^\/api\/agents\/([^/]+)\/files$/;
 // /api/agents/:id/integrations[/:type[/(test|apply|disable)]]
 const INTEGRATION_API =
   /^\/api\/agents\/([^/]+)\/integrations(?:\/([^/]+)(?:\/(test|apply|disable))?)?$/;
+// /api/agents/:id/discord/(guilds|channels|messages|send|react|dm|whoami)
+const DISCORD_API = /^\/api\/agents\/([^/]+)\/discord\/([a-z]+)$/;
 // /api/packages, /api/packages/upload, /api/packages/:file[/(download|import)]
 const PACKAGE_API = /^\/api\/packages(?:\/([^/]+)(?:\/(download|import))?)?$/;
 // /api/roles, /api/roles/:id  •  /api/groups, /api/groups/:id
@@ -512,6 +515,7 @@ export async function handleApi(
     if (VOLUME_FILES_API.test(pathname)) return await handleVolumeFiles(req, res, manager, method);
     if (VOLUME_API.test(pathname)) return await handleVolumes(req, res, manager, method);
     if (AGENT_FILES_API.test(pathname)) return await handleAgentFiles(req, res, manager, method);
+    if (DISCORD_API.test(pathname)) return await handleDiscord(req, res, manager, method, pathname);
     if (INTEGRATION_API.test(pathname)) return await handleIntegrations(req, res, manager, method);
     if (pathname.startsWith('/api/agents')) return await handleAgents(req, res, manager, method);
     sendJson(res, 404, { error: 'unknown endpoint' });
@@ -1372,6 +1376,105 @@ async function handleSettings(
   return true;
 }
 
+/**
+ * Operator-side Discord, backing the dashboard's Discord client. Every route
+ * proxies one Discord REST call using the agent's own bot token, so the
+ * operator reads and posts AS that agent's bot.
+ *
+ * Operator-cookie-only, for free: `swarmTokenMayAccess` allows agent tokens
+ * only under /api/swarm/*, so an agent can't drive another agent's bot here.
+ * The token itself never reaches the browser.
+ */
+async function handleDiscord(
+  req: IncomingMessage,
+  res: ServerResponse,
+  manager: AgentManager,
+  method: string,
+  pathname: string,
+): Promise<boolean> {
+  const [, rawId, action] = DISCORD_API.exec(pathname) ?? [];
+  const id = decodeURIComponent(rawId ?? '');
+  const url = new URL(req.url ?? '', 'http://localhost');
+  const token = manager.discordToken(id); // throws 404/400 when not configured
+
+  if (method === 'GET') {
+    switch (action) {
+      case 'whoami':
+        return (sendJson(res, 200, await discord.whoami(token)), true);
+      case 'guilds':
+        return (sendJson(res, 200, await discord.listGuilds(token)), true);
+      case 'channels': {
+        const guild = url.searchParams.get('guild') ?? '';
+        if (!guild) return (sendJson(res, 400, { error: 'guild required' }), true);
+        return (sendJson(res, 200, await discord.listChannels(token, guild)), true);
+      }
+      case 'messages': {
+        const channel = url.searchParams.get('channel') ?? '';
+        if (!channel) return (sendJson(res, 400, { error: 'channel required' }), true);
+        const self = url.searchParams.get('self') ?? undefined;
+        const messages = await discord.listMessages(
+          token,
+          channel,
+          {
+            limit: Number(url.searchParams.get('limit')) || 50,
+            before: url.searchParams.get('before') ?? undefined,
+          },
+          self,
+        );
+        return (sendJson(res, 200, messages), true);
+      }
+    }
+    return (sendJson(res, 404, { error: 'unknown discord endpoint' }), true);
+  }
+
+  if (method === 'POST') {
+    const body = await readJson(req);
+    switch (action) {
+      case 'send': {
+        const channel = String(body.channel ?? '');
+        const content = String(body.content ?? '').trim();
+        if (!channel || !content)
+          return (sendJson(res, 400, { error: 'channel and content required' }), true);
+        const msg = await discord.sendMessage(
+          token,
+          channel,
+          content,
+          body.replyTo ? String(body.replyTo) : undefined,
+        );
+        logEvent({
+          category: 'integration',
+          action: 'discord.send',
+          message: `operator sent a Discord message as ${id}`,
+          actor: opActor(req),
+          agentId: id,
+          target: channel,
+          // Length only — the message body stays out of the audit log.
+          meta: { chars: content.length, reply: !!body.replyTo },
+        });
+        return (sendJson(res, 200, msg), true);
+      }
+      case 'react': {
+        const channel = String(body.channel ?? '');
+        const messageId = String(body.message ?? '');
+        const emoji = String(body.emoji ?? '');
+        if (!channel || !messageId || !emoji)
+          return (sendJson(res, 400, { error: 'channel, message and emoji required' }), true);
+        await discord.addReaction(token, channel, messageId, emoji);
+        return (sendJson(res, 200, { ok: true }), true);
+      }
+      case 'dm': {
+        const user = String(body.user ?? '');
+        if (!user) return (sendJson(res, 400, { error: 'user required' }), true);
+        return (sendJson(res, 200, { channelId: await discord.openDm(token, user) }), true);
+      }
+    }
+    return (sendJson(res, 404, { error: 'unknown discord endpoint' }), true);
+  }
+
+  sendJson(res, 405, { error: 'method not allowed' });
+  return true;
+}
+
 /** Friendly names for known client IPs. Not a secret and not a security
  *  control — it exists so the auth log reads "operator@home" for an address you
  *  recognize, leaving an unnamed IP visibly odd. Whole-list PUT: the UI edits
@@ -1557,6 +1660,12 @@ async function readJson(
   provider?: Provider;
   opencodeGo?: { apiKey?: string };
   ipNames?: { ip?: string; name?: string }[];
+  // Discord client (operator-side) — see handleDiscord.
+  channel?: string;
+  replyTo?: string;
+  emoji?: string;
+  user?: string;
+  message?: string;
   model?: string | null;
   effort?: string | null;
   type?: IntegrationType;

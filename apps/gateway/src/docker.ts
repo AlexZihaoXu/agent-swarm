@@ -3240,6 +3240,18 @@ export class AgentManager {
   }
 
   /** Validate the bot token over REST and record the result. */
+  /** The agent's Discord bot token, for operator-side REST (the dashboard's
+   *  Discord client). Throws rather than returning empty so callers surface a
+   *  useful message instead of a confusing 401 from Discord. Never send the
+   *  result to the browser. */
+  discordToken(id: string): string {
+    const cur = integrations.getIntegration(this.requireAgentDir(id), 'discord');
+    if (!cur) throw Object.assign(new Error('no discord integration'), { statusCode: 404 });
+    if (!cur.credentials.botToken)
+      throw Object.assign(new Error('add a bot token first'), { statusCode: 400 });
+    return cur.credentials.botToken;
+  }
+
   async testIntegration(id: string, type: IntegrationType): Promise<IntegrationPublic> {
     const dir = this.requireAgentDir(id);
     const cur = integrations.getIntegration(dir, type);

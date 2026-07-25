@@ -13,6 +13,7 @@ import {
   LuPackage,
   LuPin,
   LuPinOff,
+  LuMessagesSquare,
   LuScrollText,
   LuSettings,
   LuTrash2,
@@ -23,6 +24,7 @@ import {
   agentFilesBase,
   compactAgent,
   getUpgradeInfo,
+  listIntegrations,
   removeAgent,
   screenshotUrl,
   startAgent,
@@ -38,8 +40,9 @@ import { CompactingBadge } from './CompactingBadge';
 import { ConfirmActionDialog } from './ConfirmActionDialog';
 import { PackageModal } from './PackageModal';
 import { FileExplorer } from './FileExplorer';
+import { DiscordPopup } from './DiscordPopup';
 
-type Dialog = 'stop' | 'remove' | 'upgrade' | 'package' | 'settings' | 'files' | null;
+type Dialog = 'stop' | 'remove' | 'upgrade' | 'package' | 'settings' | 'files' | 'discord' | null;
 
 /** Low-res desktop thumbnail that refreshes every few seconds (cheap, unlike a
  *  live VNC stream per card). Keeps retrying if a frame fails to load. */
@@ -96,6 +99,8 @@ export function AgentCard({
   const [dialog, setDialog] = useState<Dialog>(null);
   const [busy, setBusy] = useState(false);
   const [upgrade, setUpgrade] = useState<UpgradeInfo | null>(null);
+  // Whether this agent has a Discord bot configured — gates the Discord entry.
+  const [hasDiscord, setHasDiscord] = useState(false);
   // Cursor position for the right-click context menu (null = closed).
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
 
@@ -113,6 +118,12 @@ export function AgentCard({
   useEffect(() => {
     void checkUpgrade();
   }, [running, checkUpgrade]);
+
+  useEffect(() => {
+    void listIntegrations(agent.id)
+      .then((ints) => setHasDiscord(ints.some((i) => i.type === 'discord' && i.hasCredentials)))
+      .catch(() => setHasDiscord(false));
+  }, [agent.id]);
 
   const act = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -315,6 +326,14 @@ export function AgentCard({
                 </span>
                 <Label>Logs…</Label>
               </Dropdown.Item>
+              {hasDiscord ? (
+                <Dropdown.Item id="discord" textValue="Discord">
+                  <span className="flex items-center justify-center">
+                    <LuMessagesSquare className="text-muted size-4 shrink-0" />
+                  </span>
+                  <Label>Discord…</Label>
+                </Dropdown.Item>
+              ) : null}
               <Dropdown.Item id="settings" textValue="Settings">
                 <span className="flex items-center justify-center">
                   <LuSettings className="text-muted size-4 shrink-0" />
@@ -391,6 +410,13 @@ export function AgentCard({
         copyPathRoot="/home/agent"
         defaultPath="Desktop"
         isOpen={dialog === 'files'}
+        onOpenChange={(o) => !o && setDialog(null)}
+      />
+
+      <DiscordPopup
+        agentId={agent.id}
+        agentName={agent.username || agent.id}
+        isOpen={dialog === 'discord'}
         onOpenChange={(o) => !o && setDialog(null)}
       />
 

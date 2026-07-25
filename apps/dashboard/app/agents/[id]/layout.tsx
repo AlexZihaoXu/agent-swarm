@@ -4,12 +4,19 @@ import { Button, buttonVariants, Tabs } from '@heroui/react';
 import { motion } from 'framer-motion';
 import Link from 'next/link';
 import { useSelectedLayoutSegment } from 'next/navigation';
-import { use, useState, type ComponentProps, type ReactNode } from 'react';
-import { LuChevronLeft, LuFolderOpen, LuMonitor, LuSettings, LuTerminal } from 'react-icons/lu';
+import { use, useEffect, useState, type ComponentProps, type ReactNode } from 'react';
+import {
+  LuChevronLeft,
+  LuFolderOpen,
+  LuMessagesSquare,
+  LuMonitor,
+  LuSettings,
+  LuTerminal,
+} from 'react-icons/lu';
 import { AgentSettingsModal } from '@/app/AgentSettingsModal';
 import { AgentStatsBar, AgentStatsProvider } from '@/app/AgentStats';
 import { FileExplorer } from '@/app/FileExplorer';
-import { agentFilesBase } from '@/lib/gateway';
+import { agentFilesBase, listIntegrations } from '@/lib/gateway';
 import { ChatWidget } from './ChatWidget';
 import { DesktopLockButton, DesktopLockProvider } from './DesktopLock';
 
@@ -36,6 +43,14 @@ export default function AgentLayout({
   const segment = useSelectedLayoutSegment() ?? 'desktop';
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
+  // The Discord tab only exists for agents that actually have a bot configured.
+  const [hasDiscord, setHasDiscord] = useState(false);
+
+  useEffect(() => {
+    void listIntegrations(id)
+      .then((ints) => setHasDiscord(ints.some((i) => i.type === 'discord' && i.hasCredentials)))
+      .catch(() => setHasDiscord(false));
+  }, [id]);
 
   return (
     <motion.div
@@ -72,6 +87,15 @@ export default function AgentLayout({
                     </span>
                     <Tabs.Indicator />
                   </Tabs.Tab>
+                  {hasDiscord ? (
+                    <Tabs.Tab id="discord" href={`/agents/${id}/discord`} render={asLink}>
+                      <span className="flex items-center gap-1.5">
+                        <LuMessagesSquare className="size-4" />
+                        Discord
+                      </span>
+                      <Tabs.Indicator />
+                    </Tabs.Tab>
+                  ) : null}
                 </Tabs.List>
               </Tabs.ListContainer>
             </Tabs>

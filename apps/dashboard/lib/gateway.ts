@@ -325,6 +325,90 @@ export const updateSettings = (oauthToken: string) =>
     body: JSON.stringify({ oauthToken }),
   });
 
+// --- Discord client (operator posts as the agent's bot) ----------------------
+
+export interface DiscordGuild {
+  id: string;
+  name: string;
+  iconUrl: string | null;
+}
+export interface DiscordChannel {
+  id: string;
+  type: number;
+  name: string;
+  parentId: string | null;
+  position: number;
+  topic: string | null;
+}
+export interface DiscordAuthor {
+  id: string;
+  username: string;
+  displayName: string;
+  avatarUrl: string;
+  bot: boolean;
+}
+export interface DiscordAttachment {
+  id: string;
+  filename: string;
+  url: string;
+  contentType: string | null;
+  width: number | null;
+  height: number | null;
+  size: number;
+}
+export interface DiscordMessage {
+  id: string;
+  channelId: string;
+  content: string;
+  timestamp: string;
+  editedTimestamp: string | null;
+  author: DiscordAuthor;
+  attachments: DiscordAttachment[];
+  reactions: { emoji: string; count: number; me: boolean }[];
+  replyTo: { id: string; author: string; content: string } | null;
+  self: boolean;
+}
+
+/** Category channels group the text channels beneath them in the sidebar. */
+export const DISCORD_CATEGORY = 4;
+
+const dcBase = (id: string) => `/api/agents/${encodeURIComponent(id)}/discord`;
+
+export const discordWhoami = (id: string) => api<DiscordAuthor>(`${dcBase(id)}/whoami`);
+export const discordGuilds = (id: string) => api<DiscordGuild[]>(`${dcBase(id)}/guilds`);
+export const discordChannels = (id: string, guild: string) =>
+  api<DiscordChannel[]>(`${dcBase(id)}/channels?guild=${encodeURIComponent(guild)}`);
+export const discordMessages = (
+  id: string,
+  channel: string,
+  opts: { limit?: number; before?: string; self?: string } = {},
+) => {
+  const qs = new URLSearchParams({ channel });
+  if (opts.limit) qs.set('limit', String(opts.limit));
+  if (opts.before) qs.set('before', opts.before);
+  if (opts.self) qs.set('self', opts.self);
+  return api<DiscordMessage[]>(`${dcBase(id)}/messages?${qs}`);
+};
+export const discordSend = (id: string, channel: string, content: string, replyTo?: string) =>
+  api<DiscordMessage>(`${dcBase(id)}/send`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ channel, content, replyTo }),
+  });
+export const discordReact = (id: string, channel: string, message: string, emoji: string) =>
+  api<{ ok: true }>(`${dcBase(id)}/react`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ channel, message, emoji }),
+  });
+/** Bots can't enumerate their DMs, so a DM is addressed by user id. */
+export const discordOpenDm = (id: string, user: string) =>
+  api<{ channelId: string }>(`${dcBase(id)}/dm`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ user }),
+  });
+
 // --- Known IPs ---------------------------------------------------------------
 
 /** An operator-assigned friendly name for a client IP, so the auth log reads
