@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { Readable } from 'node:stream';
 import type Docker from 'dockerode';
 import { AgentManager, resolveHostPort } from './docker.js';
 import { config } from './config.js';
@@ -193,4 +194,64 @@ test('applyEffortLive carries the level through, including default', async () =>
   ).applyEffortLive('beta', 'default');
   assert.deepEqual(keys[0]?.steps?.[1], { text: '/effort default' });
   assert.match(texts[0]?.text ?? '', /effort is now default/);
+});
+
+// --- installedVersion in both container states ------------------------------
+// Neither read works in both states, and they fail in OPPOSITE directions on
+// sysbox-runc: while RUNNING, getArchive 404s (the marker is in a runtime layer
+// the archive API can't see) but exec works; while STOPPED, exec 409s but
+// getArchive works. Reading the wrong way round silently yields v0, which would
+// offer a bogus "v0 → latest" upgrade on every healthy agent.
+
+/** Minimal single-file tar: 512-byte header (octal size at 124) + content. */
+function tarOf(content: string): Buffer {
+  const buf = Buffer.alloc(1024);
+  buf.write(content.length.toString(8).padStart(11, '0') + '\0', 124, 'utf8');
+  buf.write(content, 512, 'utf8');
+  return buf;
+}
+
+function fakeDockerFor(state: 'running' | 'stopped') {
+  const running = state === 'running';
+  return {
+    getContainer() {
+      return {
+        inspect: async () => ({ State: { Running: running } }),
+        exec: async () => {
+          if (!running)
+            throw Object.assign(new Error('container stopped/paused'), { statusCode: 409 });
+          return {
+            start: async () => Readable.from([Buffer.from('15\n', 'utf8')]),
+          };
+        },
+        getArchive: async () => {
+          if (running)
+            throw Object.assign(new Error('Could not find the file'), { statusCode: 404 });
+          return Readable.from([tarOf('15\n')]);
+        },
+      };
+    },
+  } as unknown as Docker;
+}
+
+test('installedVersion reads the marker via exec while the agent is RUNNING', async () => {
+  const manager = new AgentManager(fakeDockerFor('running'), { ...config, mode: 'network' });
+  assert.equal(await manager.installedVersion('alpha'), 15);
+});
+
+test('installedVersion reads the marker via getArchive while the agent is STOPPED', async () => {
+  const manager = new AgentManager(fakeDockerFor('stopped'), { ...config, mode: 'network' });
+  assert.equal(await manager.installedVersion('alpha'), 15);
+});
+
+test('installedVersion reports 0 when the container is gone', async () => {
+  const gone = {
+    getContainer: () => ({
+      inspect: async () => {
+        throw new Error('no such container');
+      },
+    }),
+  } as unknown as Docker;
+  const manager = new AgentManager(gone, { ...config, mode: 'network' });
+  assert.equal(await manager.installedVersion('ghost'), 0);
 });

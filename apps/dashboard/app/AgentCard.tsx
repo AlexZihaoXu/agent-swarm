@@ -107,8 +107,11 @@ export function AgentCard({
     }
   }, [agent.id]);
 
+  // Checked in both states: the version marker is read from the container's
+  // filesystem, which works while it's stopped, and a stopped agent is exactly
+  // the one you want to bring up to date before starting it again.
   useEffect(() => {
-    if (running) void checkUpgrade();
+    void checkUpgrade();
   }, [running, checkUpgrade]);
 
   const act = async (fn: () => Promise<unknown>) => {
@@ -290,7 +293,7 @@ export function AgentCard({
                   <Label>Compact context</Label>
                 </Dropdown.Item>
               ) : null}
-              {running && upgrade?.outdated ? (
+              {upgrade?.outdated ? (
                 <Dropdown.Item id="upgrade" textValue="Upgrade">
                   <span className="flex items-center justify-center">
                     <LuCircleArrowUp className="text-muted size-4 shrink-0" />
@@ -406,10 +409,21 @@ export function AgentCard({
                 </Modal.Heading>
               </Modal.Header>
               <Modal.Body>
-                <p className="text-muted mb-3 text-sm">
-                  Runs the pending migrations against this live agent and restarts its supervisor.
-                  The <code>claude</code> session restarts (transcript preserved); no data is lost.
-                </p>
+                {running ? (
+                  <p className="text-muted mb-3 text-sm">
+                    Runs the pending migrations against this live agent and restarts its supervisor.
+                    The <code>claude</code> session restarts (transcript preserved); no data is
+                    lost.
+                  </p>
+                ) : (
+                  <p className="text-muted mb-3 text-sm">
+                    Migrations run inside the container, so this agent will be{' '}
+                    <strong>started briefly</strong>, migrated, and then{' '}
+                    <strong>stopped again</strong> — it stays stopped afterwards, even if a
+                    migration fails. Its <code>claude</code> session will boot for a moment during
+                    the upgrade; the transcript is preserved and no data is lost.
+                  </p>
+                )}
                 <ul className="border-separator divide-separator divide-y border text-sm">
                   {upgrade?.pending.map((m) => (
                     <li key={m.version} className="flex gap-2 px-3 py-2">

@@ -3539,18 +3539,98 @@ export class AgentManager {
     };
   }
 
-  /** Highest migration version applied in an agent (0 = none/old). */
-  async installedVersion(id: string): Promise<number> {
+  /**
+   * Read a small file out of a container WITHOUT exec, so it works on a STOPPED
+   * container too (`docker exec` requires a running one). getArchive returns a
+   * tar stream; for a single small file that's one 512-byte header followed by
+   * the content, with the size as an octal string at header offset 124.
+   */
+  private async readFileFromContainer(
+    container: Docker.Container,
+    filePath: string,
+  ): Promise<string | null> {
     try {
-      const out = await this.exec(this.docker.getContainer(this.containerName(id)), [
+      const stream = (await container.getArchive({
+        path: filePath,
+      })) as unknown as AsyncIterable<Buffer>;
+      const chunks: Buffer[] = [];
+      for await (const c of stream) chunks.push(c);
+      const tar = Buffer.concat(chunks);
+      if (tar.length < 512) return null;
+      const size = parseInt(
+        tar
+          .toString('utf8', 124, 136)
+          .replace(/\0[\s\S]*$/, '')
+          .trim(),
+        8,
+      );
+      if (!Number.isFinite(size) || size <= 0) return '';
+      return tar.toString('utf8', 512, 512 + size);
+    } catch {
+      return null; // no marker (fresh/pre-migrations agent), or container gone
+    }
+  }
+
+  /** Read the marker with `docker exec` (only possible while running). */
+  private async execReadMarker(container: Docker.Container): Promise<string | null> {
+    try {
+      return await this.exec(container, [
         'sh',
         '-c',
         `cat ${VERSION_MARKER} 2>/dev/null || echo 0`,
       ]);
-      const n = parseInt(out.trim(), 10);
-      return Number.isFinite(n) ? n : 0;
     } catch {
-      return 0;
+      return null;
+    }
+  }
+
+  /**
+   * Highest migration version applied in an agent (0 = none/old). Works whether
+   * the agent is running or stopped, so the dashboard can offer an upgrade
+   * either way.
+   *
+   * Neither read works in both states, and they fail in OPPOSITE directions
+   * (verified against these agents, all on sysbox-runc):
+   *   running → `docker exec` works; getArchive 404s, because the marker sits in
+   *             a runtime layer the daemon's archive API can't see while up.
+   *   stopped → getArchive works; `docker exec` 409s (no process to enter).
+   * So pick the one that fits the state, and fall back to the other rather than
+   * silently reporting v0 — which would offer a bogus "v0 → latest" upgrade.
+   */
+  async installedVersion(id: string): Promise<number> {
+    const container = this.docker.getContainer(this.containerName(id));
+    let running = false;
+    try {
+      running = !!(await container.inspect()).State.Running;
+    } catch {
+      return 0; // container gone
+    }
+    const viaExec = () => this.execReadMarker(container);
+    const viaArchive = () => this.readFileFromContainer(container, VERSION_MARKER);
+    const raw = running
+      ? ((await viaExec()) ?? (await viaArchive()))
+      : ((await viaArchive()) ?? (await viaExec()));
+    const n = parseInt((raw ?? '').trim(), 10);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  /** Wait until the container's init has come up far enough that migrations can
+   *  `systemctl restart` services. Best-effort: on timeout we proceed anyway
+   *  rather than block the upgrade. */
+  private async waitForSystemd(container: Docker.Container, timeoutMs = 90_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      try {
+        const out = (
+          await this.exec(container, ['sh', '-c', 'systemctl is-system-running 2>&1 || true'])
+        ).trim();
+        // running | degraded | maintenance all mean "units are manageable";
+        // only `initializing`/`starting` mean we'd race the boot.
+        if (out && !/^(initializing|starting)/.test(out)) return;
+      } catch {
+        /* exec not accepting connections yet */
+      }
+      await new Promise((r) => setTimeout(r, 1_000));
     }
   }
 
@@ -3580,11 +3660,43 @@ export class AgentManager {
     const container = this.docker.getContainer(this.containerName(id));
     const ctx = this.migrationCtx(container);
     const installed = await this.installedVersion(id);
-    for (const m of migrations
+    const pending = migrations
       .filter((x) => x.version > installed)
-      .sort((a, b) => a.version - b.version)) {
-      await m.apply(ctx);
-      await ctx.exec(`echo ${m.version} > ${VERSION_MARKER}`);
+      .sort((a, b) => a.version - b.version);
+    if (!pending.length) return this.upgradeInfo(id);
+
+    // Migrations run `systemctl restart` / `chown` inside the container, which
+    // needs it RUNNING — docker exec can't touch a stopped one. So boot a
+    // stopped agent just for the upgrade and put it back exactly as we found
+    // it. Raw start/stop on purpose, not this.start()/this.stop(): the manager's
+    // versions re-provision the disk, reconnect Discord, and drop a deliberate-
+    // restart marker that would make the agent announce it was restarted by the
+    // operator — none of which should happen for a maintenance boot.
+    const wasRunning = !!(await container.inspect()).State.Running;
+    if (!wasRunning) {
+      logEvent({
+        category: 'docker',
+        action: 'agent.upgrade.boot',
+        message: `starting stopped agent ${id} to apply ${pending.length} migration(s)`,
+        actor: SYSTEM_ACTOR,
+        agentId: id,
+        target: this.containerName(id),
+      });
+      await container.start();
+      await this.waitForSystemd(container);
+    }
+    try {
+      for (const m of pending) {
+        await m.apply(ctx);
+        await ctx.exec(`echo ${m.version} > ${VERSION_MARKER}`);
+      }
+    } finally {
+      // Restore the original state even if a migration threw — a stopped agent
+      // must not be left running because an upgrade failed halfway.
+      if (!wasRunning) {
+        await this.discord.disconnect(id).catch(() => {});
+        await container.stop().catch(() => {});
+      }
     }
     return this.upgradeInfo(id);
   }
