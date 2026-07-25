@@ -3262,6 +3262,13 @@ export class AgentManager {
     return cur.credentials.botToken;
   }
 
+  /** Live Discord presence for an agent's bot (connected / online / status
+   *  quote), so the dashboard client can show what the bot looks like in
+   *  Discord rather than a static label. */
+  discordPresence(id: string) {
+    return this.discord.presenceOf(id);
+  }
+
   async testIntegration(id: string, type: IntegrationType): Promise<IntegrationPublic> {
     const dir = this.requireAgentDir(id);
     const cur = integrations.getIntegration(dir, type);

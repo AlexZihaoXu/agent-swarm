@@ -1400,13 +1400,42 @@ async function handleDiscord(
   if (method === 'GET') {
     switch (action) {
       case 'whoami':
-        return (sendJson(res, 200, await discord.whoami(token)), true);
+        return (
+          sendJson(res, 200, {
+            ...(await discord.whoami(token)),
+            ...manager.discordPresence(id),
+          }),
+          true
+        );
       case 'guilds':
         return (sendJson(res, 200, await discord.listGuilds(token)), true);
+      case 'user': {
+        // Resolves a DM correspondent to a real name + avatar; without it the
+        // DM list can only show a raw snowflake.
+        const uid = url.searchParams.get('id') ?? '';
+        if (!uid) return (sendJson(res, 400, { error: 'id required' }), true);
+        return (sendJson(res, 200, await discord.getUser(token, uid)), true);
+      }
       case 'channels': {
         const guild = url.searchParams.get('guild') ?? '';
         if (!guild) return (sendJson(res, 400, { error: 'guild required' }), true);
         return (sendJson(res, 200, await discord.listChannels(token, guild)), true);
+      }
+      case 'search': {
+        const guild = url.searchParams.get('guild') ?? '';
+        const q = (url.searchParams.get('q') ?? '').trim();
+        if (!guild || !q) return (sendJson(res, 400, { error: 'guild and q required' }), true);
+        return (
+          sendJson(
+            res,
+            200,
+            await discord.searchMessages(token, guild, q, {
+              limit: Number(url.searchParams.get('limit')) || 25,
+              channelId: url.searchParams.get('channel') ?? undefined,
+            }),
+          ),
+          true
+        );
       }
       case 'messages': {
         const channel = url.searchParams.get('channel') ?? '';

@@ -356,6 +356,19 @@ export interface DiscordAttachment {
   height: number | null;
   size: number;
 }
+export interface DiscordEmbed {
+  title: string | null;
+  description: string | null;
+  url: string | null;
+  color: number | null;
+  timestamp: string | null;
+  footer: string | null;
+  authorName: string | null;
+  imageUrl: string | null;
+  thumbnailUrl: string | null;
+  fields: { name: string; value: string; inline: boolean }[];
+}
+
 export interface DiscordMessage {
   id: string;
   channelId: string;
@@ -364,6 +377,8 @@ export interface DiscordMessage {
   editedTimestamp: string | null;
   author: DiscordAuthor;
   attachments: DiscordAttachment[];
+  embeds: DiscordEmbed[];
+  mentions: { id: string; displayName: string }[];
   reactions: { emoji: string; count: number; me: boolean }[];
   replyTo: { id: string; author: string; content: string } | null;
   self: boolean;
@@ -374,7 +389,16 @@ export const DISCORD_CATEGORY = 4;
 
 const dcBase = (id: string) => `/api/agents/${encodeURIComponent(id)}/discord`;
 
-export const discordWhoami = (id: string) => api<DiscordAuthor>(`${dcBase(id)}/whoami`);
+/** The bot's identity plus its LIVE presence, so the client can show what the
+ *  bot actually looks like in Discord (online/idle + its status quote). */
+export interface DiscordSelf extends DiscordAuthor {
+  connected: boolean;
+  presence: 'online' | 'idle' | null;
+  customStatus: string | null;
+}
+export const discordWhoami = (id: string) => api<DiscordSelf>(`${dcBase(id)}/whoami`);
+export const discordUser = (id: string, user: string) =>
+  api<DiscordAuthor>(`${dcBase(id)}/user?id=${encodeURIComponent(user)}`);
 export const discordGuilds = (id: string) => api<DiscordGuild[]>(`${dcBase(id)}/guilds`);
 export const discordChannels = (id: string, guild: string) =>
   api<DiscordChannel[]>(`${dcBase(id)}/channels?guild=${encodeURIComponent(guild)}`);
@@ -388,6 +412,19 @@ export const discordMessages = (
   if (opts.before) qs.set('before', opts.before);
   if (opts.self) qs.set('self', opts.self);
   return api<DiscordMessage[]>(`${dcBase(id)}/messages?${qs}`);
+};
+/** Guild-wide search. Rides Discord's bot search preview — verified working
+ *  here, but it can 403 on other apps, so callers must surface the error. */
+export const discordSearch = (
+  id: string,
+  guild: string,
+  q: string,
+  opts: { channel?: string; limit?: number } = {},
+) => {
+  const qs = new URLSearchParams({ guild, q });
+  if (opts.channel) qs.set('channel', opts.channel);
+  if (opts.limit) qs.set('limit', String(opts.limit));
+  return api<DiscordMessage[]>(`${dcBase(id)}/search?${qs}`);
 };
 export const discordSend = (id: string, channel: string, content: string, replyTo?: string) =>
   api<DiscordMessage>(`${dcBase(id)}/send`, {

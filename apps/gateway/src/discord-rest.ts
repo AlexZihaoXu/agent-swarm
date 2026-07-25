@@ -53,6 +53,22 @@ export interface DiscordAttachment {
   size: number;
 }
 
+/** A rich embed. Whole channels can be nothing but these (a webhook/bot feed),
+ *  so dropping them renders those channels as blank rows. */
+export interface DiscordEmbed {
+  title: string | null;
+  description: string | null;
+  url: string | null;
+  /** Discord's integer colour; the client renders it as the left accent bar. */
+  color: number | null;
+  timestamp: string | null;
+  footer: string | null;
+  authorName: string | null;
+  imageUrl: string | null;
+  thumbnailUrl: string | null;
+  fields: { name: string; value: string; inline: boolean }[];
+}
+
 export interface DiscordMessage {
   id: string;
   channelId: string;
@@ -61,6 +77,10 @@ export interface DiscordMessage {
   editedTimestamp: string | null;
   author: DiscordAuthor;
   attachments: DiscordAttachment[];
+  embeds: DiscordEmbed[];
+  /** Users mentioned in `content`, so the client can turn `<@id>` into a real
+   *  name without a second round-trip — Discord ships them with the message. */
+  mentions: { id: string; displayName: string }[];
   reactions: { emoji: string; count: number; me: boolean }[];
   /** Present when this message is a reply, so the UI can show the quoted bar. */
   replyTo: { id: string; author: string; content: string } | null;
@@ -138,36 +158,46 @@ export async function listChannels(token: string, guildId: string): Promise<Disc
     .sort((a, b) => a.position - b.position);
 }
 
-/** Newest-first, as Discord returns it. `before` pages backwards in time. */
-export async function listMessages(
-  token: string,
-  channelId: string,
-  opts: { limit?: number; before?: string } = {},
-  selfId?: string,
-): Promise<DiscordMessage[]> {
-  const limit = Math.min(100, Math.max(1, opts.limit ?? 50));
-  const qs = new URLSearchParams({ limit: String(limit) });
-  if (opts.before) qs.set('before', opts.before);
-  const raw = (await rest(token).get(`${Routes.channelMessages(channelId)}?${qs}`)) as {
+interface RawMessage {
+  id: string;
+  channel_id: string;
+  content: string;
+  timestamp: string;
+  edited_timestamp: string | null;
+  author: RawUser;
+  /** Only present on search results — flags which entry in a context group is
+   *  the actual match. */
+  hit?: boolean;
+  attachments?: {
     id: string;
-    channel_id: string;
-    content: string;
-    timestamp: string;
-    edited_timestamp: string | null;
-    author: RawUser;
-    attachments?: {
-      id: string;
-      filename: string;
-      url: string;
-      content_type?: string;
-      width?: number;
-      height?: number;
-      size: number;
-    }[];
-    reactions?: { emoji: { name: string | null; id: string | null }; count: number; me: boolean }[];
-    referenced_message?: { id: string; content: string; author: RawUser } | null;
+    filename: string;
+    url: string;
+    content_type?: string;
+    width?: number;
+    height?: number;
+    size: number;
   }[];
-  return (raw ?? []).map((m) => ({
+  embeds?: {
+    title?: string;
+    description?: string;
+    url?: string;
+    color?: number;
+    timestamp?: string;
+    footer?: { text?: string };
+    author?: { name?: string };
+    image?: { url?: string };
+    thumbnail?: { url?: string };
+    fields?: { name: string; value: string; inline?: boolean }[];
+  }[];
+  mentions?: RawUser[];
+  reactions?: { emoji: { name: string | null; id: string | null }; count: number; me: boolean }[];
+  referenced_message?: { id: string; content: string; author: RawUser } | null;
+}
+
+/** Shared by history, search and send — one place that decides what the browser
+ *  sees, so the three can never drift. */
+function normalizeMessage(m: RawMessage, selfId?: string): DiscordMessage {
+  return {
     id: m.id,
     channelId: m.channel_id,
     content: m.content ?? '',
@@ -183,6 +213,19 @@ export async function listMessages(
       height: a.height ?? null,
       size: a.size,
     })),
+    embeds: (m.embeds ?? []).map((e) => ({
+      title: e.title ?? null,
+      description: e.description ?? null,
+      url: e.url ?? null,
+      color: typeof e.color === 'number' ? e.color : null,
+      timestamp: e.timestamp ?? null,
+      footer: e.footer?.text ?? null,
+      authorName: e.author?.name ?? null,
+      imageUrl: e.image?.url ?? null,
+      thumbnailUrl: e.thumbnail?.url ?? null,
+      fields: (e.fields ?? []).map((f) => ({ name: f.name, value: f.value, inline: !!f.inline })),
+    })),
+    mentions: (m.mentions ?? []).map((u) => ({ id: u.id, displayName: toAuthor(u).displayName })),
     reactions: (m.reactions ?? []).map((r) => ({
       emoji: r.emoji?.name ?? '?',
       count: r.count,
@@ -196,7 +239,46 @@ export async function listMessages(
         }
       : null,
     self: !!selfId && m.author?.id === selfId,
-  }));
+  };
+}
+
+/** Newest-first, as Discord returns it. `before` pages backwards in time. */
+export async function listMessages(
+  token: string,
+  channelId: string,
+  opts: { limit?: number; before?: string } = {},
+  selfId?: string,
+): Promise<DiscordMessage[]> {
+  const limit = Math.min(100, Math.max(1, opts.limit ?? 50));
+  const qs = new URLSearchParams({ limit: String(limit) });
+  if (opts.before) qs.set('before', opts.before);
+  const raw = (await rest(token).get(`${Routes.channelMessages(channelId)}?${qs}`)) as RawMessage[];
+  return (raw ?? []).map((m) => normalizeMessage(m, selfId));
+}
+
+/**
+ * Guild-wide message search. This rides Discord's bot *search preview*, which
+ * isn't part of the documented bot API and 403s for apps that don't have it —
+ * verified working for this deployment, but callers must handle the failure.
+ * Results come back as groups (the hit plus surrounding context); we take the
+ * flagged hit, falling back to the first entry.
+ */
+export async function searchMessages(
+  token: string,
+  guildId: string,
+  query: string,
+  opts: { limit?: number; channelId?: string } = {},
+): Promise<DiscordMessage[]> {
+  const qs = new URLSearchParams({
+    content: query,
+    limit: String(Math.min(25, Math.max(1, opts.limit ?? 25))),
+  });
+  if (opts.channelId) qs.set('channel_id', opts.channelId);
+  const res = (await rest(token).get(`/guilds/${guildId}/messages/search?${qs}`)) as {
+    messages?: RawMessage[][];
+  };
+  const hits = (res?.messages ?? []).map((group) => group.find((m) => m.hit) ?? group[0]);
+  return hits.filter(Boolean).map((m) => normalizeMessage(m as RawMessage));
 }
 
 export async function sendMessage(
@@ -207,14 +289,12 @@ export async function sendMessage(
 ): Promise<DiscordMessage> {
   const body: Record<string, unknown> = { content };
   if (replyToId) body.message_reference = { message_id: replyToId };
-  const created = (await rest(token).post(Routes.channelMessages(channelId), { body })) as {
-    id: string;
-  };
-  const [msg] = await listMessages(token, channelId, { limit: 1 });
-  return (
-    msg ??
-    ({ id: created.id, channelId, content, timestamp: new Date().toISOString() } as DiscordMessage)
-  );
+  // The POST response IS the created message, so normalize it directly rather
+  // than re-reading the channel (which raced the write and could miss it).
+  const created = (await rest(token).post(Routes.channelMessages(channelId), {
+    body,
+  })) as RawMessage;
+  return normalizeMessage(created, created.author?.id);
 }
 
 export async function addReaction(

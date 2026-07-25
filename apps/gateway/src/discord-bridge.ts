@@ -93,6 +93,10 @@ interface Conn {
   client: Client;
   timer: ReturnType<typeof setInterval>;
   setCustom: (text: string) => void;
+  /** Read back the agent's own status quote (for the dashboard's client). */
+  getCustom: () => string | null;
+  /** Presence the bridge last applied ('online' while attentive, else 'idle'). */
+  getPresence: () => 'online' | 'idle' | null;
   /** Cancel any armed reply-nudge (on disconnect). */
   cancelNudge: () => void;
 }
@@ -107,6 +111,18 @@ export class DiscordBridge {
   /** Set (or clear, with an empty string) this agent's bot custom status — the
    *  little "status quote" under its name. Returns false when the bot isn't
    *  connected (Discord not configured, or offline). */
+  /** The bot's live presence + status quote, for the operator's Discord client.
+   *  Null when the bridge isn't connected for this agent. */
+  presenceOf(agentId: string): {
+    connected: boolean;
+    presence: 'online' | 'idle' | null;
+    customStatus: string | null;
+  } {
+    const conn = this.conns.get(agentId);
+    if (!conn) return { connected: false, presence: null, customStatus: null };
+    return { connected: true, presence: conn.getPresence(), customStatus: conn.getCustom() };
+  }
+
   setCustomStatus(agentId: string, text: string): boolean {
     const conn = this.conns.get(agentId);
     if (!conn) return false;
@@ -341,7 +357,14 @@ export class DiscordBridge {
     }, WAKE_CHECK_MS);
 
     await client.login(token);
-    this.conns.set(agentId, { client, timer, setCustom, cancelNudge });
+    this.conns.set(agentId, {
+      client,
+      timer,
+      setCustom,
+      getCustom: () => customStatus,
+      getPresence: () => presence,
+      cancelNudge,
+    });
   }
 
   async disconnect(agentId: string): Promise<void> {
