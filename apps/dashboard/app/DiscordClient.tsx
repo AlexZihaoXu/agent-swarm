@@ -1102,7 +1102,7 @@ export function DiscordClient({ agentId }: { agentId: string }) {
             </div>
           )}
           <div
-            className={`bg-surface-secondary focus-within:border-accent border-separator flex items-end gap-2 border px-2 py-1.5 transition-colors ${
+            className={`bg-surface-secondary focus-within:border-accent border-separator flex items-end gap-2 border px-1.5 py-1 transition-colors ${
               replyTo ? 'rounded-b-lg' : 'rounded-lg'
             }`}
             onKeyDown={(e) => {
@@ -1114,7 +1114,7 @@ export function DiscordClient({ agentId }: { agentId: string }) {
               }
             }}
           >
-            <div className="discord-composer max-h-40 min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
+            <div className="discord-composer max-h-28 min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
               <MilkdownEditor key={composerKey} defaultValue="" apiRef={editorRef} />
             </div>
             <button
