@@ -299,8 +299,11 @@ def set_effort(args: dict) -> dict:
         else ""
     )
     return _ok(
-        f"reasoning effort is now {now}. It applies from your next turn and persists across a "
-        f"session respawn.{tail}"
+        f"reasoning effort is set to {now} and persists across a session respawn. The gateway now "
+        f"drives the /effort switch in YOUR OWN terminal, which takes about 10 seconds — you will "
+        f"see an Enter, the /effort command, and a couple of confirmation Enters typed into your "
+        f"session. That is expected, not interference. When it finishes you get a "
+        f"**[sys://effort]** message; carry on from there.{tail}"
     )
 
 

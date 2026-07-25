@@ -82,6 +82,9 @@ const AGENT_GUIDANCE_MAX = 100_000;
 /** Cap on one swarm_append_guidance call so a single append can't fill the budget. */
 const GUIDANCE_APPEND_MAX = 4_000;
 
+/** One step of a scripted TUI key sequence (see AgentManager.injectKeys). */
+type InjectStep = { key: 'enter' | 'esc' } | { text: string } | { waitMs: number };
+
 /** The agent's self-identity, written to its disk so it (and its MCP tools)
  *  can read its own name/id within the swarm. */
 interface AgentIdentity {
@@ -477,7 +480,7 @@ export class AgentManager {
     // unlike the --effort flag). CLAUDE_CODE_EFFORT_LEVEL persists it across the
     // next (re)spawn; this makes the change take effect now without a restart.
     if (patch.effort !== undefined && idPatch.effort !== prevEffort && info.State.Running) {
-      void this.injectToTerminal(id, `/effort ${idPatch.effort || 'default'}`).catch(() => {});
+      void this.applyEffortLive(id, idPatch.effort || 'default').catch(() => {});
     }
     // Desktop toggle: sync the on-disk marker (boot-time gate) and, when the
     // agent is running, also live-stop/-start the desktop units via docker
@@ -2506,6 +2509,18 @@ export class AgentManager {
    *  typed. A real HTTP response (success or a permanent error like 400) is never
    *  retried, so a message the server already processed can't be typed twice. */
   private async injectToTerminal(id: string, text: string, interrupt = false): Promise<void> {
+    return this.postInject(id, { session: 'claude', text, interrupt });
+  }
+
+  /** Drive a scripted key sequence into the claude TUI. The runtime holds the
+   *  session's write chain for the whole script, so nothing else can interleave
+   *  into the pty partway through. Used for flows a single text+Enter can't
+   *  express — see applyEffortLive(). */
+  private async injectKeys(id: string, steps: InjectStep[]): Promise<void> {
+    return this.postInject(id, { session: 'claude', steps });
+  }
+
+  private async postInject(id: string, payload: Record<string, unknown>): Promise<void> {
     const MAX = 5;
     for (let attempt = 0; ; attempt++) {
       try {
@@ -2513,7 +2528,7 @@ export class AgentManager {
         const res = await fetch(`http://${t.host}:${t.port}/api/inject`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ session: 'claude', text, interrupt }),
+          body: JSON.stringify(payload),
         });
         if (res.ok) return;
         // 404 = the claude session isn't up yet (transient on (re)start); retry.
@@ -2997,6 +3012,45 @@ export class AgentManager {
       );
     await this.patchAgent(fromId, { effort: normalized });
     return { ok: true, effort: normalized || 'default' };
+  }
+
+  /**
+   * Drive the `/effort <level>` switch in the agent's own TUI, then tell it the
+   * switch is done.
+   *
+   * A single "type the command + Enter" isn't enough: `/effort` opens a
+   * selector that redraws, and the caller is often the agent itself, mid-turn,
+   * with a partially-typed line in the composer. So the script is
+   *
+   *   Enter (clear the line) → type `/effort <level>` → 5s → Enter → 3s →
+   *   Enter → 2s → the sys nudge
+   *
+   * The waits are generous on purpose — this races a redrawing TUI, and being
+   * early is what breaks it. The whole script holds the runtime's per-session
+   * write chain, so a Discord message or peer DM arriving mid-switch queues
+   * behind it instead of landing between the keystrokes.
+   *
+   * Fire-and-forget from patchAgent: it takes ~10s, and neither the operator's
+   * PATCH nor the agent's swarm_set_effort call should block on it.
+   */
+  private async applyEffortLive(id: string, level: string): Promise<void> {
+    await this.injectKeys(id, [
+      { key: 'enter' },
+      { text: `/effort ${level}` },
+      { waitMs: 5_000 },
+      { key: 'enter' },
+      { waitMs: 3_000 },
+      { key: 'enter' },
+      { waitMs: 2_000 },
+    ]);
+    // Separate inject (not a step) so it goes through the normal text+Enter
+    // path — and so a failure to confirm can't leave the switch half-applied.
+    await this.injectToTerminal(
+      id,
+      `**[sys://effort]** Your reasoning effort is now ${level}. The switch is complete and ` +
+        `applies from your next turn. If it interrupted you, pick up where you left off and ` +
+        `continue what you were doing.`,
+    );
   }
 
   /** Append to the CALLER'S OWN guidance (its ~/.claude/CLAUDE.md). Append-only

@@ -164,6 +164,11 @@ there's a real someone/something on the other end:
     **anything** back (no message, reply, or reaction), so a human is probably still waiting. Either
     send the answer, or post a one-line "on it" via `discord_send_message` if you're still working.
     It fires **once** per unanswered message and stops as soon as you send or react.
+  - `[sys://effort]` — your reasoning-effort switch finished. Changing effort (yours via
+    `swarm_set_effort`, or the operator's from your settings) is driven as real keystrokes in your
+    terminal over ~10s: an Enter, then `/effort <level>`, then confirmation Enters. **Seeing those
+    appear is normal** — it's the switch, not someone else typing. This message means it's done;
+    resume whatever you were doing.
 
 **A sudden `/compact` is expected, not an attack.** When your context window gets full, the
 operator (from the dashboard) or the gateway's auto-compact watchdog may run Claude Code's own

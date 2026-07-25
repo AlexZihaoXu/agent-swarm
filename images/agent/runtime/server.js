@@ -1085,6 +1085,13 @@ const READY_SETTLE_MS = parseInt(process.env.SWARM_READY_SETTLE_MS || '5000', 10
  *  an update can be slow — this only has to beat "never". */
 const READY_FALLBACK_MS = parseInt(process.env.SWARM_READY_FALLBACK_MS || '180000', 10);
 
+/** Bounds on a scripted /api/inject key sequence. The sequence holds the
+ *  session's write chain for its whole duration (that's the point — nothing
+ *  else may interleave into the pty mid-script), so a caller must not be able
+ *  to wedge the chain with a huge or unbounded script. */
+const STEP_MAX_COUNT = 32;
+const STEP_MAX_WAIT_MS = 30_000;
+
 // Resume across container restarts. The agent's home is a persistent disk, so
 // Claude's transcripts survive a restart. If one exists for the working dir,
 // continue the most recent conversation (with a fresh session as fallback if
@@ -1246,16 +1253,40 @@ const server = http.createServer(async (req, res) => {
     const name = body.session || 'claude';
     const text = typeof body.text === 'string' ? body.text : '';
     const interrupt = !!body.interrupt;
+    // `steps` drives a scripted key sequence (bare Enter, typed text, waits) —
+    // needed for TUI flows that a single text+Enter can't express, e.g. the
+    // /effort selector, which wants an Enter to clear the line, then the
+    // command, then confirmation Enters spaced out while the TUI redraws.
+    const steps = Array.isArray(body.steps) ? body.steps.slice(0, STEP_MAX_COUNT) : null;
     const sess = sessions.get(name);
     if (!sess) return sendJson(res, 404, { error: 'session not found' });
-    if (!text.trim() && !interrupt)
-      return sendJson(res, 400, { error: 'text or interrupt required' });
+    if (!steps && !text.trim() && !interrupt)
+      return sendJson(res, 400, { error: 'text, steps, or interrupt required' });
 
     // Serialize the full write sequence (Esc / text / Enter) per session so two
     // concurrent injects — e.g. an interrupt arriving while a queued message is
     // mid-write — can't interleave their bytes in the pty. We await completion
     // before responding so the caller knows the message was actually typed.
     const perform = async () => {
+      if (steps) {
+        for (const s of steps) {
+          if (!s || typeof s !== 'object') continue;
+          try {
+            if (typeof s.waitMs === 'number') {
+              await sleep(Math.min(Math.max(s.waitMs, 0), STEP_MAX_WAIT_MS));
+            } else if (s.key === 'enter') {
+              sess.pty.write('\r');
+            } else if (s.key === 'esc') {
+              sess.pty.write('\x1b');
+            } else if (typeof s.text === 'string' && s.text) {
+              sess.pty.write(s.text.replace(/\r\n?/g, '\n'));
+            }
+          } catch {
+            return; /* session closed mid-sequence */
+          }
+        }
+        return;
+      }
       if (interrupt) {
         sess.pty.write('\x1b'); // claude TUI interrupt key
         await sleep(350); // let it settle back to the prompt

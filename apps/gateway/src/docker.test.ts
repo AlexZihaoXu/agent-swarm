@@ -130,3 +130,67 @@ test('debounced second call does NOT reset the compacting clock', async () => {
     'progress should keep advancing forward, never rewind',
   );
 });
+
+// --- applyEffortLive sequence ----------------------------------------------
+// A bare "type /effort <level> + Enter" isn't enough: the slash command opens a
+// selector that redraws, and the caller is often the agent itself, mid-turn,
+// with a half-typed line in the composer. The scripted sequence (and the waits
+// between the confirmation Enters) is the contract — assert it exactly, since
+// getting it early is precisely what breaks the switch.
+
+function stubEffortManager() {
+  const manager = new AgentManager({} as Docker, { ...config, mode: 'network' });
+  const keys: { id: string; steps: unknown[] }[] = [];
+  const texts: { id: string; text: string }[] = [];
+  (
+    manager as unknown as { injectKeys: (id: string, steps: unknown[]) => Promise<void> }
+  ).injectKeys = async (id, steps) => {
+    keys.push({ id, steps });
+  };
+  (
+    manager as unknown as { injectToTerminal: (id: string, text: string) => Promise<void> }
+  ).injectToTerminal = async (id, text) => {
+    texts.push({ id, text });
+  };
+  return { manager, keys, texts };
+}
+
+test('applyEffortLive drives Enter → command → 5s → Enter → 3s → Enter → 2s', async () => {
+  const { manager, keys } = stubEffortManager();
+  await (
+    manager as unknown as { applyEffortLive: (id: string, level: string) => Promise<void> }
+  ).applyEffortLive('alpha', 'ultracode');
+
+  assert.equal(keys.length, 1, 'one scripted sequence');
+  assert.equal(keys[0]?.id, 'alpha');
+  assert.deepEqual(keys[0]?.steps, [
+    { key: 'enter' },
+    { text: '/effort ultracode' },
+    { waitMs: 5_000 },
+    { key: 'enter' },
+    { waitMs: 3_000 },
+    { key: 'enter' },
+    { waitMs: 2_000 },
+  ]);
+});
+
+test('applyEffortLive confirms with a sys nudge after the sequence', async () => {
+  const { manager, texts } = stubEffortManager();
+  await (
+    manager as unknown as { applyEffortLive: (id: string, level: string) => Promise<void> }
+  ).applyEffortLive('alpha', 'ultracode');
+
+  assert.equal(texts.length, 1, 'exactly one confirmation');
+  assert.match(texts[0]?.text ?? '', /^\*\*\[sys:\/\/effort\]\*\*/);
+  assert.match(texts[0]?.text ?? '', /effort is now ultracode/);
+  assert.match(texts[0]?.text ?? '', /pick up where you left off/i);
+});
+
+test('applyEffortLive carries the level through, including default', async () => {
+  const { manager, keys, texts } = stubEffortManager();
+  await (
+    manager as unknown as { applyEffortLive: (id: string, level: string) => Promise<void> }
+  ).applyEffortLive('beta', 'default');
+  assert.deepEqual(keys[0]?.steps?.[1], { text: '/effort default' });
+  assert.match(texts[0]?.text ?? '', /effort is now default/);
+});

@@ -222,6 +222,18 @@ export const migrations: Migration[] = [
       );
     },
   },
+  {
+    version: 18,
+    name: 'inject: scripted key sequences (drives the /effort switch)',
+    apply: async (ctx) => {
+      // /api/inject gains a `steps` form (bare Enter, typed text, waits) so the
+      // gateway can drive the /effort selector, which a single text+Enter can't
+      // express. Separate from 17 even though both ship `runtime`: an agent that
+      // already applied 17 has the pre-steps supervisor and still needs this.
+      await ctx.putDir('runtime', '/opt/agent-runtime');
+      await ctx.exec('chown -R agent:agent /opt/agent-runtime; systemctl restart agent-terminals');
+    },
+  },
 ];
 
 /** Highest migration version (the version a fully up-to-date agent is at). */
