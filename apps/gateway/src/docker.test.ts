@@ -255,3 +255,50 @@ test('installedVersion reports 0 when the container is gone', async () => {
   const manager = new AgentManager(gone, { ...config, mode: 'network' });
   assert.equal(await manager.installedVersion('ghost'), 0);
 });
+
+// --- upgrade concurrency ----------------------------------------------------
+// Two clicks used to start two independent upgrades of the same agent. Each had
+// its own `finally` that stopped the container, so one run's cleanup killed the
+// container while the other was still applying migrations — the fleet logged a
+// string of "starting stopped agent…" boots that never converged. A second call
+// must JOIN the first, not race it.
+
+test('upgrade() joins an in-flight run instead of starting a second one', async () => {
+  const manager = new AgentManager({} as Docker, { ...config, mode: 'network' });
+  let runs = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  (manager as unknown as { runUpgrade: (id: string) => Promise<unknown> }).runUpgrade =
+    async () => {
+      runs++;
+      await gate;
+      return { installed: 18, latest: 18, outdated: false, pending: [] };
+    };
+
+  const a = manager.upgrade('alpha');
+  const b = manager.upgrade('alpha');
+  assert.equal(runs, 1, 'second call must not start another run');
+
+  release();
+  // Both callers observe the same single run's result. (Identity can't be
+  // asserted: upgrade() is async, so each call gets its own wrapper promise.)
+  assert.deepEqual(await a, await b);
+  assert.equal(runs, 1, 'still only one run after both settled');
+
+  // Once settled the entry is cleared, so a later upgrade can run again.
+  await manager.upgrade('alpha');
+  assert.equal(runs, 2, 'a subsequent upgrade starts a fresh run');
+});
+
+test('upgrade() locks per agent, not globally', async () => {
+  const manager = new AgentManager({} as Docker, { ...config, mode: 'network' });
+  const started: string[] = [];
+  (manager as unknown as { runUpgrade: (id: string) => Promise<unknown> }).runUpgrade = async (
+    id,
+  ) => {
+    started.push(id);
+    return { installed: 18, latest: 18, outdated: false, pending: [] };
+  };
+  await Promise.all([manager.upgrade('alpha'), manager.upgrade('beta')]);
+  assert.deepEqual(started.sort(), ['alpha', 'beta']);
+});

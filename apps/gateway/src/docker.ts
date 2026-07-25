@@ -3614,23 +3614,32 @@ export class AgentManager {
     return Number.isFinite(n) ? n : 0;
   }
 
-  /** Wait until the container's init has come up far enough that migrations can
-   *  `systemctl restart` services. Best-effort: on timeout we proceed anyway
-   *  rather than block the upgrade. */
-  private async waitForSystemd(container: Docker.Container, timeoutMs = 90_000): Promise<void> {
+  /**
+   * Wait until the container's systemd will accept unit commands — deliberately
+   * NOT until the boot finishes.
+   *
+   * These images run a full GNOME session, so `is-system-running` reports
+   * `starting` for minutes. Measured on a real agent: the D-Bus socket appears
+   * at ~2s, `starting` at ~3s, and from there `systemctl restart agent-terminals`
+   * returns rc=0 in under 0.3s — the units are perfectly manageable. Waiting for
+   * `running` therefore burned the entire timeout on every single upgrade, which
+   * is what made the dialog appear to hang.
+   *
+   * So we only wait out the "Failed to connect to bus" / `initializing` window.
+   * Best-effort: on timeout we proceed anyway rather than block the upgrade.
+   */
+  private async waitForSystemd(container: Docker.Container, timeoutMs = 60_000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       try {
         const out = (
           await this.exec(container, ['sh', '-c', 'systemctl is-system-running 2>&1 || true'])
         ).trim();
-        // running | degraded | maintenance all mean "units are manageable";
-        // only `initializing`/`starting` mean we'd race the boot.
-        if (out && !/^(initializing|starting)/.test(out)) return;
+        if (/^(starting|running|degraded|maintenance)/.test(out)) return;
       } catch {
         /* exec not accepting connections yet */
       }
-      await new Promise((r) => setTimeout(r, 1_000));
+      await new Promise((r) => setTimeout(r, 500));
     }
   }
 
@@ -3656,7 +3665,26 @@ export class AgentManager {
    * terminal supervisor (and thus the always-on claude session — its transcript
    * is preserved on disk); no recreate.
    */
+  /**
+   * Upgrades in flight, keyed by agent id. A second click JOINS the first
+   * instead of racing it.
+   *
+   * Without this, concurrent runs stomped each other badly: each had its own
+   * `finally` that stopped the container, so call #1's cleanup would kill the
+   * container while call #2 was still applying migrations — producing a string
+   * of "starting stopped agent…" boots that never converged.
+   */
+  private upgrades = new Map<string, Promise<UpgradeInfo>>();
+
   async upgrade(id: string): Promise<UpgradeInfo> {
+    const inFlight = this.upgrades.get(id);
+    if (inFlight) return inFlight;
+    const run = this.runUpgrade(id).finally(() => this.upgrades.delete(id));
+    this.upgrades.set(id, run);
+    return run;
+  }
+
+  private async runUpgrade(id: string): Promise<UpgradeInfo> {
     const container = this.docker.getContainer(this.containerName(id));
     const ctx = this.migrationCtx(container);
     const installed = await this.installedVersion(id);
