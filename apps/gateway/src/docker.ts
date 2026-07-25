@@ -3250,6 +3250,42 @@ export class AgentManager {
   }
 
   /** Validate the bot token over REST and record the result. */
+  /**
+   * Discover the DM correspondents for an agent's bot.
+   *
+   * Discord will NOT enumerate a bot's DM channels — `GET /users/@me/channels`
+   * returns [] for bot tokens, verified against this fleet — so there is no API
+   * that answers "who has DMed me". The allow-list only covers who is permitted
+   * to, which is why DMs from anyone else went missing from the sidebar.
+   *
+   * Every DM the bridge ever delivered, though, was injected into the agent's
+   * claude session as `discord://dm/<userId>`, and those transcripts are on the
+   * agent's disk. So we mine them for correspondents. That recovers the full
+   * history rather than only DMs seen since some new bookkeeping started.
+   */
+  discordDmPeers(id: string): string[] {
+    const ids = new Set<string>();
+    const cur = integrations.getIntegration(this.requireAgentDir(id), 'discord');
+    for (const u of cur?.rules?.allowedUserIds ?? []) ids.add(u);
+
+    const projects = join(this.agentDataDir(id), '.claude', 'projects');
+    if (existsSync(projects)) {
+      for (const file of this.walkJsonl(projects)) {
+        try {
+          // Scan raw text: the address appears inside injected message lines,
+          // and parsing every transcript record just to find it would be far
+          // more work for the same answer.
+          for (const m of readFileSync(file, 'utf8').matchAll(/discord:\/\/dm\/(\d{5,25})/g)) {
+            if (m[1]) ids.add(m[1]);
+          }
+        } catch {
+          /* unreadable transcript — skip */
+        }
+      }
+    }
+    return [...ids];
+  }
+
   /** The agent's Discord bot token, for operator-side REST (the dashboard's
    *  Discord client). Throws rather than returning empty so callers surface a
    *  useful message instead of a confusing 401 from Discord. Never send the

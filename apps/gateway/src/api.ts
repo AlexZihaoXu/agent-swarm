@@ -1409,6 +1409,16 @@ async function handleDiscord(
         );
       case 'guilds':
         return (sendJson(res, 200, await discord.listGuilds(token)), true);
+      case 'dms': {
+        // Resolve each discovered correspondent so the sidebar can show a
+        // person. A lookup that fails (deleted account, bot blocked) is dropped
+        // rather than surfacing a bare snowflake.
+        const peers = manager.discordDmPeers(id);
+        const resolved = await Promise.all(
+          peers.map((uid) => discord.getUser(token, uid).catch(() => null)),
+        );
+        return (sendJson(res, 200, resolved.filter(Boolean)), true);
+      }
       case 'user': {
         // Resolves a DM correspondent to a real name + avatar; without it the
         // DM list can only show a raw snowflake.

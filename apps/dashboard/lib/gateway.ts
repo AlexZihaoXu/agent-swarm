@@ -400,6 +400,10 @@ export interface DiscordSelf extends DiscordAuthor {
   customStatus: string | null;
 }
 export const discordWhoami = (id: string) => api<DiscordSelf>(`${dcBase(id)}/whoami`);
+/** DM correspondents this bot actually has. Discord won't enumerate a bot's DM
+ *  channels, so the gateway reconstructs the list from the allow-list plus the
+ *  `discord://dm/<id>` addresses in the agent's own transcripts. */
+export const discordDms = (id: string) => api<DiscordAuthor[]>(`${dcBase(id)}/dms`);
 export const discordUser = (id: string, user: string) =>
   api<DiscordAuthor>(`${dcBase(id)}/user?id=${encodeURIComponent(user)}`);
 export const discordGuilds = (id: string) => api<DiscordGuild[]>(`${dcBase(id)}/guilds`);

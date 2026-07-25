@@ -32,15 +32,14 @@ import {
 import {
   DISCORD_CATEGORY,
   discordChannels,
+  discordDms,
   discordGuilds,
   discordMessages,
   discordOpenDm,
   discordReact,
   discordSearch,
   discordSend,
-  discordUser,
   discordWhoami,
-  listIntegrations,
   type DiscordAttachment,
   type DiscordAuthor,
   type DiscordChannel,
@@ -511,8 +510,7 @@ export function DiscordClient({ agentId }: { agentId: string }) {
   const [guilds, setGuilds] = useState<DiscordGuild[]>([]);
   const [guildId, setGuildId] = useState<string | null>(null);
   const [channels, setChannels] = useState<DiscordChannel[]>([]);
-  const [dmUsers, setDmUsers] = useState<string[]>([]);
-  const [profiles, setProfiles] = useState<Map<string, DiscordAuthor>>(new Map());
+  const [dmPeers, setDmPeers] = useState<DiscordAuthor[]>([]);
   const [target, setTarget] = useState<Target | null>(null);
   const [messages, setMessages] = useState<DiscordMessage[]>([]);
   const [replyTo, setReplyTo] = useState<DiscordMessage | null>(null);
@@ -541,15 +539,15 @@ export function DiscordClient({ agentId }: { agentId: string }) {
     let alive = true;
     void (async () => {
       try {
-        const [who, gs, ints] = await Promise.all([
+        const [who, gs, dms] = await Promise.all([
           discordWhoami(agentId),
           discordGuilds(agentId),
-          listIntegrations(agentId).catch(() => []),
+          discordDms(agentId).catch(() => []),
         ]);
         if (!alive) return;
         setMe(who);
         setGuilds(gs);
-        setDmUsers(ints.find((i) => i.type === 'discord')?.rules?.allowedUserIds ?? []);
+        setDmPeers(dms);
         if (gs.length) setGuildId(gs[0]!.id);
         else setLoading(false);
       } catch (e) {
@@ -563,21 +561,6 @@ export function DiscordClient({ agentId }: { agentId: string }) {
       alive = false;
     };
   }, [agentId]);
-
-  // Resolve DM correspondents to real profiles, so the sidebar shows a person
-  // rather than a snowflake.
-  useEffect(() => {
-    let alive = true;
-    for (const uid of dmUsers) {
-      if (profiles.has(uid)) continue;
-      void discordUser(agentId, uid)
-        .then((u) => alive && setProfiles((prev) => new Map(prev).set(uid, u)))
-        .catch(() => {});
-    }
-    return () => {
-      alive = false;
-    };
-  }, [agentId, dmUsers, profiles]);
 
   useEffect(() => {
     if (!guildId) return;
@@ -702,7 +685,7 @@ export function DiscordClient({ agentId }: { agentId: string }) {
       setTarget({
         kind: 'dm',
         id: channelId,
-        name: profiles.get(userId)?.displayName ?? userId,
+        name: dmPeers.find((p) => p.id === userId)?.displayName ?? userId,
         userId,
       });
     } catch (e) {
@@ -763,13 +746,13 @@ export function DiscordClient({ agentId }: { agentId: string }) {
   const channelNames = useMemo(() => new Map(channels.map((c) => [c.id, c.name])), [channels]);
   const userNames = useMemo(() => {
     const m = new Map<string, string>();
-    for (const [id, p] of profiles) m.set(id, p.displayName);
+    for (const p of dmPeers) m.set(p.id, p.displayName);
     // Discord ships the mentioned users with each message, so names resolve
     // without a second round-trip.
     for (const msg of messages) for (const u of msg.mentions) m.set(u.id, u.displayName);
     if (me) m.set(me.id, me.displayName);
     return m;
-  }, [messages, profiles, me]);
+  }, [messages, dmPeers, me]);
 
   // Text channels grouped under their category. Two channels can share a name
   // in different categories, so the grouping is what disambiguates them.
@@ -844,34 +827,28 @@ export function DiscordClient({ agentId }: { agentId: string }) {
               <p className="text-muted px-3 py-1 text-[11px] font-semibold tracking-wide uppercase">
                 Direct Messages
               </p>
-              {dmUsers.length === 0 && (
+              {dmPeers.length === 0 && (
                 <p className="text-muted px-3 py-2 text-xs leading-relaxed">
-                  No DM contacts. Discord doesn&apos;t let bots list their DMs, so these come from
-                  the integration&apos;s allowed-user list.
+                  No DM contacts found. Discord doesn&apos;t let bots list their DM channels, so
+                  this is reconstructed from conversations this agent has actually received.
                 </p>
               )}
-              {dmUsers.map((u) => {
-                const p = profiles.get(u);
-                return (
-                  <button
-                    key={u}
-                    type="button"
-                    onClick={() => void openDm(u)}
-                    className={`hover:bg-surface-tertiary mx-2 flex w-[calc(100%-1rem)] cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors duration-100 ${
-                      target?.kind === 'dm' && target.userId === u
-                        ? 'bg-surface-tertiary text-foreground'
-                        : 'text-muted'
-                    }`}
-                  >
-                    {p ? (
-                      <img src={p.avatarUrl} alt="" className="size-6 shrink-0 rounded-full" />
-                    ) : (
-                      <LuUser className="size-4 shrink-0" />
-                    )}
-                    <span className="truncate">{p?.displayName ?? u}</span>
-                  </button>
-                );
-              })}
+              {dmPeers.map((u) => (
+                <button
+                  key={u.id}
+                  type="button"
+                  onClick={() => void openDm(u.id)}
+                  title={`${u.displayName} · ${u.id}`}
+                  className={`hover:bg-surface-tertiary mx-2 flex w-[calc(100%-1rem)] cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors duration-100 ${
+                    target?.kind === 'dm' && target.userId === u.id
+                      ? 'bg-surface-tertiary text-foreground'
+                      : 'text-muted'
+                  }`}
+                >
+                  <img src={u.avatarUrl} alt="" className="size-6 shrink-0 rounded-full" />
+                  <span className="truncate">{u.displayName}</span>
+                </button>
+              ))}
             </>
           ) : (
             grouped.map((group) => (
