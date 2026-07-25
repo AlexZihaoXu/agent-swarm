@@ -26,6 +26,10 @@ export interface InboundMessage {
    *  letting it queue behind the in-flight turn. Set for direct address
    *  (@mention / reply / DM). */
   interrupt?: boolean;
+  /** Author id when this arrived as a DM. Discord can't enumerate a bot's DM
+   *  channels, so recording correspondents as they arrive is the only way to
+   *  keep that list current. */
+  dmUserId?: string;
 }
 
 /** Delivers an accepted message to the agent (download attachments + inject). */
@@ -209,7 +213,8 @@ export class DiscordBridge {
       text: string,
       attachments: { url: string; name: string }[] = [],
       interrupt = false,
-    ) => void Promise.resolve(deliver({ text, attachments, interrupt })).catch(() => {});
+      dmUserId?: string,
+    ) => void Promise.resolve(deliver({ text, attachments, interrupt, dmUserId })).catch(() => {});
 
     // ── Reply nudge ─────────────────────────────────────────────────────────
     // The gateway can't see the in-agent Discord MCP's REST calls, but it DOES
@@ -292,7 +297,7 @@ export class DiscordBridge {
           interrupt: boolean,
         ) => {
           armNudge(sanitizeInbound(msg.author.username), address);
-          send(line, atts, interrupt);
+          send(line, atts, interrupt, isDm ? msg.author.id : undefined);
         };
 
         if (isDm) {

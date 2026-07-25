@@ -2668,8 +2668,16 @@ export class AgentManager {
    *  /home/agent/.swarm/discord-inbox/ (world-readable). */
   private async deliverInbound(
     id: string,
-    msg: { text: string; attachments: { url: string; name: string }[]; interrupt?: boolean },
+    msg: {
+      text: string;
+      attachments: { url: string; name: string }[];
+      interrupt?: boolean;
+      dmUserId?: string;
+    },
   ): Promise<void> {
+    // A DM correspondent we may not know about yet — recording it here is what
+    // keeps the operator's DM list complete without any transcript scanning.
+    if (msg.dmUserId) this.recordDmPeer(id, msg.dmUserId);
     let text = msg.text;
     if (msg.attachments.length) {
       const dir = join(this.agentDataDir(id), '.swarm', 'discord-inbox');
@@ -3250,40 +3258,113 @@ export class AgentManager {
   }
 
   /** Validate the bot token over REST and record the result. */
-  /**
-   * Discover the DM correspondents for an agent's bot.
-   *
-   * Discord will NOT enumerate a bot's DM channels — `GET /users/@me/channels`
-   * returns [] for bot tokens, verified against this fleet — so there is no API
-   * that answers "who has DMed me". The allow-list only covers who is permitted
-   * to, which is why DMs from anyone else went missing from the sidebar.
-   *
-   * Every DM the bridge ever delivered, though, was injected into the agent's
-   * claude session as `discord://dm/<userId>`, and those transcripts are on the
-   * agent's disk. So we mine them for correspondents. That recovers the full
-   * history rather than only DMs seen since some new bookkeeping started.
-   */
-  discordDmPeers(id: string): string[] {
-    const ids = new Set<string>();
-    const cur = integrations.getIntegration(this.requireAgentDir(id), 'discord');
-    for (const u of cur?.rules?.allowedUserIds ?? []) ids.add(u);
+  /** Where an agent's known DM correspondents are remembered, so the answer
+   *  survives a gateway restart and never costs a transcript scan again. */
+  private dmPeersFile(id: string): string {
+    return join(this.agentDataDir(id), '.swarm', 'discord-dms.json');
+  }
 
+  private readDmPeers(id: string): { ids: string[]; backfilled?: boolean } {
+    try {
+      const raw = JSON.parse(readFileSync(this.dmPeersFile(id), 'utf8')) as {
+        ids?: string[];
+        backfilled?: boolean;
+      };
+      return { ids: Array.isArray(raw.ids) ? raw.ids : [], backfilled: !!raw.backfilled };
+    } catch {
+      return { ids: [] };
+    }
+  }
+
+  private writeDmPeers(id: string, next: { ids: string[]; backfilled?: boolean }): void {
+    try {
+      const file = this.dmPeersFile(id);
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, JSON.stringify(next, null, 2));
+    } catch {
+      /* best effort — a missing record just means we rediscover later */
+    }
+  }
+
+  /** Remember a DM correspondent the moment the bridge delivers one. This is
+   *  the cheap path: no scanning, and it keeps the list current going forward. */
+  recordDmPeer(id: string, userId: string): void {
+    if (!/^\d{5,25}$/.test(userId)) return;
+    const cur = this.readDmPeers(id);
+    if (cur.ids.includes(userId)) return;
+    this.writeDmPeers(id, { ...cur, ids: [...cur.ids, userId] });
+  }
+
+  /** Agents already running before the record existed have their history only
+   *  in their transcripts, so mine those ONCE and persist the result.
+   *
+   *  Deliberately narrow: injected messages land in the MAIN session transcript,
+   *  never in `subagents/*.jsonl` — on this fleet that is 5 files instead of
+   *  1149. And each file is read in chunks, because one transcript here is
+   *  568 MB and readFileSync would allocate all of it at once. */
+  private backfillDmPeers(id: string): string[] {
+    const found = new Set<string>();
     const projects = join(this.agentDataDir(id), '.claude', 'projects');
-    if (existsSync(projects)) {
-      for (const file of this.walkJsonl(projects)) {
-        try {
-          // Scan raw text: the address appears inside injected message lines,
-          // and parsing every transcript record just to find it would be far
-          // more work for the same answer.
-          for (const m of readFileSync(file, 'utf8').matchAll(/discord:\/\/dm\/(\d{5,25})/g)) {
-            if (m[1]) ids.add(m[1]);
+    if (!existsSync(projects)) return [];
+    const RE = /discord:\/\/dm\/(\d{5,25})/g;
+    for (const file of this.walkJsonl(projects)) {
+      if (file.includes(`${sep}subagents${sep}`)) continue;
+      let fd: number | undefined;
+      try {
+        const st = statSync(file);
+        fd = openSync(file, 'r');
+        const CHUNK = 4 * 1024 * 1024;
+        const buf = Buffer.allocUnsafe(CHUNK);
+        const decoder = new StringDecoder('utf8');
+        // Keep a small tail so an address split across a chunk boundary still
+        // matches (the token is ~40 chars at most).
+        let carry = '';
+        let pos = 0;
+        while (pos < st.size) {
+          const n = readSync(fd, buf, 0, Math.min(CHUNK, st.size - pos), pos);
+          if (n <= 0) break;
+          pos += n;
+          const text = carry + decoder.write(buf.subarray(0, n));
+          for (const m of text.matchAll(RE)) if (m[1]) found.add(m[1]);
+          carry = text.slice(-64);
+        }
+      } catch {
+        /* unreadable transcript — skip it */
+      } finally {
+        if (fd !== undefined) {
+          try {
+            closeSync(fd);
+          } catch {
+            /* ignore */
           }
-        } catch {
-          /* unreadable transcript — skip */
         }
       }
     }
-    return [...ids];
+    return [...found];
+  }
+
+  /**
+   * DM correspondents for an agent's bot.
+   *
+   * Discord will NOT enumerate a bot's DM channels — `GET /users/@me/channels`
+   * returns [] for bot tokens — so there is no API that answers "who has DMed
+   * me", and the allow-list only says who is PERMITTED to (an empty list means
+   * anyone, which is why those DMs went missing).
+   *
+   * So the list is remembered instead: the bridge records each correspondent on
+   * delivery, and an agent with prior history is backfilled from its transcripts
+   * exactly once. Reads are then a small JSON file, not a 1.9 GB scan.
+   */
+  discordDmPeers(id: string): string[] {
+    const cur = this.readDmPeers(id);
+    let ids = cur.ids;
+    if (!cur.backfilled) {
+      ids = [...new Set([...ids, ...this.backfillDmPeers(id)])];
+      this.writeDmPeers(id, { ids, backfilled: true });
+    }
+    const allow = integrations.getIntegration(this.requireAgentDir(id), 'discord')?.rules
+      ?.allowedUserIds;
+    return [...new Set([...ids, ...(allow ?? [])])];
   }
 
   /** The agent's Discord bot token, for operator-side REST (the dashboard's

@@ -539,15 +539,15 @@ export function DiscordClient({ agentId }: { agentId: string }) {
     let alive = true;
     void (async () => {
       try {
-        const [who, gs, dms] = await Promise.all([
-          discordWhoami(agentId),
-          discordGuilds(agentId),
-          discordDms(agentId).catch(() => []),
-        ]);
+        const [who, gs] = await Promise.all([discordWhoami(agentId), discordGuilds(agentId)]);
         if (!alive) return;
         setMe(who);
         setGuilds(gs);
-        setDmPeers(dms);
+        // Deliberately NOT awaited with the above: the DM list is a side panel,
+        // and gating first paint on it made the whole page wait for it.
+        void discordDms(agentId)
+          .then((dms) => alive && setDmPeers(dms))
+          .catch(() => {});
         if (gs.length) setGuildId(gs[0]!.id);
         else setLoading(false);
       } catch (e) {
