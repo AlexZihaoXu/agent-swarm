@@ -1072,6 +1072,19 @@ function readTasks() {
 const CLAUDE_UPDATE_CMD =
   'echo "Updating Claude Code..."; sudo /usr/bin/npm install -g @anthropic-ai/claude-code@latest --no-audit --no-fund 2>&1 | tail -n 1';
 
+// Fired between the update and the claude launch: tells this supervisor that
+// the slow part is done and the TUI is starting, so a boot nudge can be timed
+// off reality instead of a guess. `command -v` keeps it a no-op on an older
+// image that doesn't ship the script yet.
+const READY_SIGNAL_CMD = 'command -v swarm-signal-ready >/dev/null && swarm-signal-ready';
+/** Settle after the ready signal — the update has finished, but claude itself
+ *  still needs a few seconds to render its prompt. */
+const READY_SETTLE_MS = parseInt(process.env.SWARM_READY_SETTLE_MS || '5000', 10);
+/** Safety net if the signal never arrives (script missing, curl gone, supervisor
+ *  not yet listening when it fired). Generous, because the whole point is that
+ *  an update can be slow — this only has to beat "never". */
+const READY_FALLBACK_MS = parseInt(process.env.SWARM_READY_FALLBACK_MS || '180000', 10);
+
 // Resume across container restarts. The agent's home is a persistent disk, so
 // Claude's transcripts survive a restart. If one exists for the working dir,
 // continue the most recent conversation (with a fresh session as fallback if
@@ -1088,7 +1101,9 @@ function claudeBootCommand() {
       /* no prior transcripts — start fresh */
     }
   }
-  return `${CLAUDE_UPDATE_CMD}; ${launch}`;
+  // `;` between every step, never `&&`: a failed update, or a missing
+  // swarm-signal-ready (older image), must still fall through to claude.
+  return `${CLAUDE_UPDATE_CMD}; ${READY_SIGNAL_CMD}; ${launch}`;
 }
 
 function spawnPty(command) {
@@ -1187,8 +1202,15 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 409, { error: String((e && e.message) || e) });
     }
   }
+  // The claude boot chain reporting that the pre-launch update is done and the
+  // TUI is coming up. Local-only (the supervisor port isn't published) and
+  // side-effect-light, so GET is accepted too for a dumb `curl`.
+  if (u.pathname === '/api/session-ready' && (req.method === 'POST' || req.method === 'GET')) {
+    signalSessionReady();
+    return sendJson(res, 200, { ok: true, readyAt });
+  }
   if (u.pathname === '/api/stats' && req.method === 'GET') {
-    return sendJson(res, 200, readStats());
+    return sendJson(res, 200, { ...readStats(), readyAt });
   }
   if (u.pathname === '/api/transcript' && req.method === 'GET') {
     return sendJson(res, 200, readTranscript());
@@ -1468,19 +1490,57 @@ function maybeNudgeResume() {
       `Pick up where you left off — check your recent work/tasks and continue.`;
   }
   if (!text) return;
-  // Wait for claude to reach its prompt, then type the nudge + Enter.
-  setTimeout(() => {
-    const sess = sessions.get('claude');
-    if (!sess) return;
+  // Hold the nudge until claude is actually at its prompt. The boot chain tells
+  // us via /api/session-ready; the fallback timer only covers the case where
+  // that signal never comes.
+  pendingBootNudge = text;
+  bootNudgeFallback = setTimeout(deliverBootNudge, READY_FALLBACK_MS);
+  bootNudgeFallback.unref?.();
+}
+
+/** Boot nudge text waiting for claude to be ready ('' once delivered/none). */
+let pendingBootNudge = null;
+let bootNudgeFallback = null;
+/** When the boot chain reported the TUI was starting (null until signalled). */
+let readyAt = null;
+
+/** Type the pending boot nudge into the claude session, once. */
+function deliverBootNudge() {
+  if (!pendingBootNudge) return;
+  const sess = sessions.get('claude');
+  if (!sess) return; // session gone; drop it rather than resurrect later
+  const text = pendingBootNudge;
+  pendingBootNudge = null;
+  if (bootNudgeFallback) {
+    clearTimeout(bootNudgeFallback);
+    bootNudgeFallback = null;
+  }
+  try {
     sess.pty.write(text);
-    setTimeout(() => {
-      try {
-        sess.pty.write('\r');
-      } catch {
-        /* session closed */
-      }
-    }, 200);
-  }, 12_000);
+  } catch {
+    return; /* session closed */
+  }
+  setTimeout(() => {
+    try {
+      sess.pty.write('\r');
+    } catch {
+      /* session closed */
+    }
+  }, 200);
+}
+
+/** The boot chain finished updating and is launching claude. Record it and
+ *  schedule the nudge a short settle later. Idempotent — a repeated signal
+ *  (e.g. a session respawn) just refreshes the timestamp. */
+function signalSessionReady() {
+  readyAt = Date.now();
+  if (!pendingBootNudge) return;
+  if (bootNudgeFallback) {
+    clearTimeout(bootNudgeFallback);
+    bootNudgeFallback = null;
+  }
+  const t = setTimeout(deliverBootNudge, READY_SETTLE_MS);
+  t.unref?.();
 }
 
 server.listen(PORT, () => {

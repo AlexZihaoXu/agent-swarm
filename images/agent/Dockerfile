@@ -204,6 +204,10 @@ COPY agent-timezone.service /etc/systemd/system/agent-timezone.service
 COPY runtime /opt/agent-runtime
 RUN cd /opt/agent-runtime && npm install --omit=dev
 COPY agent-terminals.service /etc/systemd/system/agent-terminals.service
+# Readiness signal the claude boot chain calls after the pre-launch update, so
+# the supervisor knows when the TUI is actually coming up instead of guessing.
+COPY swarm-signal-ready.sh /usr/local/bin/swarm-signal-ready
+RUN chmod +x /usr/local/bin/swarm-signal-ready
 
 # GPU access: grant the agent user the render-node group at boot (if /dev/dri
 # was passed in), before the desktop/terminal services come up.

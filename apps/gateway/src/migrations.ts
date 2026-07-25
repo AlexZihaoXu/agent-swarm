@@ -206,6 +206,22 @@ export const migrations: Migration[] = [
       );
     },
   },
+  {
+    version: 17,
+    name: 'boot: wait for a real ready signal before the restart nudge',
+    apply: async (ctx) => {
+      // The supervisor used to type its [sys://restart] / [sys://resume] nudge
+      // after a fixed 12s, which lands in the middle of a slow pre-launch
+      // `npm install -g claude-code` and is lost. The boot chain now signals
+      // when the update is actually done.
+      await ctx.putFile('swarm-signal-ready.sh', '/usr/local/bin/swarm-signal-ready');
+      await ctx.putDir('runtime', '/opt/agent-runtime');
+      await ctx.exec(
+        'chmod +x /usr/local/bin/swarm-signal-ready; ' +
+          'chown -R agent:agent /opt/agent-runtime; systemctl restart agent-terminals',
+      );
+    },
+  },
 ];
 
 /** Highest migration version (the version a fully up-to-date agent is at). */
