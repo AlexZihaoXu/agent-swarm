@@ -2,7 +2,6 @@
 
 import { Button, Card, Dropdown, Input, Label, TextField } from '@heroui/react';
 import { AnimatePresence, motion } from 'framer-motion';
-import dynamic from 'next/dynamic';
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -50,10 +49,6 @@ import {
   type DiscordMessage,
   type DiscordSelf,
 } from '@/lib/gateway';
-import type { MilkdownApi } from '@/app/editors/MilkdownEditor';
-
-// ProseMirror + the Crepe theme are heavy; keep them out of the main bundle.
-const MilkdownEditor = dynamic(() => import('@/app/editors/MilkdownEditor'), { ssr: false });
 
 /** How often an open channel re-polls. The bridge has no operator-facing push
  *  stream, so this is a plain interval — cheap, since Discord returns ≤50 rows. */
@@ -531,10 +526,8 @@ export function DiscordClient({ agentId }: { agentId: string }) {
   const [loading, setLoading] = useState(true);
   const [paging, setPaging] = useState(false);
   const [exhausted, setExhausted] = useState(false);
-  /** Bumped after each send to remount (and thus clear) the Milkdown editor. */
-  const [composerKey, setComposerKey] = useState(0);
+  const [input, setInput] = useState('');
 
-  const editorRef = useRef<MilkdownApi | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   /** Ref drives the autoscroll decision (read inside effects without
    *  re-rendering); the state drives the jump-to-bottom button. */
@@ -718,19 +711,20 @@ export function DiscordClient({ agentId }: { agentId: string }) {
   };
 
   const send = async () => {
-    const content = (editorRef.current?.getMarkdown() ?? '').trim();
+    const content = input.trim();
     if (!content || !target || sending) return;
     setSending(true);
+    setInput('');
     try {
       await discordSend(agentId, target.id, content, replyTo?.id);
       setReplyTo(null);
-      setComposerKey((k) => k + 1); // remount clears the editor
       atBottomRef.current = true;
       setAtBottom(true);
       setMissed(0);
       await load();
     } catch (e) {
       setError(String((e as Error)?.message ?? e));
+      setInput(content); // don't lose what they typed
     } finally {
       setSending(false);
     }
@@ -1102,27 +1096,34 @@ export function DiscordClient({ agentId }: { agentId: string }) {
             </div>
           )}
           <div
-            className={`bg-surface-secondary focus-within:border-accent border-separator flex items-end gap-2 border px-1.5 py-1 transition-colors ${
+            className={`bg-surface-secondary focus-within:border-accent border-separator flex items-end gap-2 border px-2.5 py-1.5 transition-colors ${
               replyTo ? 'rounded-b-lg' : 'rounded-lg'
             }`}
-            onKeyDown={(e) => {
-              // Enter inserts a newline in the markdown editor, so sending is an
-              // explicit gesture: the button, or Ctrl/Cmd+Enter.
-              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                e.preventDefault();
-                void send();
-              }
-            }}
           >
-            <div className="discord-composer max-h-28 min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
-              <MilkdownEditor key={composerKey} defaultValue="" apiRef={editorRef} />
-            </div>
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  void send();
+                }
+              }}
+              rows={1}
+              disabled={!target || sending}
+              placeholder={
+                target
+                  ? `Message ${target.kind === 'dm' ? '@' : '#'}${target.name}`
+                  : 'Select a channel first'
+              }
+              className="placeholder:text-muted max-h-32 min-h-[1.5rem] flex-1 resize-none bg-transparent text-sm leading-relaxed outline-none disabled:cursor-not-allowed"
+            />
             <button
               type="button"
               aria-label="Send"
-              disabled={!target || sending}
+              disabled={!input.trim() || !target || sending}
               onClick={() => void send()}
-              className="text-muted hover:text-accent shrink-0 cursor-pointer pb-1 transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+              className="text-muted hover:text-accent shrink-0 cursor-pointer pb-0.5 transition-colors disabled:cursor-not-allowed disabled:opacity-40"
             >
               {sending ? (
                 <LuLoaderCircle className="size-5 animate-spin" />
@@ -1133,7 +1134,7 @@ export function DiscordClient({ agentId }: { agentId: string }) {
           </div>
           <p className="text-muted/70 mt-1 text-[11px]">
             Sends as <span className="font-medium">{me?.displayName ?? "the agent's bot"}</span> ·
-            markdown editor · Ctrl/⌘+Enter to send
+            Discord markdown · Enter to send, Shift+Enter for a newline
           </p>
         </div>
       </section>
