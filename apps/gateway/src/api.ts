@@ -3,7 +3,13 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { basename } from 'node:path';
 import type { AgentManager } from './docker.js';
 import { config } from './config.js';
-import { getSettings, updateSettings, tokenDaysLeft, TOKEN_WARN_DAYS } from './settings.js';
+import {
+  getSettings,
+  updateSettings,
+  validateIpNames,
+  tokenDaysLeft,
+  TOKEN_WARN_DAYS,
+} from './settings.js';
 import {
   isConfigured,
   isAuthed,
@@ -251,6 +257,7 @@ export async function handleApi(
       if (method !== 'GET') return (sendJson(res, 405, { error: 'method not allowed' }), true);
       return (sendJson(res, 200, { token: getSettings().oauthToken ?? '' }), true);
     }
+    if (pathname === '/api/settings/ip-names') return await handleIpNames(req, res, method);
     if (pathname === '/api/settings') return await handleSettings(req, res, manager, method);
     if (pathname === '/api/providers/info') {
       if (method !== 'GET') return (sendJson(res, 405, { error: 'method not allowed' }), true);
@@ -1351,6 +1358,34 @@ async function handleSettings(
   return true;
 }
 
+/** Friendly names for known client IPs. Not a secret and not a security
+ *  control — it exists so the auth log reads "operator@home" for an address you
+ *  recognize, leaving an unnamed IP visibly odd. Whole-list PUT: the UI edits
+ *  the map as a unit, same as the token above. */
+async function handleIpNames(
+  req: IncomingMessage,
+  res: ServerResponse,
+  method: string,
+): Promise<boolean> {
+  if (method === 'GET') return (sendJson(res, 200, getSettings().ipNames ?? []), true);
+  if (method === 'PUT') {
+    const body = await readJson(req);
+    const entries = validateIpNames(body.ipNames);
+    updateSettings({ ipNames: entries });
+    logEvent({
+      category: 'settings',
+      action: 'settings.ip_names.set',
+      message: `known-IP names updated (${entries.length} ${entries.length === 1 ? 'entry' : 'entries'})`,
+      actor: opActor(req),
+      // Count only — the addresses themselves stay out of the log body.
+      meta: { count: entries.length },
+    });
+    return (sendJson(res, 200, { ok: true }), true);
+  }
+  sendJson(res, 405, { error: 'method not allowed' });
+  return true;
+}
+
 /** Per-provider credentials beyond the headline Anthropic OAuth token (which
  *  lives at /api/settings). Currently: OpenCode Go. Keys are secrets — returned
  *  only as a presence flag + last-4 hint. PATCH accepts `opencodeGo.apiKey` and
@@ -1507,6 +1542,7 @@ async function readJson(
   autoCompactPct?: number | null;
   provider?: Provider;
   opencodeGo?: { apiKey?: string };
+  ipNames?: { ip?: string; name?: string }[];
   model?: string | null;
   effort?: string | null;
   type?: IntegrationType;

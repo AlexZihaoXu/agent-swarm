@@ -20,6 +20,14 @@ export interface ProvidersConfig {
   opencodeGo?: { apiKey: string };
 }
 
+/** An operator-assigned friendly name for a client IP. Purely cosmetic, but it
+ *  is what makes the auth log readable at a glance: a familiar address renders
+ *  as "home" while anything unnamed stands out as an unknown location. */
+export interface IpNameEntry {
+  ip: string;
+  name: string;
+}
+
 /** Runtime-adjustable settings, persisted to config.settingsFile as JSON. */
 export interface Settings {
   /** Claude Code OAuth token (`claude setup-token`) injected into each agent as
@@ -39,7 +47,14 @@ export interface Settings {
   /** Per-provider credentials. The Anthropic OAuth token lives at the top level
    *  (above) for historical reasons; new providers nest here. */
   providers?: ProvidersConfig;
+  /** Friendly names for known client IPs, in operator-chosen order. */
+  ipNames?: IpNameEntry[];
 }
+
+/** Bounds on the IP name map — generous, but keeps a runaway PUT from bloating
+ *  the settings blob that every request path reads through a module cache. */
+const IP_NAME_MAX_ENTRIES = 200;
+const IP_NAME_MAX_LEN = 60;
 
 /** Assumed validity of a `claude setup-token` token, and how early to warn. */
 export const TOKEN_VALIDITY_DAYS = 365;
@@ -63,6 +78,7 @@ export function getSettings(): Settings {
       sessionSecret: parsed.sessionSecret,
       swarmSecret: parsed.swarmSecret,
       providers: parsed.providers,
+      ipNames: Array.isArray(parsed.ipNames) ? parsed.ipNames : undefined,
     };
   } catch {
     cache = defaults();
@@ -83,10 +99,66 @@ export function updateSettings(patch: Partial<Settings>): Settings {
   if (patch.sessionSecret !== undefined) next.sessionSecret = patch.sessionSecret;
   if (patch.swarmSecret !== undefined) next.swarmSecret = patch.swarmSecret;
   if (patch.providers !== undefined) next.providers = patch.providers;
+  if (patch.ipNames !== undefined) next.ipNames = patch.ipNames;
   mkdirSync(dirname(config.settingsFile), { recursive: true });
   writeFileSync(config.settingsFile, JSON.stringify(next, null, 2));
   cache = next;
   return next;
+}
+
+/** Canonical form of a client address, so a name set for "192.168.1.5" still
+ *  matches when the same peer arrives as "::ffff:192.168.1.5" or "[::1]:54321".
+ *  Node hands us v4-mapped v6 on dual-stack sockets, and proxies sometimes
+ *  append a source port — both must fold to the same key. */
+export function normalizeIp(raw: string): string {
+  let ip = String(raw ?? '')
+    .trim()
+    .toLowerCase();
+  // "[::1]:5432" / "[::1]" → "::1" (brackets always delimit a v6 literal).
+  const bracketed = /^\[([^\]]+)\](?::\d+)?$/.exec(ip);
+  if (bracketed) ip = bracketed[1] ?? ip;
+  // "1.2.3.4:5432" → "1.2.3.4". A lone colon on a dotted quad is a port, never v6.
+  else if (/^\d{1,3}(?:\.\d{1,3}){3}:\d+$/.test(ip)) ip = ip.slice(0, ip.lastIndexOf(':'));
+  // v4-mapped v6 → the plain v4 literal.
+  if (ip.startsWith('::ffff:') && /^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip.slice(7))) ip = ip.slice(7);
+  return ip;
+}
+
+/** Validate + normalize an operator-supplied IP name map. Throws a 400-shaped
+ *  error on anything unusable; silently drops blank rows so a half-filled form
+ *  round-trips cleanly. Later entries win on duplicate IPs. */
+export function validateIpNames(input: unknown): IpNameEntry[] {
+  if (!Array.isArray(input)) {
+    throw Object.assign(new Error('ipNames must be an array'), { statusCode: 400 });
+  }
+  if (input.length > IP_NAME_MAX_ENTRIES) {
+    throw Object.assign(new Error(`too many entries (max ${IP_NAME_MAX_ENTRIES})`), {
+      statusCode: 400,
+    });
+  }
+  const byIp = new Map<string, IpNameEntry>();
+  for (const row of input) {
+    const ip = normalizeIp((row as IpNameEntry)?.ip ?? '');
+    const name = String((row as IpNameEntry)?.name ?? '')
+      .trim()
+      .slice(0, IP_NAME_MAX_LEN);
+    if (!ip && !name) continue; // an empty row is a no-op, not an error
+    if (!ip) {
+      throw Object.assign(new Error(`"${name}" is missing an IP address`), { statusCode: 400 });
+    }
+    if (!name) {
+      throw Object.assign(new Error(`${ip} is missing a name`), { statusCode: 400 });
+    }
+    byIp.set(ip, { ip, name });
+  }
+  return [...byIp.values()];
+}
+
+/** The IP name map as a plain lookup, keyed by normalized address. */
+export function ipNameMap(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const { ip, name } of getSettings().ipNames ?? []) out[normalizeIp(ip)] = name;
+  return out;
 }
 
 /** Days until the configured token is assumed to expire (null if unknown — e.g.

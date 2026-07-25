@@ -28,6 +28,7 @@ import { RegistryCard } from '@/app/RolesGroups';
 import { PasswordField } from '@/app/PasswordField';
 import { OpencodeGoCard } from '@/app/OpencodeGoCard';
 import { VolumesCard } from '@/app/VolumesCard';
+import { IpNamesCard } from '@/app/IpNamesCard';
 
 type Status = { kind: 'ok' | 'warn' | 'err'; msg: string } | null;
 
@@ -255,6 +256,10 @@ export default function SettingsPage() {
       </div>
       <div className="mt-6">
         <VolumesCard />
+      </div>
+
+      <div className="mt-6">
+        <IpNamesCard />
       </div>
 
       <div className="mt-6">

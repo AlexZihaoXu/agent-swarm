@@ -4,11 +4,13 @@ import { Button, buttonVariants, Input, Label, ListBox, Select, Switch } from '@
 import { motion } from 'framer-motion';
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { LuChevronLeft, LuSearch, LuX } from 'react-icons/lu';
+import { LuChevronLeft, LuSearch, LuShieldAlert, LuX } from 'react-icons/lu';
 import {
   getAuditMeta,
   listAgents,
   listAudit,
+  listIpNames,
+  normalizeIp,
   streamAudit,
   formatAuditTimestamp,
   type Agent,
@@ -54,11 +56,14 @@ const TIMEZONES = [
 function levelColor(level: string | undefined): string {
   return level === 'error' ? 'text-danger' : level === 'warn' ? 'text-warning' : 'text-accent';
 }
-function actorLabel(ev: AuditEvent): string {
+/** `operator@1.2.3.4`, or `operator@home` when the IP has been named in
+ *  Settings → Known IPs. */
+function actorLabel(ev: AuditEvent, names: Record<string, string>): string {
   const a = ev.actor;
   if (!a) return 'system';
-  if (a.kind === 'operator') return `operator${a.ip ? `@${a.ip}` : ''}`;
-  if (a.kind === 'agent') return `${a.name ?? a.id ?? 'agent'}${a.ip ? `@${a.ip}` : ''}`;
+  const at = a.ip ? `@${names[normalizeIp(a.ip)] ?? a.ip}` : '';
+  if (a.kind === 'operator') return `operator${at}`;
+  if (a.kind === 'agent') return `${a.name ?? a.id ?? 'agent'}${at}`;
   return 'system';
 }
 
@@ -107,7 +112,7 @@ function FilterSelect({
 }
 
 /** One Minecraft-style log line (expandable to show structured meta). */
-function LogRow({ ev, tz }: { ev: AuditEvent; tz: string }) {
+function LogRow({ ev, tz, names }: { ev: AuditEvent; tz: string; names: Record<string, string> }) {
   const [open, setOpen] = useState(false);
   const hasDetail = !!ev.meta && Object.keys(ev.meta).length > 0;
   // Legacy events persisted before the level fix can lack `level`/`category`;
@@ -127,7 +132,9 @@ function LogRow({ ev, tz }: { ev: AuditEvent; tz: string }) {
         <span className={`shrink-0 ${levelColor(level)}`}>
           [{category.toUpperCase()}/{level.toUpperCase()}]
         </span>
-        <span className="text-muted shrink-0">({actorLabel(ev)})</span>
+        <span className="text-muted shrink-0" title={ev.actor?.ip ?? undefined}>
+          ({actorLabel(ev, names)})
+        </span>
         {/* On phones the message drops to its own line under the prefix; inline on sm+. */}
         <span className="text-foreground basis-full break-words sm:min-w-0 sm:flex-1 sm:basis-auto">
           {ev.message}
@@ -150,6 +157,8 @@ export default function LogsPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [tz, setTz] = useState('America/Toronto');
   const [live, setLive] = useState(true);
+  /** Known-IP names, so actors render as `operator@home` where recognized. */
+  const [ipNames, setIpNames] = useState<Record<string, string>>({});
 
   // Filters.
   const [category, setCategory] = useState('');
@@ -182,6 +191,13 @@ export default function LogsPage() {
     void listAgents()
       .then(setAgents)
       .catch(() => {});
+    void listIpNames()
+      .then((rows) => {
+        const map: Record<string, string> = {};
+        for (const r of rows) map[normalizeIp(r.ip)] = r.name;
+        setIpNames(map);
+      })
+      .catch(() => {}); // cosmetic — raw IPs are a fine fallback
   }, []);
 
   // Debounce the free-text search.
@@ -269,6 +285,13 @@ export default function LogsPage() {
           Dashboard
         </Link>
         <h1 className="text-xl font-semibold sm:text-2xl">Logs</h1>
+        <Link
+          href="/logs/auth"
+          className={`${buttonVariants({ variant: 'tertiary', size: 'sm' })} gap-1.5`}
+        >
+          <LuShieldAlert className="size-4" />
+          Auth attempts
+        </Link>
         <div className="ml-auto">
           <Switch isSelected={live} onChange={setLive}>
             <Switch.Control>
@@ -385,7 +408,7 @@ export default function LogsPage() {
         ) : (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
             {rows.map((ev) => (
-              <LogRow key={ev.id} ev={ev} tz={tz} />
+              <LogRow key={ev.id} ev={ev} tz={tz} names={ipNames} />
             ))}
           </motion.div>
         )}

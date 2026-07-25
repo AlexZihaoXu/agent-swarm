@@ -323,6 +323,37 @@ export const updateSettings = (oauthToken: string) =>
     body: JSON.stringify({ oauthToken }),
   });
 
+// --- Known IPs ---------------------------------------------------------------
+
+/** An operator-assigned friendly name for a client IP, so the auth log reads
+ *  "operator@home" for an address you recognize. */
+export interface IpNameEntry {
+  ip: string;
+  name: string;
+}
+
+export const listIpNames = () => api<IpNameEntry[]>('/api/settings/ip-names');
+/** Whole-list replace — the settings card edits the map as a unit. */
+export const updateIpNames = (ipNames: IpNameEntry[]) =>
+  api<{ ok: true }>('/api/settings/ip-names', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ipNames }),
+  });
+
+/** Same canonicalization the gateway applies, so a name set for "1.2.3.4"
+ *  still matches an event logged as "::ffff:1.2.3.4". */
+export function normalizeIp(raw: string): string {
+  let ip = String(raw ?? '')
+    .trim()
+    .toLowerCase();
+  const bracketed = /^\[([^\]]+)\](?::\d+)?$/.exec(ip);
+  if (bracketed) ip = bracketed[1] ?? ip;
+  else if (/^\d{1,3}(?:\.\d{1,3}){3}:\d+$/.test(ip)) ip = ip.slice(0, ip.lastIndexOf(':'));
+  if (ip.startsWith('::ffff:') && /^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip.slice(7))) ip = ip.slice(7);
+  return ip;
+}
+
 export const getImageStatus = () => api<ImageStatus>('/api/image');
 
 export interface DirListing {
