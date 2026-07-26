@@ -46,7 +46,7 @@ import {
   remove as removeFile,
   fileForDownload,
   zipDir,
-  writeUpload,
+  streamUpload,
   MAX_UPLOAD_BYTES,
 } from './files.js';
 import type { DiscordRules, IntegrationType } from './types.js';
@@ -742,17 +742,13 @@ async function dispatchFileOp(
 
   if (method === 'POST') {
     if (op === 'upload') {
-      const chunks: Buffer[] = [];
-      let size = 0;
-      for await (const c of req) {
-        size += (c as Buffer).length;
-        if (size > MAX_UPLOAD_BYTES) return (sendJson(res, 413, { error: 'file too large' }), true);
-        chunks.push(c as Buffer);
-      }
       const name = url.searchParams.get('name') ?? 'upload';
-      const saved = writeUpload(root, qpath, name, Buffer.concat(chunks));
-      logFile('upload', `${qpath ? qpath + '/' : ''}${saved} (${size} bytes)`);
-      return (sendJson(res, 200, { ok: true, name: saved }), true);
+      // Streamed to disk rather than buffered: see streamUpload. Errors (incl.
+      // the 413 for an oversized body) propagate to handleApi's catch, which
+      // maps statusCode -> HTTP status.
+      const saved = await streamUpload(root, qpath, name, req);
+      logFile('upload', `${qpath ? qpath + '/' : ''}${saved.name} (${saved.size} bytes)`);
+      return (sendJson(res, 200, { ok: true, name: saved.name }), true);
     }
     const body = await readJson(req);
     if (op === 'write') {

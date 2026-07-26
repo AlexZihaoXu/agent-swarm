@@ -160,18 +160,20 @@ function UploadProgress({ tracker }: { tracker: UploadTracker }) {
   const s = useSyncExternalStore(tracker.subscribe, tracker.get, tracker.get);
   const pct = Math.round(Math.min(1, s.total ? (s.index + s.frac) / s.total : 0) * 100);
   return (
-    <div className="mt-1 w-full space-y-1">
+    // min-w pins a usable width: the toast body sizes to its content, so a
+    // percentage-width bar inside it can collapse to nothing.
+    <div className="mt-1 w-full min-w-[15rem] space-y-1">
       <div className="flex items-center justify-between gap-2 text-xs">
-        <span className="min-w-0 truncate">
+        <span className="min-w-0 flex-1 truncate">
           {s.total > 1 ? `${Math.min(s.index + 1, s.total)}/${s.total} · ` : ''}
           {s.name}
         </span>
-        <span className="tabular-nums">{pct}%</span>
+        <span className="shrink-0 tabular-nums">{pct}%</span>
       </div>
-      <div className="bg-surface-secondary h-1.5 w-full overflow-hidden rounded-full">
+      <div className="bg-surface-secondary block h-1.5 w-full overflow-hidden rounded-full">
         <div
           className="bg-accent h-full rounded-full transition-[width] duration-150"
-          style={{ width: `${pct}%` }}
+          style={{ width: `${Math.max(pct, 2)}%` }}
         />
       </div>
     </div>

@@ -9,6 +9,7 @@ import {
   createReadStream,
   existsSync,
   lstatSync,
+  createWriteStream,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -19,6 +20,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import type { ReadStream } from 'node:fs';
 import type { Readable } from 'node:stream';
@@ -202,14 +204,50 @@ export function zipDir(root: string, rel: string): { name: string; stream: Reada
   return { name, stream };
 }
 
-/** Save an uploaded buffer into `relDir` under a sanitized filename. */
-export function writeUpload(root: string, relDir: string, name: string, buf: Buffer): string {
-  if (buf.byteLength > MAX_UPLOAD_BYTES) throw err('file too large', 413);
+/**
+ * Stream an upload straight to disk under a sanitized filename.
+ *
+ * Buffering the body first (collect chunks -> Buffer.concat) meant a 130 MB
+ * upload briefly held ~260 MB in the gateway, and anything near the 256 MB cap
+ * could exhaust the heap outright — so the failure mode got worse exactly as
+ * the file got bigger. Streaming keeps memory flat regardless of size.
+ *
+ * Writes to a `.part` file and renames on success, so a failed or aborted
+ * upload never leaves a truncated file looking like a complete one.
+ */
+export async function streamUpload(
+  root: string,
+  relDir: string,
+  name: string,
+  body: Readable,
+): Promise<{ name: string; size: number }> {
   const safeName = basename(name || 'upload').replace(/[^\w.\- ]/g, '_') || 'upload';
   const dir = safe(root, relDir);
   mkdirSync(dir, { recursive: true });
   const dest = safe(root, join((relDir || '').replace(/^\/+/, ''), safeName));
-  writeFileSync(dest, buf);
-  chownAgent(dest);
-  return safeName;
+  const tmp = `${dest}.part`;
+  const out = createWriteStream(tmp);
+  let size = 0;
+  try {
+    for await (const chunk of body) {
+      const buf = chunk as Buffer;
+      size += buf.byteLength;
+      if (size > MAX_UPLOAD_BYTES) throw err('file too large', 413);
+      // Respect backpressure — without this a fast client outruns the disk and
+      // the write buffer grows without bound, undoing the point of streaming.
+      if (!out.write(buf)) await once(out, 'drain');
+    }
+    await new Promise<void>((res, rej) => out.end((e?: Error | null) => (e ? rej(e) : res())));
+    renameSync(tmp, dest);
+    chownAgent(dest);
+    return { name: safeName, size };
+  } catch (e) {
+    out.destroy();
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      /* best effort */
+    }
+    throw e;
+  }
 }

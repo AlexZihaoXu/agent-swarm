@@ -908,6 +908,10 @@ export const fileDownloadUrl = (base: string, path: string) =>
 /** Direct URL for downloading a folder as a .zip (same-origin → cookie is sent). */
 export const folderZipUrl = (base: string, path: string) =>
   `${GATEWAY_BASE}${base}?op=zip&path=${encodeURIComponent(path)}`;
+function fmtSize(n: number): string {
+  return n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${(n / 1024).toFixed(0)} KB`;
+}
+
 /** Upload a File into `dir` (raw body; filename in the query). Uses XHR (not
  *  fetch) so `onProgress` can report the upload fraction (0..1) for a progress
  *  UI. Same-origin cookies ride along automatically (no withCredentials, matching
@@ -921,8 +925,11 @@ export function uploadFile(
   const url = `${GATEWAY_BASE}${base}?op=upload&path=${encodeURIComponent(dir)}&name=${encodeURIComponent(file.name)}`;
   return new Promise<void>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
+    // How far we got, so a mid-transfer failure can say where it died.
+    let sent = 0;
     xhr.open('POST', url);
     xhr.upload.onprogress = (e) => {
+      sent = e.loaded;
       if (e.lengthComputable) onProgress?.(e.loaded / e.total);
     };
     xhr.onload = () => {
@@ -936,10 +943,21 @@ export function uploadFile(
         } catch {
           /* non-JSON error body */
         }
-        reject(new Error(msg ?? `upload failed (${xhr.status})`));
+        // A 413 with no JSON body almost always means something BETWEEN the
+        // browser and the gateway rejected the size (a reverse proxy or CDN),
+        // since the gateway answers with JSON. Say so, rather than a bare code.
+        if (!msg && xhr.status === 413) {
+          msg = `file too large — rejected before reaching the gateway (${fmtSize(file.size)}). Check any reverse proxy / CDN body-size limit in front of the dashboard.`;
+        }
+        reject(new Error(msg ?? `upload failed (HTTP ${xhr.status})`));
       }
     };
-    xhr.onerror = () => reject(new Error('upload failed (network error)'));
+    xhr.onerror = () =>
+      reject(
+        new Error(`upload failed (network error after ${fmtSize(sent)} of ${fmtSize(file.size)})`),
+      );
+    xhr.ontimeout = () => reject(new Error('upload timed out'));
+    xhr.onabort = () => reject(new Error('upload aborted'));
     xhr.send(file);
   });
 }
