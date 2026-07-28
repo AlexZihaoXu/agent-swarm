@@ -163,12 +163,19 @@ export class DiscordBridge {
   }
 
   /**
-   * (Re)connect the bot for one agent. Implements an online/idle attention model:
-   *  - ONLINE (interaction within ONLINE_MS): every watched-channel message is
-   *    forwarded in real time; the bot's Discord presence shows online.
-   *  - IDLE: plain channel messages are buffered as "unread" (not forwarded);
-   *    presence shows idle. A @mention/reply/DM wakes it immediately; otherwise a
-   *    `[sys://wake]` nudge fires (only while unread > 0) telling it to catch up.
+   * (Re)connect the bot for one agent.
+   *
+   * Delivery: every message in a watched channel (and in its threads) is
+   * forwarded, whether the agent is busy or has been quiet for hours — watching
+   * a channel is an explicit opt-in, so nothing is held back. Direct address
+   * (@mention, a reply to the agent, or a DM) additionally INTERRUPTS the
+   * current turn; anything else queues behind it.
+   *
+   * Presence is cosmetic: the bot shows online while it has interacted within
+   * ONLINE_MS, idle otherwise. It no longer gates delivery — it used to, and a
+   * plain message arriving while idle was buffered and surfaced only as a
+   * contentless catch-up nudge, so the first message after any quiet spell
+   * effectively went missing.
    */
   async connect(
     agentId: string,
@@ -196,7 +203,6 @@ export class DiscordBridge {
     let onlineUntil = 0; // attentive until this timestamp; 0 = idle
     let presence: 'online' | 'idle' | null = null;
     let customStatus: string | null = null; // the agent's own "status quote"
-    const unread = new Map<string, number>(); // channelId -> messages buffered while idle
 
     // Apply the current status + custom activity to the bot's Discord presence.
     const applyPresence = () => {
@@ -333,7 +339,6 @@ export class DiscordBridge {
           // DM allow-list: if set, only these users may DM the agent.
           if (rules.allowedUserIds.length && !rules.allowedUserIds.includes(msg.author.id)) return;
           bumpOnline();
-          unread.clear();
           // A DM is direct address → interrupt if the agent is mid-turn.
           return forward(formatLine(msg, true, opts), addressOf(msg, true), attachments, true);
         }
@@ -357,21 +362,20 @@ export class DiscordBridge {
             }
             return;
           }
-          if (mentioned || Date.now() < onlineUntil) {
-            bumpOnline();
-            unread.clear();
-            // @mention/reply = handle now (interrupt); a plain message while
-            // online just gets forwarded and queues if the agent is busy.
-            return forward(
-              formatLine(msg, false, opts),
-              addressOf(msg, false),
-              attachments,
-              mentioned,
-            );
-          }
-          unread.set(msg.channelId, (unread.get(msg.channelId) ?? 0) + 1);
-          setPresence('idle');
-          return;
+          // A watched channel is an explicit opt-in — the operator asked for
+          // EVERY message in it, which is exactly what the settings UI promises.
+          // Messages used to be BUFFERED while the agent was idle and surfaced
+          // only as a contentless [sys://wake] up to a minute later, so the
+          // first message after any quiet spell effectively went missing unless
+          // it @mentioned the agent. Deliver it instead; only direct address
+          // interrupts a turn in progress.
+          bumpOnline();
+          return forward(
+            formatLine(msg, false, opts),
+            addressOf(msg, false),
+            attachments,
+            mentioned,
+          );
         }
 
         // No watch list → whole server: only @mentions/replies (or gate-off) pass.
@@ -387,23 +391,15 @@ export class DiscordBridge {
       /* discord.js auto-reconnects; swallow to avoid crashing the gateway */
     });
 
-    // Idle sweep: once idle, if messages piled up unread, fire ONE wake nudge that
-    // brings the agent back online to catch up. Only fires while unread > 0.
+    // Presence sweep: drop back to idle once the attention window lapses.
+    // (This used to also fire a [sys://wake] catch-up nudge for messages held
+    // back while idle — nothing is held back any more, so there is nothing to
+    // catch up on.)
     const timer = setInterval(() => {
       try {
         // Re-assert every sweep so any drift self-heals within a minute rather
         // than persisting until the next reconnect.
         forcePresence(intendedPresence());
-        if (Date.now() < onlineUntil) return; // still online
-        const total = [...unread.values()].reduce((a, b) => a + b, 0);
-        if (total === 0) return;
-        const channels = [...unread.keys()];
-        bumpOnline(); // waking up to handle the backlog
-        unread.clear();
-        send(
-          `**[sys://wake]** ${total} new message(s) arrived while you were idle in channel(s): ` +
-            `${channels.join(', ')}. Read them with discord_read_messages and reply to anything relevant.`,
-        );
       } catch {
         /* ignore */
       }
