@@ -84,7 +84,10 @@ const server = http.createServer(async (req, res) => {
     const route = parseAgentPath(url.pathname);
     if (route) {
       const target = await manager.resolveTarget(route.id, route.service);
-      proxyHttp(req, res, target, route.rest + url.search);
+      // The screenshot is a preview: a stuck one must never hold a browser
+      // connection open, since the dashboard polls it for every agent.
+      const isShot = route.rest.startsWith('/api/screenshot');
+      proxyHttp(req, res, target, route.rest + url.search, isShot ? 6_000 : undefined);
       return;
     }
 

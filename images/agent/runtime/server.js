@@ -768,6 +768,12 @@ function readTranscript() {
 }
 
 let shotCache = { at: 0, buf: null };
+/** How long `import` gets before we give up on it. The X server can wedge (a
+ *  hung GNOME session, a stuck GPU) and then `import` never exits — with no
+ *  bound the HTTP response never completes either, which is far worse for the
+ *  dashboard than a fast failure: it polls this for every agent. */
+const SHOT_TIMEOUT_MS = 4000;
+
 function sendScreenshot(res) {
   if (shotCache.buf && Date.now() - shotCache.at < 1000) {
     res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'no-store' });
@@ -780,18 +786,32 @@ function sendScreenshot(res) {
   );
   const chunks = [];
   let done = false;
-  const fail = () => {
+  let timer = null;
+  const finish = () => {
+    if (timer) clearTimeout(timer);
+    timer = null;
+  };
+  const fail = (why) => {
     if (done) return;
     done = true;
+    finish();
+    // Make sure a wedged capture can't linger and pile up on every poll.
+    try {
+      p.kill('SIGKILL');
+    } catch {
+      /* already gone */
+    }
     if (!res.headersSent) res.writeHead(503, { 'content-type': 'text/plain' });
-    res.end('screenshot unavailable');
+    res.end(`screenshot unavailable${why ? ` (${why})` : ''}`);
   };
+  timer = setTimeout(() => fail('timeout'), SHOT_TIMEOUT_MS);
   p.stdout.on('data', (d) => chunks.push(d));
-  p.on('error', fail);
+  p.on('error', () => fail('spawn failed'));
   p.on('close', (code) => {
     if (done) return;
-    if (code !== 0 || !chunks.length) return fail();
+    if (code !== 0 || !chunks.length) return fail(`exit ${code}`);
     done = true;
+    finish();
     const buf = Buffer.concat(chunks);
     shotCache = { at: Date.now(), buf };
     res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'no-store' });

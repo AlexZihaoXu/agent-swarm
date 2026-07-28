@@ -19,7 +19,7 @@ import {
   LuTrash2,
 } from 'react-icons/lu';
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useState, type MouseEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
 import {
   agentFilesBase,
   compactAgent,
@@ -49,10 +49,26 @@ type Dialog = 'stop' | 'remove' | 'upgrade' | 'package' | 'settings' | 'files' |
 function PreviewImage({ agentId }: { agentId: string }) {
   const [ts, setTs] = useState(() => Date.now());
   const [ok, setOk] = useState(false);
+  /** Consecutive failures — after a few we stop claiming to be "connecting". */
+  const [fails, setFails] = useState(0);
+  /** A refresh is in flight. Without this the interval stacked a new request
+   *  every 2.5s even when the previous one never came back, and a few wedged
+   *  agents could exhaust the browser's ~6-connections-per-origin budget —
+   *  which is what made HEALTHY agents' previews stall too. */
+  const pending = useRef(false);
+
   useEffect(() => {
-    const t = setInterval(() => setTs(Date.now()), 2500);
+    const t = setInterval(() => {
+      if (pending.current) return; // let the outstanding one settle first
+      pending.current = true;
+      setTs(Date.now());
+    }, 2500);
     return () => clearInterval(t);
   }, []);
+
+  // Give up on the preview after a few misses rather than implying the agent
+  // is unreachable — it usually isn't; only its X server / capture is.
+  const dead = fails >= 3;
   return (
     <>
       {/* Always mounted + opacity-faded so the first frame eases in (and refreshed
@@ -60,18 +76,26 @@ function PreviewImage({ agentId }: { agentId: string }) {
       <img
         src={`${screenshotUrl(agentId)}?t=${ts}`}
         alt=""
-        onLoad={() => setOk(true)}
-        onError={() => setOk(false)}
+        onLoad={() => {
+          pending.current = false;
+          setFails(0);
+          setOk(true);
+        }}
+        onError={() => {
+          pending.current = false;
+          setFails((n) => n + 1);
+          setOk(false);
+        }}
         className={`h-full w-full object-contain transition-opacity duration-500 ease-out ${
           ok ? 'opacity-100' : 'opacity-0'
         }`}
       />
       <span
-        className={`text-muted absolute inset-0 flex items-center justify-center text-xs transition-opacity duration-300 ${
+        className={`text-muted absolute inset-0 flex items-center justify-center px-2 text-center text-xs transition-opacity duration-300 ${
           ok ? 'pointer-events-none opacity-0' : 'opacity-100'
         }`}
       >
-        connecting…
+        {dead ? 'preview unavailable' : 'connecting…'}
       </span>
     </>
   );

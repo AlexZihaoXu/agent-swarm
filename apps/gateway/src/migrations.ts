@@ -247,6 +247,18 @@ export const migrations: Migration[] = [
       );
     },
   },
+  {
+    version: 20,
+    name: 'screenshot: time out a wedged capture instead of hanging forever',
+    apply: async (ctx) => {
+      // `import` against a hung X server never exits, so /api/screenshot never
+      // responded. The dashboard polls it per agent every 2.5s, so a few stuck
+      // agents exhausted the browser's connection budget and the whole fleet
+      // showed "connecting…" despite being responsive.
+      await ctx.putDir('runtime', '/opt/agent-runtime');
+      await ctx.exec('chown -R agent:agent /opt/agent-runtime; systemctl restart agent-terminals');
+    },
+  },
 ];
 
 /** Highest migration version (the version a fully up-to-date agent is at). */
