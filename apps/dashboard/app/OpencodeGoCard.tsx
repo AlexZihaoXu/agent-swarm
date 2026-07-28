@@ -36,8 +36,8 @@ export function OpencodeGoCard() {
     }
   };
 
-  const hasKey = !!status?.opencodeGo.hasKey;
-  const hint = status?.opencodeGo.keyHint;
+  const hasKey = !!status?.opencodeGo?.hasKey;
+  const hint = status?.opencodeGo?.keyHint;
 
   return (
     <Card>

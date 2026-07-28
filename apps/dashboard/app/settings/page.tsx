@@ -27,6 +27,7 @@ import { TokenExpiryBanner } from '@/app/TokenExpiryBanner';
 import { RegistryCard } from '@/app/RolesGroups';
 import { PasswordField } from '@/app/PasswordField';
 import { OpencodeGoCard } from '@/app/OpencodeGoCard';
+import { ChatgptCard } from '@/app/ChatgptCard';
 import { VolumesCard } from '@/app/VolumesCard';
 import { IpNamesCard } from '@/app/IpNamesCard';
 
@@ -240,6 +241,10 @@ export default function SettingsPage() {
 
       <div className="mt-6">
         <OpencodeGoCard />
+      </div>
+
+      <div className="mt-6">
+        <ChatgptCard />
       </div>
 
       <div className="mt-6">

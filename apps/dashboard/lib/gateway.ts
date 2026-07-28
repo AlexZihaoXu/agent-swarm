@@ -219,10 +219,12 @@ export const MODEL_OPTIONS: { label: string; value: string }[] = [
 // historical default); 'opencodeGo' = the OpenCode Go subscription routed
 // through the in-agent opencode-proxy.
 
-export type Provider = 'anthropic' | 'opencodeGo';
+export type Provider = 'anthropic' | 'opencodeGo' | 'chatgpt';
 
 export interface ProviderInfo {
   key: Provider;
+  /** How the provider is authenticated — 'oauth' gets a Connect flow. */
+  auth?: 'oauth' | 'apiKey' | 'account';
   label: string;
   models: { label: string; value: string }[];
 }
@@ -233,11 +235,30 @@ export interface ProviderInfo {
 export const listProviders = () => api<ProviderInfo[]>('/api/providers/info');
 
 export interface ProvidersStatus {
-  opencodeGo: { hasKey: boolean; keyHint: string | null };
+  opencodeGo?: { hasKey: boolean; keyHint: string | null };
+  chatgpt?: { connected: boolean; account: string | null; expiresAt: number | null };
 }
 export const getProviders = () => api<ProvidersStatus>('/api/providers');
 /** Update one or more provider credentials. Pass `opencodeGo: { apiKey: '' }`
  *  to clear; omit a provider to leave it unchanged. */
+// --- ChatGPT (Codex) OAuth ---------------------------------------------------
+
+export interface ChatgptLoginState {
+  connected: boolean;
+  account: string | null;
+  expiresAt: number | null;
+  /** Present while a device login is awaiting approval. */
+  pending: { userCode: string; verificationUrl: string; expiresAt: number } | null;
+}
+/** Poll the current sign-in state. */
+export const chatgptLoginState = () => api<ChatgptLoginState>('/api/providers/chatgpt/login');
+/** Begin a device login; returns the URL + one-time code to show the operator. */
+export const chatgptLoginStart = () =>
+  api<ChatgptLoginState>('/api/providers/chatgpt/login', { method: 'POST' });
+/** Cancel an in-flight login, or disconnect a linked account. */
+export const chatgptDisconnect = () =>
+  api<ChatgptLoginState>('/api/providers/chatgpt/login', { method: 'DELETE' });
+
 export const updateProviders = (patch: { opencodeGo?: { apiKey: string } }) =>
   api<{ ok: true }>('/api/providers', {
     method: 'PATCH',

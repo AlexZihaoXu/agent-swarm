@@ -292,6 +292,23 @@ export const migrations: Migration[] = [
       await ctx.exec('chown -R agent:agent /opt/agent-runtime; systemctl restart agent-terminals');
     },
   },
+  {
+    version: 23,
+    name: 'chatgpt provider: Codex translating proxy + credential-safe provider switch',
+    apply: async (ctx) => {
+      // Ships codex-proxy.js (Anthropic Messages <-> Codex Responses) and the
+      // rewritten settingsEnv(). Deliberately written in Node rather than a
+      // downloaded binary so it lives in the SOFT layer and can ship here at
+      // all — a binary would need a Dockerfile change and a container recreate.
+      //
+      // Also carries a SECURITY fix: settingsEnv() used to fall through to the
+      // Anthropic branch for any provider it didn't recognise, handing that
+      // agent the operator's Claude OAuth token. Agents that skip this
+      // migration keep the old behaviour, so apply it before using chatgpt.
+      await ctx.putDir('runtime', '/opt/agent-runtime');
+      await ctx.exec('chown -R agent:agent /opt/agent-runtime; systemctl restart agent-terminals');
+    },
+  },
 ];
 
 /** Highest migration version (the version a fully up-to-date agent is at). */

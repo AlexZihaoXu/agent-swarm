@@ -183,6 +183,37 @@ function startOpencodeProxy() {
 // Bring up the retry-proxy in front of oc-go-cc. The proxy itself lives in
 // retry-proxy.js so its retry/backoff logic can be unit-tested without booting
 // the rest of the supervisor; we just instantiate + listen here.
+/** Codex/ChatGPT translator + its own retry proxy. Started for every agent, in
+ *  the same spirit as the opencode chain: the env wiring in settingsEnv() is
+ *  what decides whether claude actually points at it. Guarded so an older image
+ *  without the module simply no-ops. */
+function startChatgptProxy() {
+  let createCodexProxy;
+  try {
+    ({ createCodexProxy } = require('./codex-proxy.js'));
+  } catch {
+    return; // not shipped yet on this agent
+  }
+  try {
+    const inner = createCodexProxy({ logger: console });
+    inner.listen(CHATGPT_INTERNAL_PORT, '127.0.0.1', () =>
+      console.log(`codex-proxy listening on 127.0.0.1:${CHATGPT_INTERNAL_PORT}`),
+    );
+    inner.on('error', (e) => console.error('[codex-proxy]', e && e.message));
+    const retry = createRetryProxy({
+      upstreamHost: '127.0.0.1',
+      upstreamPort: CHATGPT_INTERNAL_PORT,
+      logger: console,
+    });
+    retry.listen(CHATGPT_PROXY_PORT, '127.0.0.1', () =>
+      console.log(`codex retry-proxy listening on 127.0.0.1:${CHATGPT_PROXY_PORT}`),
+    );
+    retry.on('error', (e) => console.error('[codex-retry]', e && e.message));
+  } catch (e) {
+    console.error('[codex-proxy] failed to start:', e && e.message);
+  }
+}
+
 function startRetryProxy() {
   const server = createRetryProxy({
     upstreamHost: '127.0.0.1',
@@ -1302,7 +1333,15 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, { ok: true, readyAt });
   }
   if (u.pathname === '/api/stats' && req.method === 'GET') {
-    return sendJson(res, 200, { ...readStats(), readyAt });
+    let codexLimits = null;
+    try {
+      // Only meaningful for a chatgpt-provider agent; null everywhere else.
+      ({ getRateLimits: codexLimits } = require('./codex-proxy.js'));
+      codexLimits = codexLimits();
+    } catch {
+      codexLimits = null;
+    }
+    return sendJson(res, 200, { ...readStats(), readyAt, codexLimits });
   }
   if (u.pathname === '/api/transcript' && req.method === 'GET') {
     return sendJson(res, 200, readTranscript());
@@ -1670,6 +1709,7 @@ server.listen(PORT, () => {
   // request, the upstream is ready), then the retry proxy in front of it.
   startOpencodeProxy();
   startRetryProxy();
+  startChatgptProxy();
   try {
     createSession({ name: 'claude', command: claudeBootCommand() }); // always-on, from boot
   } catch (e) {

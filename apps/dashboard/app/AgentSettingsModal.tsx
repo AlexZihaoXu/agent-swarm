@@ -444,6 +444,7 @@ export function AgentSettingsModal({
                                 : [
                                     { key: 'anthropic' as Provider, label: 'Anthropic Claude' },
                                     { key: 'opencodeGo' as Provider, label: 'OpenCode Go' },
+                                    { key: 'chatgpt' as Provider, label: 'ChatGPT (Codex)' },
                                   ]
                               ).map((p) => (
                                 <Tabs.Tab key={p.key} id={p.key}>
