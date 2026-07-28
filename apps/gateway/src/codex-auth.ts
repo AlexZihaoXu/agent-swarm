@@ -59,7 +59,10 @@ function jwtClaims(token: string): Record<string, unknown> {
 }
 
 /** Pull the ChatGPT account id + a human label out of the id token. */
-function identityFrom(idToken: string | undefined): { accountId: string | null; account: string | null } {
+function identityFrom(idToken: string | undefined): {
+  accountId: string | null;
+  account: string | null;
+} {
   if (!idToken) return { accountId: null, account: null };
   const c = jwtClaims(idToken);
   const auth = (c['https://api.openai.com/auth'] ?? {}) as Record<string, unknown>;
@@ -98,11 +101,16 @@ export class CodexLogin {
   private intervalMs = DEFAULT_INTERVAL_S * 1000;
   private expiresAt = 0;
   private cancelled = false;
+  /** Set once the poll resolves OR rejects. Without this, `pending` kept
+   *  reporting an outstanding code after a SUCCESSFUL login, so the dashboard
+   *  sat on "waiting for approval" until the 15-minute expiry even though the
+   *  account was already linked. */
+  private settled = false;
   /** Resolves when the operator approves (or rejects/expires). */
   private result: Promise<CodexTokens> | null = null;
 
   get pending(): PendingLogin | null {
-    if (!this.userCode || Date.now() > this.expiresAt) return null;
+    if (this.settled || !this.userCode || Date.now() > this.expiresAt) return null;
     return {
       userCode: this.userCode,
       verificationUrl: VERIFICATION_URL,
@@ -118,7 +126,9 @@ export class CodexLogin {
     const j = (json ?? {}) as Record<string, unknown>;
     if (status >= 400) {
       throw Object.assign(
-        new Error(`could not start ChatGPT sign-in (HTTP ${status}${j.error ? `: ${String(j.error)}` : ''})`),
+        new Error(
+          `could not start ChatGPT sign-in (HTTP ${status}${j.error ? `: ${String(j.error)}` : ''})`,
+        ),
         { statusCode: 502 },
       );
     }
@@ -127,7 +137,9 @@ export class CodexLogin {
     const code = (j.user_code ?? j.usercode) as string | undefined;
     const id = (j.device_auth_id ?? j.deviceAuthId ?? j.id) as string | undefined;
     if (!code || !id) {
-      throw Object.assign(new Error('unexpected sign-in response from OpenAI'), { statusCode: 502 });
+      throw Object.assign(new Error('unexpected sign-in response from OpenAI'), {
+        statusCode: 502,
+      });
     }
     const interval = Number(j.interval) || DEFAULT_INTERVAL_S;
     this.deviceAuthId = id;
@@ -136,6 +148,12 @@ export class CodexLogin {
     this.expiresAt = Date.now() + MAX_WAIT_MS;
     this.cancelled = false;
     this.result = this.poll();
+    // Settle in BOTH directions — a failure must clear the pending state too,
+    // or the UI waits on a code that will never be approved.
+    this.result.then(
+      () => (this.settled = true),
+      () => (this.settled = true),
+    );
     // Nothing may await `result` (the operator can navigate away), so make sure
     // a rejection can't become an unhandled rejection and take the gateway down.
     this.result.catch(() => {});
@@ -144,6 +162,7 @@ export class CodexLogin {
 
   cancel(): void {
     this.cancelled = true;
+    this.settled = true;
   }
 
   /** Await the tokens, if a login is in flight. */

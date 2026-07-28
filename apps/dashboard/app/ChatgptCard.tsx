@@ -82,7 +82,8 @@ export function ChatgptCard() {
     }
   };
 
-  const pending = state?.pending ?? null;
+  // Connected wins: if the account is linked, any lingering code is moot.
+  const pending = state?.connected ? null : (state?.pending ?? null);
   const expiresIn = pending ? pending.expiresAt - now : 0;
 
   return (
