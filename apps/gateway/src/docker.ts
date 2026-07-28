@@ -395,6 +395,16 @@ export class AgentManager {
         throw Object.assign(new Error(`provider must be one of ${PROVIDERS.join(', ')}`), {
           statusCode: 400,
         });
+      // Refuse a switch the agent can't actually honour. Without this the agent
+      // reports provider=chatgpt but its older runtime routes to Anthropic —
+      // silently billing the wrong subscription rather than failing.
+      if (patch.provider === 'chatgpt' && !(await this.hasCodexProxy(id)))
+        throw Object.assign(
+          new Error(
+            "this agent's runtime has no Codex proxy — upgrade it (or rebuild the agent image) before switching to ChatGPT",
+          ),
+          { statusCode: 409 },
+        );
       idPatch.provider = patch.provider;
     }
     if (patch.model !== undefined) {
@@ -3838,6 +3848,37 @@ export class AgentManager {
    * So pick the one that fits the state, and fall back to the other rather than
    * silently reporting v0 — which would offer a bogus "v0 → latest" upgrade.
    */
+  /**
+   * Whether this agent's runtime actually contains the Codex translating proxy.
+   *
+   * Checks the FILE, not the migration marker, because the marker can lie: a
+   * freshly created agent is stamped at LATEST_VERSION on the assumption it
+   * ships current, but its runtime comes from the agent IMAGE — so if the image
+   * predates the proxy, the agent claims to be up to date while missing it.
+   * Observed live: such an agent silently fell through to the Anthropic branch
+   * and spent the Claude subscription while reporting provider=chatgpt.
+   */
+  async hasCodexProxy(id: string): Promise<boolean> {
+    const container = this.docker.getContainer(this.containerName(id));
+    const FILE = '/opt/agent-runtime/codex-proxy.js';
+    let running = false;
+    try {
+      running = !!(await container.inspect()).State.Running;
+    } catch {
+      return false; // no container → nothing to check
+    }
+    if (running) {
+      // Under sysbox the archive API can't read a running container, so exec.
+      const out = await this.exec(container, [
+        'sh',
+        '-c',
+        `test -f ${FILE} && echo yes || echo no`,
+      ]).catch(() => '');
+      return out.includes('yes');
+    }
+    return (await this.readFileFromContainer(container, FILE)) !== null;
+  }
+
   async installedVersion(id: string): Promise<number> {
     const container = this.docker.getContainer(this.containerName(id));
     let running = false;

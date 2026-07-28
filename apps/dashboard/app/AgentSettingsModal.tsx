@@ -44,6 +44,24 @@ import { randomName } from '@/lib/names';
 import { IntegrationsPanel } from './IntegrationsPanel';
 import { RegistrySelect } from './RolesGroups';
 
+/** Per-provider helper text. A lookup rather than a ternary so a third
+ *  provider can't silently inherit the Anthropic wording. */
+const PROVIDER_HELP: Record<string, string> = {
+  anthropic: 'Direct to Anthropic with your Claude Code OAuth token (the default).',
+  opencodeGo:
+    'Routes claude through the in-agent opencode-proxy \u2192 opencode.ai/go subscription. Set the key on the dashboard Settings page.',
+  chatgpt:
+    'Routes claude through the in-agent Codex proxy \u2192 your ChatGPT subscription. Sign in on the Settings page. Requires an agent runtime that has the proxy.',
+};
+
+const MODEL_HELP: Record<string, string> = {
+  anthropic:
+    'The model this agent\u2019s claude runs \u2014 switches live. "Default" uses claude\u2019s own default.',
+  opencodeGo: "Picked from OpenCode Go's catalog. Switches live on save.",
+  chatgpt:
+    'Only these are accepted by a ChatGPT account \u2014 the -codex model ids are API-key-only. Claude Code\u2019s internal tiers (background/think/fast) all map to this one model.',
+};
+
 /** Slider default when first enabling the override (a touch earlier than the
  *  ~83% claude default, so it's a meaningful change). */
 const DEFAULT_PCT = 80;
@@ -456,9 +474,7 @@ export function AgentSettingsModal({
                           </Tabs.ListContainer>
                         </Tabs>
                         <p className="text-muted text-xs">
-                          {provider === 'opencodeGo'
-                            ? 'Routes claude through the in-agent opencode-proxy → opencode.ai/go subscription. Set the key on the dashboard Settings page.'
-                            : 'Direct to Anthropic with your Claude Code OAuth token (the default).'}
+                          {PROVIDER_HELP[provider] ?? PROVIDER_HELP.anthropic}
                         </p>
                       </div>
 
@@ -492,9 +508,7 @@ export function AgentSettingsModal({
                           </Select.Popover>
                         </Select>
                         <p className="text-muted text-xs">
-                          {provider === 'opencodeGo'
-                            ? "Picked from OpenCode Go's catalog. Switches live on save."
-                            : 'The model this agent\'s claude runs — switches live. "Default" uses claude\'s own default.'}
+                          {MODEL_HELP[provider] ?? MODEL_HELP.anthropic}
                         </p>
                       </div>
 
