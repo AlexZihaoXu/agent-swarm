@@ -35,11 +35,20 @@ const CHATGPT: ProviderInfo = {
   key: 'chatgpt',
   auth: 'oauth',
   label: 'ChatGPT (Codex)',
+  // ENUMERATED BY PROBING the live backend with a ChatGPT account — there is no
+  // models endpoint (codex/models 400s, backend-api/models 403s). Everything
+  // else tried is rejected with "not supported when using Codex with a ChatGPT
+  // account": the -codex ids (gpt-5.4-codex, gpt-5.5-codex, codex-max) are
+  // API-key-only, and gpt-5.6 / gpt-5.5-fast / gpt-5.4-nano / gpt-5.1 are not
+  // available on this path. Re-probe when OpenAI ships new models.
   models: [
-    { label: 'Default', value: '' },
-    { label: 'GPT-5.4 Codex', value: 'gpt-5.4-codex' },
+    { label: 'Default (gpt-5.4)', value: '' },
+    { label: 'GPT-5.6 Sol', value: 'gpt-5.6-sol' },
+    { label: 'GPT-5.6 Terra', value: 'gpt-5.6-terra' },
+    { label: 'GPT-5.6 Luna', value: 'gpt-5.6-luna' },
+    { label: 'GPT-5.5', value: 'gpt-5.5' },
     { label: 'GPT-5.4', value: 'gpt-5.4' },
-    { label: 'GPT-5.4 Codex mini', value: 'gpt-5.4-codex-mini' },
+    { label: 'GPT-5.4 mini', value: 'gpt-5.4-mini' },
   ],
 };
 

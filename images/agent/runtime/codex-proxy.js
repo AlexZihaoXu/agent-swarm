@@ -32,7 +32,9 @@ const CREDS_FILE = path.join(HOME, '.swarm', 'chatgpt-creds.json');
 const UPSTREAM = 'https://chatgpt.com/backend-api/codex/responses';
 /** Sent verbatim by the Codex CLI; the backend rejects unknown originators. */
 const ORIGINATOR = 'codex_cli_rs';
-const DEFAULT_MODEL = 'gpt-5.4-codex';
+// Verified: a ChatGPT account accepts gpt-5.4 / gpt-5.4-mini only. The
+// `-codex` ids are API-key-only and 400 here, so this default MUST NOT be one.
+const DEFAULT_MODEL = 'gpt-5.4';
 
 /** Latest rate-limit snapshot seen on a response, for the dashboard's usage
  *  ring. The backend reports these on real calls, which is the only reliable
@@ -152,28 +154,43 @@ function stopReason(status, hadToolCall) {
 
 const sse = (res, event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
-/** Capture the rate-limit snapshot the backend reports, whatever it calls it.
- *  Field naming here is unverified — accept several spellings rather than
- *  silently recording nothing. */
-function captureRateLimits(source) {
-  if (!source || typeof source !== 'object') return;
-  const rl = source.rate_limits || source.rateLimits;
-  if (!rl || typeof rl !== 'object') return;
-  const pick = (w) =>
-    w && typeof w === 'object'
-      ? {
-          usedPercent: Number(w.used_percent ?? w.usedPercent ?? w.percent_used ?? NaN),
-          windowMinutes: Number(w.window_minutes ?? w.windowMinutes ?? NaN) || null,
-          resetsAt:
-            Number(w.resets_at ?? w.reset_at ?? NaN) ||
-            (Number(w.resets_in_seconds ?? NaN)
-              ? Date.now() + Number(w.resets_in_seconds) * 1000
-              : null),
-        }
-      : null;
-  const primary = pick(rl.primary);
-  const secondary = pick(rl.secondary);
-  if (primary || secondary) rateLimits = { primary, secondary, at: Date.now() };
+/**
+ * Capture the rate-limit snapshot from the RESPONSE HEADERS.
+ *
+ * Verified against the live backend: these arrive as `x-codex-*` headers, NOT
+ * in the SSE body — an earlier version parsed the stream and would have
+ * recorded nothing forever. "primary" is the rolling short window and
+ * "secondary" the weekly one; the percentages are USED, so the Codex CLI's
+ * "96% left" display is 100 minus this.
+ */
+function captureRateLimits(headers) {
+  const num = (k) => {
+    const v = headers.get(k);
+    if (v === null || v === '') return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const win = (kind) => {
+    const used = num(`x-codex-${kind}-used-percent`);
+    if (used === null) return null;
+    const resetAt = num(`x-codex-${kind}-reset-at`);
+    const resetIn = num(`x-codex-${kind}-reset-after-seconds`);
+    return {
+      usedPercent: used,
+      windowMinutes: num(`x-codex-${kind}-window-minutes`),
+      // reset-at is unix SECONDS; fall back to the relative form.
+      resetsAt: resetAt ? resetAt * 1000 : resetIn !== null ? Date.now() + resetIn * 1000 : null,
+    };
+  };
+  const primary = win('primary');
+  const secondary = win('secondary');
+  if (!primary && !secondary) return;
+  rateLimits = {
+    primary,
+    secondary,
+    plan: headers.get('x-codex-plan-type') || null,
+    at: Date.now(),
+  };
 }
 
 /**
@@ -232,8 +249,6 @@ async function pipeStream(upstream, res, model) {
       } catch {
         continue;
       }
-      captureRateLimits(ev);
-      captureRateLimits(ev.response);
 
       switch (ev.type) {
         case 'response.output_text.delta': {
@@ -378,6 +393,7 @@ function createCodexProxy({ logger = console } = {}) {
             }),
           );
         }
+        captureRateLimits(upstream.headers);
         await pipeStream(upstream, res, model);
       } catch (e) {
         logger.error(`[codex-proxy] ${e && e.message}`);
