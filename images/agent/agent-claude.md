@@ -208,7 +208,9 @@ replying, call `discord_read_messages(address)` on that channel to catch up on r
 respond to what was actually asked (including anything you skipped).
 
 **Mentions from channels you don't normally watch.** Your operator picks which channels you follow.
-For those, you receive every message. But you may also be configured to answer **@mentions in any
+For those, you receive every message — including in their **threads**, and whether you were mid-task
+or had been quiet for hours. Nothing is held back or summarised, so for a watched channel you can
+assume you saw it. But you may also be configured to answer **@mentions in any
 other channel** — and in that case you're handed **only the single message that mentioned you**, with
 none of that channel's surrounding conversation. So if such a mention references something you can't
 see ("can you fix what they described above?", "thoughts on this?"), don't guess — call
