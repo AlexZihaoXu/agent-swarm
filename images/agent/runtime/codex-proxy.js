@@ -32,8 +32,11 @@ const CREDS_FILE = path.join(HOME, '.swarm', 'chatgpt-creds.json');
 const UPSTREAM = 'https://chatgpt.com/backend-api/codex/responses';
 /** Sent verbatim by the Codex CLI; the backend rejects unknown originators. */
 const ORIGINATOR = 'codex_cli_rs';
-// Verified: a ChatGPT account accepts gpt-5.4 / gpt-5.4-mini only. The
-// `-codex` ids are API-key-only and 400 here, so this default MUST NOT be one.
+// The `-codex` ids are API-key-only and 400 here, so this default MUST NOT be
+// one. Of the ids a ChatGPT account does accept, gpt-5.4 also has by far the
+// largest context window (~910k measured, vs ~355k for the gpt-5.6 family and
+// ~245k for gpt-5.5 / gpt-5.4-mini), which makes it the right default for
+// long-running agents.
 const DEFAULT_MODEL = 'gpt-5.4';
 
 /** Latest rate-limit snapshot seen on a response, for the dashboard's usage
@@ -320,10 +323,29 @@ async function pipeStream(upstream, res, model) {
     }
   }
   closeBlock();
+  // Report input tokens too. Codex only knows them at `response.completed`, so
+  // they can't go in message_start (where the real Anthropic API puts them) —
+  // Claude Code merges message_delta.usage over it, so reporting them here is
+  // what lands in the transcript. Without this every turn recorded
+  // input_tokens=0, which meant Claude Code believed the context was always
+  // empty and so NEVER auto-compacted: a session would grow until the Codex
+  // backend hard-rejected it with context_length_exceeded, from which it cannot
+  // recover. It also froze the dashboard's context ring at whatever the agent
+  // last reported on a different provider.
+  //
+  // OpenAI's input_tokens already INCLUDES cached tokens, whereas Anthropic
+  // counts cache reads separately and Claude Code sums the three. So report the
+  // whole thing as input_tokens and leave the cache fields at zero — splitting
+  // them out here would double-count the cached portion.
   sse(res, 'message_delta', {
     type: 'message_delta',
     delta: { stop_reason: stopReason(status, hadToolCall), stop_sequence: null },
-    usage: { output_tokens: usage.output_tokens },
+    usage: {
+      input_tokens: usage.input_tokens,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+      output_tokens: usage.output_tokens,
+    },
   });
   sse(res, 'message_stop', { type: 'message_stop' });
   res.end();

@@ -309,6 +309,24 @@ export const migrations: Migration[] = [
       await ctx.exec('chown -R agent:agent /opt/agent-runtime; systemctl restart agent-terminals');
     },
   },
+  {
+    version: 24,
+    name: 'chatgpt provider: report input tokens + real Codex context windows',
+    apply: async (ctx) => {
+      // The Codex proxy never reported input_tokens, so every turn landed in
+      // the transcript as input_tokens=0. Claude Code therefore believed the
+      // context was permanently empty and NEVER auto-compacted — a session grew
+      // unchecked until the backend rejected it with context_length_exceeded,
+      // which it cannot recover from since every retry is equally oversized.
+      // The dashboard ring was stuck at whatever the agent last reported under
+      // a different provider, which is why one read "276.2k/200k".
+      //
+      // Also stops rating Codex turns at Anthropic's per-token prices — those
+      // run against a ChatGPT subscription and cost nothing per token.
+      await ctx.putDir('runtime', '/opt/agent-runtime');
+      await ctx.exec('chown -R agent:agent /opt/agent-runtime; systemctl restart agent-terminals');
+    },
+  },
 ];
 
 /** Highest migration version (the version a fully up-to-date agent is at). */

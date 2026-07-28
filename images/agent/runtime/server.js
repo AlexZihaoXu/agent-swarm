@@ -444,6 +444,12 @@ function newestFile(dir, ext) {
 // write (5-min), `cr` = cache read. Edit here if rates change.
 function modelRates(model, ctxTokens) {
   const m = (model || '').toLowerCase();
+  // Codex runs against a ChatGPT subscription, not metered API billing, so
+  // there is no per-token cost to report. Rating these at Anthropic's prices
+  // would invent a dollar figure out of nothing — and now that the proxy
+  // reports real input tokens, that figure would climb fast. Turns from an
+  // agent's earlier Anthropic life are rated per-entry, so they still count.
+  if (m.startsWith('gpt-') || m.includes('codex')) return { in: 0, out: 0, cw: 0, cr: 0 };
   if (m.includes('opus')) return { in: 15, out: 75, cw: 18.75, cr: 1.5 };
   if (m.includes('haiku')) return { in: 1, out: 5, cw: 1.25, cr: 0.1 };
   // Sonnet: long-context (>200K input) tier is priced higher.
@@ -459,6 +465,17 @@ function modelRates(model, ctxTokens) {
 function modelContextLimit(model) {
   const m = (model || '').toLowerCase();
   if (!m) return 0;
+  // Deliberately NO entry for the Codex (gpt-*) models, even though their
+  // physical windows are known (~910k for gpt-5.4, ~355k for the gpt-5.6
+  // family, ~245k for gpt-5.5 / gpt-5.4-mini — measured 2026-07-28 by finding
+  // where the backend starts returning context_length_exceeded).
+  //
+  // The physical window is NOT what constrains the agent: Claude Code doesn't
+  // recognise these ids, so it applies its own 200k default and auto-compacts
+  // at a fraction of that. Putting 910k here would show the ring at 18% full at
+  // the exact moment Claude Code decides to compact. The statusline value below
+  // is what Claude Code actually enforces, so let it win — and it keeps being
+  // right if CLAUDE_CODE_MAX_CONTEXT_TOKENS is ever set to lift that ceiling.
   if (m.includes('kimi-k2')) return 256_000;
   if (m.includes('glm-5')) return 128_000;
   if (m.includes('deepseek-v4')) return 128_000;
