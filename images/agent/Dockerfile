@@ -335,11 +335,16 @@ COPY --chown=agent:agent claude-settings.json /home/agent/.claude/settings.json
 # sees the failed condition and skips. Removing the marker re-enables. We do
 # this in a drop-in rather than editing the unit so distro updates can change
 # the upstream unit without colliding.
+# `Restart=always` (not on-failure): a dying Xvnc session exits 0, so systemd
+# considered it a clean stop and left the desktop down — observed on 4 of 7
+# agents, which silently broke their dashboard previews. The condition above is
+# re-evaluated on each restart, so a desktop the operator turned OFF still
+# stays off rather than looping.
 RUN install -d /etc/systemd/system/tigervncserver@:1.service.d \
-    && printf '[Unit]\nConditionPathExists=!/home/agent/.swarm/desktop-disabled\n' \
+    && printf '[Unit]\nConditionPathExists=!/home/agent/.swarm/desktop-disabled\n[Service]\nRestart=always\nRestartSec=5\n' \
        > /etc/systemd/system/tigervncserver@:1.service.d/50-desktop-toggle.conf \
     && install -d /etc/systemd/system/novnc.service.d \
-    && printf '[Unit]\nConditionPathExists=!/home/agent/.swarm/desktop-disabled\n' \
+    && printf '[Unit]\nConditionPathExists=!/home/agent/.swarm/desktop-disabled\n[Service]\nRestart=always\nRestartSec=5\n' \
        > /etc/systemd/system/novnc.service.d/50-desktop-toggle.conf
 
 # Boot to multi-user (no gdm greeter — the session comes up via TigerVNC),

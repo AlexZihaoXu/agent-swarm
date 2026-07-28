@@ -259,6 +259,28 @@ export const migrations: Migration[] = [
       await ctx.exec('chown -R agent:agent /opt/agent-runtime; systemctl restart agent-terminals');
     },
   },
+  {
+    version: 21,
+    name: 'desktop: restart tigervnc/novnc automatically if the session dies',
+    apply: async (ctx) => {
+      // A dying Xvnc exits 0, so systemd treated it as a clean stop and left
+      // the desktop down — found on 4 of 7 agents, which is what broke their
+      // previews. Restart=always brings it back; the existing
+      // ConditionPathExists is re-checked on restart, so a desktop the operator
+      // turned OFF stays off instead of looping.
+      await ctx.exec(
+        [
+          'install -d /etc/systemd/system/tigervncserver@:1.service.d',
+          "printf '[Unit]\\nConditionPathExists=!/home/agent/.swarm/desktop-disabled\\n[Service]\\nRestart=always\\nRestartSec=5\\n' > /etc/systemd/system/tigervncserver@:1.service.d/50-desktop-toggle.conf",
+          'install -d /etc/systemd/system/novnc.service.d',
+          "printf '[Unit]\\nConditionPathExists=!/home/agent/.swarm/desktop-disabled\\n[Service]\\nRestart=always\\nRestartSec=5\\n' > /etc/systemd/system/novnc.service.d/50-desktop-toggle.conf",
+          'systemctl daemon-reload',
+          // Only bring it up if the operator hasn't disabled the desktop.
+          'test -e /home/agent/.swarm/desktop-disabled || systemctl start tigervncserver@:1 novnc || true',
+        ].join('; '),
+      );
+    },
+  },
 ];
 
 /** Highest migration version (the version a fully up-to-date agent is at). */
