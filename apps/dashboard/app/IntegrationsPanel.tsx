@@ -337,7 +337,7 @@ export function IntegrationsPanel({ agentId, active }: { agentId: string; active
           </div>
 
           <div>
-            <FieldLabel hint="The agent receives EVERY message in these channels and decides for itself what to answer. Turn on Developer Mode in Discord, then right-click a channel → Copy Channel ID. Leave empty to instead watch the whole server — see 'Only when mentioned' below.">
+            <FieldLabel hint="The agent receives EVERY message in these channels — including in any THREAD under them, so a thread it starts is followed without needing a mention. Turn on Developer Mode in Discord, then right-click a channel → Copy Channel ID. Leave empty to instead watch the whole server — see 'Only when mentioned' below.">
               Watched channels
             </FieldLabel>
             <TagInput

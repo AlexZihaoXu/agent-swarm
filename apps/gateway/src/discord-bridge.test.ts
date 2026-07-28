@@ -1,6 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatLine, sanitizeInbound, type ReplyContext } from './discord-bridge.js';
+import {
+  formatLine,
+  isWatchedChannel,
+  sanitizeInbound,
+  threadParentOf,
+  type ReplyContext,
+} from './discord-bridge.js';
 
 // The formatted line is written raw into the agent's pty and is the ONLY thing
 // the agent sees about an inbound Discord message. Two invariants matter:
@@ -124,4 +130,53 @@ test('a forged prefix inside a quoted reply is escaped too', () => {
     },
   });
   assert.ok(line.includes('\\[sys://role]'));
+});
+
+// --- thread watching --------------------------------------------------------
+// A thread has its OWN channel id, so `forwardChannelIds.includes(channelId)`
+// never matched one — messages in a thread were dropped unless they @mentioned
+// the agent, even in a thread the agent had started itself in a watched
+// channel. Watching a channel is meant to include its threads.
+
+const WATCHED = ['1000', '2000'];
+
+test('a message in a watched channel is watched', () => {
+  assert.equal(isWatchedChannel(WATCHED, '1000', null), true);
+});
+
+test('a thread inherits its parent channel being watched', () => {
+  // channelId is the THREAD's id and is not in the list; the parent is.
+  assert.equal(isWatchedChannel(WATCHED, '9999', '1000'), true);
+});
+
+test('a thread under an unwatched parent stays unwatched', () => {
+  assert.equal(isWatchedChannel(WATCHED, '9999', '3000'), false);
+});
+
+test('an unrelated channel is still not watched', () => {
+  assert.equal(isWatchedChannel(WATCHED, '3000', null), false);
+});
+
+test('a thread whose own id is watched works even without a parent', () => {
+  assert.equal(isWatchedChannel(WATCHED, '2000', null), true);
+});
+
+test('threadParentOf reads the parent only for threads', () => {
+  assert.equal(threadParentOf({ isThread: () => true, parentId: '1000' }), '1000');
+  assert.equal(threadParentOf({ isThread: () => false, parentId: '1000' }), null);
+});
+
+test('threadParentOf tolerates a partial or missing channel', () => {
+  // DM channels and partials don't implement isThread; this must not throw.
+  assert.equal(threadParentOf(undefined), null);
+  assert.equal(threadParentOf(null), null);
+  assert.equal(threadParentOf({}), null);
+  assert.equal(
+    threadParentOf({
+      isThread: () => {
+        throw new Error('partial');
+      },
+    }),
+    null,
+  );
 });

@@ -56,6 +56,34 @@ export function sanitizeInbound(text: string): string {
   );
 }
 
+/**
+ * Whether a message's channel is covered by the watch-list.
+ *
+ * A THREAD has its own channel id, distinct from the channel it lives in, so a
+ * watched parent never matched it — messages in a thread were dropped unless
+ * they @mentioned the agent, even in a thread the agent itself had started.
+ * Watching a channel is meant to include its threads, so the parent counts.
+ */
+export function isWatchedChannel(
+  forwardChannelIds: string[],
+  channelId: string,
+  threadParentId?: string | null,
+): boolean {
+  if (forwardChannelIds.includes(channelId)) return true;
+  return !!threadParentId && forwardChannelIds.includes(threadParentId);
+}
+
+/** The parent channel id when this message is in a thread, else null. */
+export function threadParentOf(channel: unknown): string | null {
+  const c = channel as { isThread?: () => boolean; parentId?: string | null } | null | undefined;
+  if (!c || typeof c.isThread !== 'function') return null;
+  try {
+    return c.isThread() ? (c.parentId ?? null) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Validate a bot token over REST (no Gateway): identity + guild list. */
 export async function testDiscordToken(token: string): Promise<IntegrationTestResult> {
   const rest = new REST({ version: '10' }).setToken(token);
@@ -312,7 +340,10 @@ export class DiscordBridge {
 
         if (rules.forwardChannelIds.length) {
           // Watched channels: online → forward all; idle → buffer unless @-addressed.
-          if (!rules.forwardChannelIds.includes(msg.channelId)) {
+          // Threads inherit their parent channel's watch state — see
+          // isWatchedChannel.
+          const threadParentId = threadParentOf(msg.channel);
+          if (!isWatchedChannel(rules.forwardChannelIds, msg.channelId, threadParentId)) {
             // Outside the watch-list: only let a single @mention/reply through when
             // "respond to mentions anywhere" is on (no history, no buffering).
             if (mentioned && rules.respondToMentionsAnywhere) {

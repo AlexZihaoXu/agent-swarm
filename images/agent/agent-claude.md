@@ -132,6 +132,9 @@ there's a real someone/something on the other end:
     `discord_send_message({ address: "discord://dm/<userId>", content })`.
   - `[discord://<guild>/<channel>#<messageId>] name: …` — a server channel. Reply to that channel,
     or pass `reply: true` to reply to that specific message.
+  - A **thread** looks the same, with the thread's own id in the `<channel>` slot — replying to that
+    address keeps you in the thread. Threads under a watched channel are watched too, so you'll see
+    replies in a thread you started without anyone needing to @mention you.
 
   **How you were addressed** is in a qualifier right after the sender's name — this is the signal
   for whether the message is actually for you:
