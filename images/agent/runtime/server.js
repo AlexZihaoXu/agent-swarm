@@ -62,6 +62,10 @@ const AUTH_FILE = path.join(HOME, '.swarm', 'auth');
 const OPENCODE_PROXY_PORT = parseInt(process.env.OPENCODE_PROXY_PORT || '8765', 10);
 const OC_GO_CC_INTERNAL_PORT = parseInt(process.env.OC_GO_CC_INTERNAL_PORT || '8766', 10);
 const OPENCODE_PROXY_BIN = '/usr/local/bin/oc-go-cc';
+// Codex/ChatGPT proxy (8765/8766 are taken by the opencode-go chain).
+const CHATGPT_PROXY_PORT = parseInt(process.env.CHATGPT_PROXY_PORT || '8767', 10);
+const CHATGPT_INTERNAL_PORT = parseInt(process.env.CHATGPT_INTERNAL_PORT || '8768', 10);
+const CHATGPT_CREDS_FILE = path.join(HOME, '.swarm', 'chatgpt-creds.json');
 const OPENCODE_KEY_FILE = path.join(HOME, '.swarm', 'opencode-go-key');
 const OPENCODE_CONFIG_FILE = path.join(HOME, '.swarm', 'oc-go-cc-config.json');
 
@@ -87,13 +91,26 @@ function settingsEnv() {
   if (provider === 'opencodeGo') {
     env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${OPENCODE_PROXY_PORT}`;
     env.ANTHROPIC_AUTH_TOKEN = 'opencode-go-via-proxy';
-  } else {
+  } else if (provider === 'chatgpt') {
+    // Codex/ChatGPT goes through its own local translating proxy, same shape as
+    // opencodeGo. Deliberately does NOT fall through to the Anthropic branch:
+    // that branch hands over the operator's real Claude OAuth token, so an
+    // unrecognised provider used to silently spend the Anthropic subscription.
+    // If the proxy isn't installed yet, claude fails loudly against a dead port
+    // instead of quietly billing the wrong account.
+    env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${CHATGPT_PROXY_PORT}`;
+    env.ANTHROPIC_AUTH_TOKEN = 'chatgpt-via-proxy';
+  } else if (provider === 'anthropic') {
     try {
       const token = fs.readFileSync(AUTH_FILE, 'utf8').trim();
       if (token) env.CLAUDE_CODE_OAUTH_TOKEN = token;
     } catch {
-      /* no token provisioned */
+      /* no token on disk — claude will prompt */
     }
+  } else {
+    // Unknown provider (e.g. an agent created by a newer gateway). Give it
+    // nothing rather than defaulting to the Anthropic credential.
+    console.error(`[settings] unknown provider ${JSON.stringify(provider)} — no credential applied`);
   }
   if (identity) {
     const pct = identity.autoCompactPct;

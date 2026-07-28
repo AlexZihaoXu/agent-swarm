@@ -105,11 +105,22 @@ export type Capability =
 /** Which upstream the agent's claude session uses. 'anthropic' = direct OAuth
  *  to Anthropic (Claude); 'opencodeGo' = the OpenCode Go subscription routed
  *  through the in-agent opencode-proxy. */
-export type Provider = 'anthropic' | 'opencodeGo';
+export type Provider = 'anthropic' | 'opencodeGo' | 'chatgpt';
+
+/** The single source of truth for valid providers. Used to validate BOTH the
+ *  create and patch paths — create previously accepted any string, so an agent
+ *  could be created with a provider the runtime didn't understand. */
+export const PROVIDERS: readonly Provider[] = ['anthropic', 'opencodeGo', 'chatgpt'];
+export function isProvider(v: unknown): v is Provider {
+  return typeof v === 'string' && (PROVIDERS as readonly string[]).includes(v);
+}
 
 /** Catalog entry for a provider in the UI: its label + the available models. */
 export interface ProviderInfo {
   key: Provider;
+  /** How this provider is authenticated, so the dashboard can render a
+   *  "Connect" flow instead of a paste-a-key field. */
+  auth?: 'oauth' | 'apiKey' | 'account';
   label: string;
   /** Models surfaced in the dashboard's model dropdown. */
   models: { label: string; value: string }[];

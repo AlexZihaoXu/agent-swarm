@@ -15,6 +15,7 @@ import type { ProviderInfo } from './types.js';
 
 const ANTHROPIC: ProviderInfo = {
   key: 'anthropic',
+  auth: 'account',
   label: 'Anthropic Claude',
   models: [
     { label: 'Default', value: '' },
@@ -27,6 +28,21 @@ const ANTHROPIC: ProviderInfo = {
 
 /** Hardcoded fallback for OpenCode Go — used when the live /models fetch
  *  fails. Update when OpenCode adds models you want to surface offline. */
+/** ChatGPT via a Codex subscription. Authenticated by OAuth, so the dashboard
+ *  renders a Connect flow rather than a key field. Model ids are the ones the
+ *  Codex backend accepts; 'Default' lets the backend choose. */
+const CHATGPT: ProviderInfo = {
+  key: 'chatgpt',
+  auth: 'oauth',
+  label: 'ChatGPT (Codex)',
+  models: [
+    { label: 'Default', value: '' },
+    { label: 'GPT-5.4 Codex', value: 'gpt-5.4-codex' },
+    { label: 'GPT-5.4', value: 'gpt-5.4' },
+    { label: 'GPT-5.4 Codex mini', value: 'gpt-5.4-codex-mini' },
+  ],
+};
+
 const OPENCODE_GO_FALLBACK_IDS: string[] = [
   'minimax-m3',
   'minimax-m2.7',
@@ -117,5 +133,9 @@ export async function listProviders(): Promise<ProviderInfo[]> {
     { label: 'Default (kimi-k2.6)', value: '' },
     ...ocgIds.map((id) => ({ label: prettyLabel(id), value: id })),
   ];
-  return [ANTHROPIC, { key: 'opencodeGo', label: 'OpenCode Go', models: ocgModels }];
+  return [
+    ANTHROPIC,
+    { key: 'opencodeGo', auth: 'apiKey', label: 'OpenCode Go', models: ocgModels },
+    CHATGPT,
+  ];
 }

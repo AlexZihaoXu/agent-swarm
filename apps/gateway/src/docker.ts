@@ -18,6 +18,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { basename, dirname, join, sep } from 'node:path';
+import { PROVIDERS, isProvider } from './types.js';
 import type { Readable } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
 import { promisify } from 'node:util';
@@ -390,8 +391,8 @@ export class AgentManager {
       idPatch.autoCompactPct = v === null ? null : Math.round(v);
     }
     if (patch.provider !== undefined) {
-      if (patch.provider !== 'anthropic' && patch.provider !== 'opencodeGo')
-        throw Object.assign(new Error('provider must be "anthropic" or "opencodeGo"'), {
+      if (!isProvider(patch.provider))
+        throw Object.assign(new Error(`provider must be one of ${PROVIDERS.join(', ')}`), {
           statusCode: 400,
         });
       idPatch.provider = patch.provider;
@@ -439,6 +440,7 @@ export class AgentManager {
     // every Claude tier to the newly chosen model.
     if (patch.provider !== undefined && idPatch.provider !== prevProvider) {
       this.writeOpencodeGoKey(id);
+      this.writeChatgptCreds(id);
     } else if (
       patch.model !== undefined &&
       idPatch.model !== prevModel &&
@@ -764,6 +766,54 @@ export class AgentManager {
    *  anthropic agents the file is removed (so a provider switch back to
    *  anthropic doesn't leak credentials into the proxy). Called on create,
    *  start, and whenever provider or the key changes. */
+  /**
+   * Write (or REMOVE) this agent's ChatGPT/Codex credential on its disk.
+   *
+   * The removal path matters as much as the write: switching an agent away from
+   * chatgpt has to delete the file, or a stale token stays readable on a disk
+   * whose provider no longer uses it. Same contract as writeOpencodeGoKey.
+   */
+  private writeChatgptCreds(id: string): void {
+    const file = join(this.agentDataDir(id), '.swarm', 'chatgpt-creds.json');
+    try {
+      const ident = this.readIdentity(id);
+      const creds = getSettings().providers?.chatgpt;
+      if (ident?.provider !== 'chatgpt' || !creds?.accessToken) {
+        rmSync(file, { force: true });
+        return;
+      }
+      this.ensureSwarmDir(id);
+      writeFileSync(
+        file,
+        JSON.stringify(
+          {
+            access_token: creds.accessToken,
+            refresh_token: creds.refreshToken,
+            expires_at: creds.expiresAt,
+            account_id: creds.accountId,
+          },
+          null,
+          2,
+        ),
+        { mode: 0o600 },
+      );
+      chownSync(file, 1000, 1000); // readable by the in-agent proxy (uid 1000)
+    } catch {
+      /* best effort — the proxy reports a missing credential itself */
+    }
+  }
+
+  /** Push the current ChatGPT credential to every agent that uses it. */
+  writeChatgptCredsAll(): void {
+    try {
+      for (const id of readdirSync(join(this.cfg.swarmDataMount, 'agents'))) {
+        this.writeChatgptCreds(id);
+      }
+    } catch {
+      /* no agents dir yet */
+    }
+  }
+
   private writeOpencodeGoKey(id: string): void {
     const dir = this.ensureSwarmDir(id);
     const file = join(dir, 'opencode-go-key');
@@ -2189,6 +2239,7 @@ export class AgentManager {
     });
     this.writeAuthToken(id);
     this.writeOpencodeGoKey(id);
+    this.writeChatgptCreds(id);
     this.writeDesktopMarker(id);
     this.writeSwarmToken(id);
     this.writeRolesDoc(id);
@@ -2434,6 +2485,7 @@ export class AgentManager {
     this.writeAuthToken(id);
     this.writeSwarmToken(id);
     this.writeOpencodeGoKey(id);
+    this.writeChatgptCreds(id);
     this.writeDesktopMarker(id);
     this.writeRolesDoc(id);
     this.writeAgentGuidance(id);
@@ -2492,6 +2544,7 @@ export class AgentManager {
     this.writeAuthToken(id);
     this.writeSwarmToken(id);
     this.writeOpencodeGoKey(id);
+    this.writeChatgptCreds(id);
     this.writeDesktopMarker(id);
     this.writeRolesDoc(id);
     this.writeAgentGuidance(id);

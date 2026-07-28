@@ -34,6 +34,8 @@ import {
   type AuditQuery,
 } from './audit.js';
 import { listProviders } from './providers.js';
+import { PROVIDERS, isProvider } from './types.js';
+import { CodexLogin } from './codex-auth.js';
 import type { Capability, Provider } from './types.js';
 import { listGroups, createGroup, updateGroup, deleteGroup } from './groups.js';
 import { listGroupMessages, clearGroupMessages } from './group-chats.js';
@@ -262,6 +264,8 @@ export async function handleApi(
     }
     if (pathname === '/api/settings/ip-names') return await handleIpNames(req, res, method);
     if (pathname === '/api/settings') return await handleSettings(req, res, manager, method);
+    if (pathname === '/api/providers/chatgpt/login')
+      return await handleChatgptLogin(req, res, manager, method);
     if (pathname === '/api/providers/info') {
       if (method !== 'GET') return (sendJson(res, 405, { error: 'method not allowed' }), true);
       return (sendJson(res, 200, await listProviders()), true);
@@ -1076,7 +1080,16 @@ async function handleAgents(
         cpus: body.cpus ?? undefined,
         memoryMb: body.memoryMb ?? undefined,
         timezone: body.timezone ?? undefined,
-        provider: body.provider,
+        // Validate here as well as in patchAgent — create used to accept ANY
+        // string, which produced agents the runtime couldn't authenticate.
+        provider:
+          body.provider === undefined || isProvider(body.provider)
+            ? body.provider
+            : (() => {
+                throw Object.assign(new Error(`provider must be one of ${PROVIDERS.join(', ')}`), {
+                  statusCode: 400,
+                });
+              })(),
         model: body.model ?? undefined,
         effort: body.effort ?? undefined,
         roles: body.roles,
@@ -1510,6 +1523,93 @@ async function handleDiscord(
   return true;
 }
 
+/** One device login at a time — it's short-lived and operator-driven. */
+let chatgptLogin: CodexLogin | null = null;
+
+/**
+ * "Sign in with ChatGPT" (Codex), device-code style.
+ *
+ *   POST   → start a login; returns the URL + one-time code to show the operator
+ *   GET    → poll: pending (with the code) / connected / not started
+ *   DELETE → cancel an in-flight login, or disconnect a stored account
+ *
+ * Tokens are stored server-side and never returned to the browser.
+ */
+async function handleChatgptLogin(
+  req: IncomingMessage,
+  res: ServerResponse,
+  manager: AgentManager,
+  method: string,
+): Promise<boolean> {
+  const stored = getSettings().providers?.chatgpt;
+  const connected = () => ({
+    connected: !!stored,
+    account: stored?.account ?? null,
+    expiresAt: stored?.expiresAt ?? null,
+  });
+
+  if (method === 'GET') {
+    const pending = chatgptLogin?.pending ?? null;
+    return (sendJson(res, 200, { ...connected(), pending }), true);
+  }
+
+  if (method === 'POST') {
+    chatgptLogin?.cancel();
+    const login = new CodexLogin();
+    chatgptLogin = login;
+    const pending = await login.start();
+    // Persist in the background: the operator may take minutes to approve, and
+    // the HTTP response must not wait for it.
+    void login
+      .wait()
+      ?.then((tokens) => {
+        const cur = getSettings().providers ?? {};
+        updateSettings({
+          providers: {
+            ...cur,
+            chatgpt: {
+              accessToken: tokens.accessToken,
+              refreshToken: tokens.refreshToken,
+              expiresAt: tokens.expiresAt,
+              accountId: tokens.accountId,
+              account: tokens.account,
+            },
+          },
+        });
+        // Push the new credential onto every chatgpt-provider agent's disk.
+        manager.writeChatgptCredsAll();
+      })
+      .catch(() => {
+        /* expired or cancelled — the operator can start again */
+      });
+    logEvent({
+      category: 'settings',
+      action: 'settings.chatgpt.login_started',
+      message: 'ChatGPT (Codex) sign-in started',
+      actor: opActor(req),
+    });
+    return (sendJson(res, 200, { ...connected(), pending }), true);
+  }
+
+  if (method === 'DELETE') {
+    chatgptLogin?.cancel();
+    chatgptLogin = null;
+    const cur = getSettings().providers ?? {};
+    updateSettings({ providers: { ...cur, chatgpt: undefined } });
+    manager.writeChatgptCredsAll();
+    logEvent({
+      category: 'settings',
+      action: 'settings.chatgpt.disconnect',
+      message: 'ChatGPT (Codex) account disconnected',
+      actor: opActor(req),
+    });
+    return (sendJson(res, 200, { connected: false, account: null, expiresAt: null }), true);
+  }
+
+  sendJson(res, 405, { error: 'method not allowed' });
+  return true;
+}
+
 /** Friendly names for known client IPs. Not a secret and not a security
  *  control — it exists so the auth log reads "operator@home" for an address you
  *  recognize, leaving an unnamed IP visibly odd. Whole-list PUT: the UI edits
@@ -1551,11 +1651,19 @@ async function handleProviders(
 ): Promise<boolean> {
   if (method === 'GET') {
     const key = getSettings().providers?.opencodeGo?.apiKey ?? '';
+    const chatgpt = getSettings().providers?.chatgpt;
     return (
       sendJson(res, 200, {
         opencodeGo: {
           hasKey: !!key,
           keyHint: key && key.length >= 4 ? key.slice(-4) : null,
+        },
+        // OAuth, so there's no "last 4" to show — just whether an account is
+        // linked and which one.
+        chatgpt: {
+          connected: !!chatgpt,
+          account: chatgpt?.account ?? null,
+          expiresAt: chatgpt?.expiresAt ?? null,
         },
       }),
       true

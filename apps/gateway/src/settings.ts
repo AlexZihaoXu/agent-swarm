@@ -18,6 +18,18 @@ export interface ProvidersConfig {
    *  opencode-proxy reads it from `~/.swarm/opencode-go-key` and translates
    *  Claude Code's Anthropic Messages requests into OpenAI Chat Completions. */
   opencodeGo?: { apiKey: string };
+  /** ChatGPT / Codex, authenticated by OAuth rather than a pasted key — so we
+   *  hold tokens, not a secret the operator can retype. Server-side only. */
+  chatgpt?: {
+    accessToken: string;
+    refreshToken: string | null;
+    /** Epoch ms; the access token is short-lived and gets refreshed. */
+    expiresAt: number;
+    /** Sent as the `chatgpt-account-id` header when calling the backend. */
+    accountId: string | null;
+    /** Display label for the dashboard (email/name), never a credential. */
+    account: string | null;
+  };
 }
 
 /** An operator-assigned friendly name for a client IP. Purely cosmetic, but it
