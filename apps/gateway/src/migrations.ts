@@ -281,6 +281,17 @@ export const migrations: Migration[] = [
       );
     },
   },
+  {
+    version: 22,
+    name: 'transcript: include tool arguments (which keys a hotkey sent, etc.)',
+    apply: async (ctx) => {
+      // The chat only had the tool's NAME plus the first string in its input,
+      // so computer-use calls were unreadable: a hotkey's keys are an array and
+      // clicks/moves are numbers, so both rendered with no detail at all.
+      await ctx.putDir('runtime', '/opt/agent-runtime');
+      await ctx.exec('chown -R agent:agent /opt/agent-runtime; systemctl restart agent-terminals');
+    },
+  },
 ];
 
 /** Highest migration version (the version a fully up-to-date agent is at). */

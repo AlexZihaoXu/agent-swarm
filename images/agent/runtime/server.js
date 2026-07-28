@@ -584,9 +584,52 @@ function toolDetail(input) {
     input.url ||
     input.prompt ||
     Object.values(input).find((x) => typeof x === 'string') ||
+    // Fall back to the first array of scalars (computer-use `hotkey` passes
+    // `keys: ["ctrl","c"]`, which the string search above never matched — so
+    // hotkeys used to render with no detail at all).
+    (Object.values(input).find((x) => Array.isArray(x) && x.every((e) => typeof e !== 'object')) ||
+      [])
+      .join('+') ||
     '';
   const s = String(v).replace(/\s+/g, ' ').trim();
   return s.length > 140 ? s.slice(0, 140) + '…' : s;
+}
+
+/** Cap on one stringified arg value in the transcript payload. */
+const TOOL_ARG_MAX = 120;
+
+/**
+ * A compact, size-bounded copy of a tool call's input, so the chat can render
+ * the SPECIFICS (which keys a hotkey pressed, where a click landed) instead of
+ * just the tool's name. Deliberately not the raw input: a transcript carries
+ * thousands of these, and some tools take whole file contents.
+ */
+function toolArgs(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const out = {};
+  let n = 0;
+  for (const [k, v] of Object.entries(input)) {
+    if (n >= 8) break;
+    let val;
+    if (v == null) continue;
+    else if (typeof v === 'string') val = v.length > TOOL_ARG_MAX ? v.slice(0, TOOL_ARG_MAX) + '…' : v;
+    else if (typeof v === 'number' || typeof v === 'boolean') val = v;
+    else if (Array.isArray(v) && v.every((e) => typeof e !== 'object'))
+      val = v.slice(0, 12).map((e) => String(e));
+    else if (
+      typeof v === 'object' &&
+      Object.keys(v).length <= 6 &&
+      Object.values(v).every((e) => e === null || typeof e !== 'object')
+    ) {
+      // One level of small, flat objects — the desktop tools pass coordinates
+      // as `pos: {x, y, sys}`, and dropping those loses exactly the detail
+      // worth showing. Deeper/larger structures still aren't worth the payload.
+      val = Object.fromEntries(Object.entries(v).map(([k2, v2]) => [k2, String(v2)]));
+    } else continue;
+    out[k] = val;
+    n++;
+  }
+  return n ? out : undefined;
 }
 
 // Strip ANSI SGR escape sequences (e.g. the [1m…[22m in slash-command output).
@@ -752,7 +795,12 @@ function readTranscript() {
         ) {
           /* skip — the task list is rendered as a live checklist from /api/stats */
         } else if (b.type === 'tool_use')
-          items.push({ kind: 'tool', name: b.name, detail: toolDetail(b.input) });
+          items.push({
+            kind: 'tool',
+            name: b.name,
+            detail: toolDetail(b.input),
+            args: toolArgs(b.input),
+          });
       }
     }
     if (items.length) {

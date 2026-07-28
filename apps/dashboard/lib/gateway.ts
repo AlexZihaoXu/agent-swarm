@@ -687,6 +687,9 @@ export interface ChatItem {
   text?: string;
   name?: string;
   detail?: string;
+  /** Compact, size-bounded copy of the tool call's input, so the chat can show
+   *  the specifics (which keys a hotkey sent, where a click landed). */
+  args?: Record<string, string | number | boolean | string[] | Record<string, string>>;
   todos?: ChatTodo[];
   /** For kind 'image': the saved screenshot filename, served at
    *  /a/<id>/terminal/api/shots/<file>. */

@@ -141,9 +141,125 @@ function AssistantText({ text, animate }: { text: string; animate: boolean }) {
   );
 }
 
+/** A single key rendered as a keycap, so `ctrl+shift+t` reads at a glance. */
+function KeyCap({ label }: { label: string }) {
+  const pretty: Record<string, string> = {
+    ctrl: 'Ctrl',
+    control: 'Ctrl',
+    alt: 'Alt',
+    shift: 'Shift',
+    super: 'Super',
+    meta: 'Meta',
+    cmd: 'Cmd',
+    return: '⏎',
+    enter: '⏎',
+    tab: '⇥',
+    escape: 'Esc',
+    esc: 'Esc',
+    space: '␣',
+    backspace: '⌫',
+    delete: 'Del',
+    up: '↑',
+    down: '↓',
+    left: '←',
+    right: '→',
+  };
+  const k = label.toLowerCase();
+  return (
+    <kbd className="border-separator bg-surface text-foreground/90 rounded border px-1 py-px font-mono text-[10px] leading-none shadow-sm">
+      {pretty[k] ?? label}
+    </kbd>
+  );
+}
+
+/**
+ * Human-readable specifics for a tool call.
+ *
+ * The generic `detail` is just the first string in the input, which says
+ * nothing useful for the computer-use tools: a hotkey's keys live in an ARRAY,
+ * and clicks/moves are numbers. Those are exactly the calls you want to read
+ * when watching an agent drive a desktop, so they get purpose-built renderings
+ * and everything else falls back to the plain detail.
+ */
+function ToolArgs({
+  tool,
+  args,
+  detail,
+}: {
+  tool: string;
+  args?: Record<string, string | number | boolean | string[] | Record<string, string>>;
+  detail?: string;
+}) {
+  const t = tool.toLowerCase();
+  const asKeys = (v: unknown): string[] =>
+    Array.isArray(v) ? v.map(String) : typeof v === 'string' ? [v] : [];
+
+  if (args) {
+    if (t === 'hotkey' && asKeys(args.keys).length) {
+      const keys = asKeys(args.keys);
+      return (
+        <span className="flex flex-wrap items-center gap-0.5">
+          {keys.map((k, i) => (
+            <span key={i} className="flex items-center gap-0.5">
+              {i > 0 && <span className="opacity-50">+</span>}
+              <KeyCap label={k} />
+            </span>
+          ))}
+        </span>
+      );
+    }
+    if ((t === 'press' || t === 'keydown' || t === 'keyup') && args.key) {
+      return <KeyCap label={String(args.key)} />;
+    }
+    if ((t === 'type' || t === 'type_text') && typeof args.text === 'string') {
+      return <span className="truncate font-mono opacity-80">&ldquo;{args.text}&rdquo;</span>;
+    }
+    if (t === 'click') {
+      const n = Number(args.num_clicks ?? 1);
+      return (
+        <span className="font-mono opacity-80">
+          {String(args.button ?? 'left')}
+          {n > 1 ? ` ×${n}` : ''}
+        </span>
+      );
+    }
+    if ((t === 'move_to' || t === 'look_at') && args.pos && typeof args.pos === 'object') {
+      const p = args.pos as Record<string, string>;
+      return (
+        <span className="font-mono opacity-80">
+          → ({p.x}, {p.y}){p.sys ? ` ${p.sys}` : ''}
+        </span>
+      );
+    }
+    if (t === 'mouse_down' || t === 'mouse_up') {
+      return <span className="font-mono opacity-80">{String(args.button ?? 'left')}</span>;
+    }
+    if (t === 'is_key_pressed' && args.key) return <KeyCap label={String(args.key)} />;
+    if ((t === 'focus_window' || t === 'close_window' || t === 'get_window') && args.id) {
+      return <span className="font-mono opacity-80">#{String(args.id)}</span>;
+    }
+    if (t === 'move_rel') {
+      return (
+        <span className="font-mono opacity-80">
+          Δ ({String(args.dx ?? '?')}, {String(args.dy ?? '?')})
+        </span>
+      );
+    }
+  }
+  return detail ? <span className="truncate font-mono opacity-80">{detail}</span> : null;
+}
+
 /** A tool call. MCP tools follow `mcp__<server>__<tool>` — render the server as
  * a small badge and the bare tool name, instead of the raw underscored id. */
-function ToolItem({ name, detail }: { name: string; detail?: string }) {
+function ToolItem({
+  name,
+  detail,
+  args,
+}: {
+  name: string;
+  detail?: string;
+  args?: Record<string, string | number | boolean | string[] | Record<string, string>>;
+}) {
   let server: string | null = null;
   let tool = name;
   if (name.startsWith('mcp__')) {
@@ -163,7 +279,7 @@ function ToolItem({ name, detail }: { name: string; detail?: string }) {
         </span>
       )}
       <span className="shrink-0 font-mono font-semibold">{tool}</span>
-      {detail && <span className="truncate font-mono opacity-80">{detail}</span>}
+      <ToolArgs tool={tool} args={args} detail={detail} />
     </div>
   );
 }
@@ -735,7 +851,7 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
                       ) : it.kind === 'image' && it.file ? (
                         <ChatImage key={j} agentId={agentId} file={it.file} onOpen={setLightbox} />
                       ) : (
-                        <ToolItem key={j} name={it.name ?? ''} detail={it.detail} />
+                        <ToolItem key={j} name={it.name ?? ''} detail={it.detail} args={it.args} />
                       ),
                     )}
                   </div>
