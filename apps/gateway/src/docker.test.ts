@@ -309,3 +309,52 @@ test('upgrade() locks per agent, not globally', async () => {
   await Promise.all([manager.upgrade('alpha'), manager.upgrade('beta')]);
   assert.deepEqual(started.sort(), ['alpha', 'beta']);
 });
+
+// --- auto-compact back-off --------------------------------------------------
+// lumen sat at 40.3% against a 40% threshold with claude not in a state to run
+// the slash command, so /compact was injected every 5 minutes indefinitely. The
+// guard watches the OUTCOME rather than trying to enumerate the states where
+// compaction can't work: if the context didn't fall, wait longer.
+
+/** Mirrors the escalation in checkAutoCompact. */
+function nextWait(
+  prev: { pct: number; ineffective: number } | undefined,
+  contextPct: number,
+  base = 5 * 60 * 1000,
+  cap = 60 * 60 * 1000,
+  minDrop = 3,
+) {
+  if (!prev) return { waitMs: base, ineffective: 0 };
+  const dropped = prev.pct - contextPct >= minDrop;
+  const ineffective = dropped ? 0 : prev.ineffective + 1;
+  return { waitMs: Math.min(base * 2 ** ineffective, cap), ineffective };
+}
+
+test('auto-compact keeps the base cooldown on the first fire', () => {
+  assert.deepEqual(nextWait(undefined, 40.3), { waitMs: 300_000, ineffective: 0 });
+});
+
+test('auto-compact escalates while the context refuses to drop', () => {
+  // The exact lumen case: 40.3% every time, never falling.
+  let prev = { pct: 40.3, ineffective: 0 };
+  const waits: number[] = [];
+  for (let i = 0; i < 5; i++) {
+    const r = nextWait(prev, 40.3);
+    waits.push(r.waitMs);
+    prev = { pct: 40.3, ineffective: r.ineffective };
+  }
+  assert.deepEqual(waits, [600_000, 1_200_000, 2_400_000, 3_600_000, 3_600_000]);
+});
+
+test('auto-compact resets as soon as a compaction actually works', () => {
+  const prev = { pct: 92, ineffective: 4 };
+  const r = nextWait(prev, 45); // a real compaction drops far more than 3 points
+  assert.equal(r.ineffective, 0, 'a genuine drop clears the back-off');
+  assert.equal(r.waitMs, 300_000, 'and returns to the base cooldown');
+});
+
+test('auto-compact treats a trivial drop as ineffective', () => {
+  // 1.5 points is noise, not a compaction.
+  const r = nextWait({ pct: 40.3, ineffective: 0 }, 38.8);
+  assert.equal(r.ineffective, 1);
+});

@@ -1682,6 +1682,16 @@ export class AgentManager {
    *  latch re-armed even though we'd just fired). The cooldown is absolute
    *  in time, so the threshold value doesn't matter. */
   private static readonly AUTO_COMPACT_COOLDOWN_MS = 5 * 60 * 1000;
+  /** Ceiling for the escalating back-off when compaction keeps not working. */
+  private static readonly AUTO_COMPACT_MAX_COOLDOWN_MS = 60 * 60 * 1000;
+  /** How many percentage points the context must fall for a fire to count as
+   *  having worked. A real compaction drops far more than this. */
+  private static readonly AUTO_COMPACT_MIN_DROP_PCT = 3;
+  /** Tell the operator once, after this many useless attempts. */
+  private static readonly AUTO_COMPACT_WARN_AFTER = 3;
+  /** Per-agent record of the last auto-compact: the context% when it fired and
+   *  how many consecutive fires have failed to move it. */
+  private autoCompactAttempts = new Map<string, { pct: number; ineffective: number }>();
 
   /** Auto-compact watchdog — the swarm's REAL auto-compact (gateway-driven),
    *  since the in-claude CLAUDE_AUTOCOMPACT_PCT_OVERRIDE env was unreliable.
@@ -1723,11 +1733,43 @@ export class AgentManager {
         const contextLimit = typeof s.contextLimit === 'number' ? s.contextLimit : 0;
         const contextPct = contextLimit > 0 ? (context / contextLimit) * 100 : null;
         if (contextPct === null) continue;
+        // Healthy again — forget any accumulated backoff.
+        if (contextPct < threshold) this.autoCompactAttempts.delete(a.id);
         if (contextPct >= threshold) {
-          this.autoCompactCooldownUntil.set(
-            a.id,
-            Date.now() + AgentManager.AUTO_COMPACT_COOLDOWN_MS,
-          );
+          // Back off when compaction isn't actually helping. lumen sat at 40.3%
+          // against a 40% threshold with claude not in a state to run the
+          // slash command, so /compact was injected every 5 minutes forever.
+          // Rather than enumerate the states where it can't work, we watch the
+          // OUTCOME: if the previous fire didn't move the context down, double
+          // the wait. Any future variant of "compact isn't working" self-limits.
+          const prev = this.autoCompactAttempts.get(a.id);
+          let waitMs = AgentManager.AUTO_COMPACT_COOLDOWN_MS;
+          let ineffective = 0;
+          if (prev) {
+            const dropped = prev.pct - contextPct >= AgentManager.AUTO_COMPACT_MIN_DROP_PCT;
+            ineffective = dropped ? 0 : prev.ineffective + 1;
+            waitMs = Math.min(
+              AgentManager.AUTO_COMPACT_COOLDOWN_MS * 2 ** ineffective,
+              AgentManager.AUTO_COMPACT_MAX_COOLDOWN_MS,
+            );
+            if (ineffective === AgentManager.AUTO_COMPACT_WARN_AFTER) {
+              logEvent({
+                category: 'agent',
+                action: 'agent.autocompact.ineffective',
+                level: 'warn',
+                message:
+                  `auto-compact on ${a.username || a.id} isn't reducing context ` +
+                  `(${Math.round(contextPct)}% vs ${threshold}% threshold after ` +
+                  `${ineffective} attempts) — backing off. Check that claude is at its ` +
+                  `prompt, or raise the threshold.`,
+                actor: SYSTEM_ACTOR,
+                agentId: a.id,
+                meta: { contextPct: Math.round(contextPct), threshold, attempts: ineffective },
+              });
+            }
+          }
+          this.autoCompactAttempts.set(a.id, { pct: contextPct, ineffective });
+          this.autoCompactCooldownUntil.set(a.id, Date.now() + waitMs);
           const fired = await this.compactAgent(a.id);
           if (fired) {
             // Mark this agent as "needs resume after compact completes" — the
