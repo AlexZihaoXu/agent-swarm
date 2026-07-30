@@ -3681,7 +3681,12 @@ export class AgentManager {
       const src = readdirSync(this.cfg.agentContextDir);
       const stream = (await this.docker.buildImage(
         { context: this.cfg.agentContextDir, src },
-        { t: this.cfg.agentImage },
+        {
+          t: this.cfg.agentImage,
+          // Record in the image which migration version it actually ships, so
+          // agents created from it are stamped honestly. See stampVersion.
+          buildargs: { SWARM_VERSION: String(LATEST_VERSION) },
+        },
       )) as unknown as Readable;
       await new Promise<void>((resolve, reject) => {
         this.docker.modem.followProgress(
@@ -3934,11 +3939,35 @@ export class AgentManager {
     return { installed, latest: LATEST_VERSION, outdated: installed < LATEST_VERSION, pending };
   }
 
-  /** Stamp a freshly created container as fully up to date (it ships current). */
+  /**
+   * Record what a freshly created container actually ships.
+   *
+   * This used to unconditionally write LATEST_VERSION, on the assumption that a
+   * new agent is current by definition. It isn't: the runtime and tools come
+   * from the agent IMAGE, and the image is only as new as its last build. Any
+   * migration merged since that build is missing, yet the marker claimed
+   * otherwise — so the agent never appeared outdated and never received them.
+   *
+   * Observed live: two agents created from an image predating migration 16 were
+   * stamped at 24. They were granted the `set_effort` capability, the gateway
+   * wrote it into identity.json, and the dashboard showed it enabled — but
+   * `swarm_set_effort` was absent from their on-disk swarm.py, so the tool
+   * simply didn't exist. The permission was real and the tool was missing, which
+   * reads to the agent as "my role says I can, and I can't".
+   *
+   * The image now bakes its own version in (Dockerfile ARG SWARM_VERSION), so
+   * the honest thing is to leave that marker alone. Only write one if the image
+   * predates that change and has none — and then write 0, so every migration is
+   * pending. That over-reports work to do, which is the safe direction: the
+   * migrations are idempotent file pushes, whereas under-reporting silently
+   * ships a broken agent.
+   */
   private async stampVersion(container: Docker.Container): Promise<void> {
-    await this.exec(container, ['sh', '-c', `echo ${LATEST_VERSION} > ${VERSION_MARKER}`]).catch(
-      () => {},
-    );
+    await this.exec(container, [
+      'sh',
+      '-c',
+      `test -s ${VERSION_MARKER} || echo 0 > ${VERSION_MARKER}`,
+    ]).catch(() => {});
   }
 
   /**

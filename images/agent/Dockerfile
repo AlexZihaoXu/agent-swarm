@@ -220,6 +220,17 @@ COPY agent-gpu.service /etc/systemd/system/agent-gpu.service
 # MCP server starts instantly; no X needed since the script connects lazily).
 COPY --chown=agent:agent tools /opt/agent-tools
 RUN su - agent -c '/usr/local/bin/uv run --quiet --script /opt/agent-tools/computer_use.py < /dev/null' || true
+
+# Which migration version this image's baked-in runtime and tools actually are.
+# The gateway passes LATEST_VERSION as this build arg, so a freshly created
+# agent can be stamped at what it REALLY ships rather than being assumed current.
+# Getting this wrong is not cosmetic: an agent stamped too high skips the
+# migrations it still needs and reports itself up to date while missing their
+# files. Default 0 (rather than "current") so an image built without the arg is
+# treated as fully behind — pessimistic, but it self-heals instead of lying.
+ARG SWARM_VERSION=0
+RUN echo "${SWARM_VERSION}" > /opt/agent-runtime/.swarm-version \
+    && chown agent:agent /opt/agent-runtime/.swarm-version
 # oc-go-cc: Anthropic↔OpenCode Go translator that Claude Code talks to when
 # an agent's provider is opencodeGo. Handles the dual-endpoint routing
 # (/messages for MiniMax/Qwen, /chat/completions for the rest), the

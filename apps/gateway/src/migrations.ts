@@ -327,6 +327,27 @@ export const migrations: Migration[] = [
       await ctx.exec('chown -R agent:agent /opt/agent-runtime; systemctl restart agent-terminals');
     },
   },
+  {
+    version: 25,
+    name: 'swarm tools: re-push swarm.py for agents stamped past migration 16',
+    apply: async (ctx) => {
+      // Repairs agents that were created from an image older than migration 16
+      // and stamped at LATEST_VERSION anyway (see stampVersion). They never ran
+      // 16 or 19, so `swarm_set_effort` was missing from their swarm.py while
+      // the capability showed as granted — the tool didn't 403, it didn't exist.
+      //
+      // Re-pushing the file is idempotent, so agents that already have it are
+      // unaffected. putFile rather than putDir: the image builds discord-mcp's
+      // node_modules in place under /opt/agent-tools and a putDir would
+      // overwrite that tree with un-built source.
+      await ctx.putFile('tools/swarm.py', '/opt/agent-tools/swarm.py');
+      // Claude re-registers the MCP tool list only on session start, so the tool
+      // stays invisible until this restart (the transcript persists).
+      await ctx.exec(
+        'chown agent:agent /opt/agent-tools/swarm.py; systemctl restart agent-terminals',
+      );
+    },
+  },
 ];
 
 /** Highest migration version (the version a fully up-to-date agent is at). */
