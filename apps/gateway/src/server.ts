@@ -3,7 +3,7 @@ import Docker from 'dockerode';
 import { config } from './config.js';
 import { AgentManager } from './docker.js';
 import { parseAgentPath } from './router.js';
-import { applyCors, handleApi } from './api.js';
+import { applyCors, fromTrustedProxy, handleApi } from './api.js';
 import { isAuthed, swarmTokenMayAccess, validSwarmToken } from './auth.js';
 import { proxyHttp, proxyToUpstream, relayWs } from './proxy.js';
 import { logEvent, SYSTEM_ACTOR } from './audit.js';
@@ -40,7 +40,10 @@ function applySecurityHeaders(req: http.IncomingMessage, res: http.ServerRespons
   res.setHeader('x-frame-options', 'SAMEORIGIN');
   res.setHeader('referrer-policy', 'same-origin');
   const encrypted = (req.socket as { encrypted?: boolean }).encrypted === true;
-  const proxiedTls = config.trustProxy && req.headers['x-forwarded-proto'] === 'https';
+  // Peer check as well as TRUST_PROXY: the header only means anything when it
+  // actually came from the proxy, not from a direct caller.
+  const proxiedTls =
+    config.trustProxy && fromTrustedProxy(req) && req.headers['x-forwarded-proto'] === 'https';
   if (encrypted || proxiedTls) {
     res.setHeader('strict-transport-security', 'max-age=15552000'); // 180 days
   }

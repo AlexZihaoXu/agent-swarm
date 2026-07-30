@@ -59,6 +59,14 @@ services:
       # session cookie Secure behind HTTPS. Leave blank when clients can reach
       # this port directly — the headers are client-forgeable.
       TRUST_PROXY: ${TRUST_PROXY:-}
+      # Which socket peers may set those headers, as IPs or IPv4 CIDRs (comma
+      # separated). TRUST_PROXY on its own is not sufficient: this port is
+      # reachable directly, so without a peer check any caller could forge
+      # CF-Connecting-IP, present a fresh client IP per request and slip the
+      # per-IP login throttle. Blank defaults to loopback + RFC1918 +
+      # link-local, which covers a proxy on this host or a Docker network but
+      # still trusts the local network — set your proxy's address to tighten it.
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-}
       # Persistent agent disks. SWARM_DATA_HOST is a HOST path (the daemon
       # resolves it when bind-mounting each agent's home); SWARM_DATA_MOUNT is
       # where this container sees that same tree (the volume below) so the

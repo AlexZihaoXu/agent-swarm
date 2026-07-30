@@ -106,6 +106,24 @@ export const config = {
    *  headers are forgeable by clients reaching the gateway directly, so the
    *  default is OFF (use the real socket peer / direct TLS only). */
   trustProxy: /^(1|true|yes|on)$/i.test(process.env.TRUST_PROXY ?? ''),
+  /**
+   * Which socket peers are allowed to set those headers, as IPs or CIDRs.
+   *
+   * TRUST_PROXY alone is not enough: the gateway's port is reachable directly,
+   * so anyone who can hit it can forge `cf-connecting-ip` and present a fresh
+   * client IP per request, slipping the per-IP login throttle (and bloating its
+   * map). Checking the immediate peer is what makes the headers trustworthy —
+   * a forged header only counts if it arrived FROM the proxy.
+   *
+   * Empty falls back to loopback + RFC1918 + link-local, which covers a reverse
+   * proxy on the host or on a Docker network. That closes the hole for anything
+   * off-host, but does still trust the local network — set this explicitly to
+   * your proxy's address for a tight configuration.
+   */
+  trustedProxyIps: (process.env.TRUSTED_PROXY_IPS ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
   /** In-container service ports (fixed by the agent image). */
   desktopPort: 6080,
   terminalPort: 7681,

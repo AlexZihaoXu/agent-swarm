@@ -8,6 +8,7 @@ import {
   getSettings,
   updateSettings,
   validateIpNames,
+  normalizeIp,
   tokenDaysLeft,
   TOKEN_WARN_DAYS,
 } from './settings.js';
@@ -85,8 +86,60 @@ function headerValue(h: string | string[] | undefined): string | undefined {
  *     replace), so it must never be the throttle key.
  *  None of this is bulletproof against an attacker who finds and hits the
  *  origin directly — the global login breaker in auth.ts is the backstop. */
+/** IPv4 dotted-quad to a 32-bit int; null if it isn't one. */
+function v4ToInt(ip: string): number | null {
+  const parts = ip.split('.');
+  if (parts.length !== 4) return null;
+  let n = 0;
+  for (const p of parts) {
+    if (!/^\d{1,3}$/.test(p)) return null;
+    const b = Number(p);
+    if (b > 255) return null;
+    n = n * 256 + b;
+  }
+  return n;
+}
+
+/** Whether `ip` falls inside `rule`, an exact address or IPv4 CIDR. */
+export function ipMatches(ip: string, rule: string): boolean {
+  const addr = normalizeIp(ip);
+  const r = normalizeIp(rule);
+  if (!r.includes('/')) return addr === r;
+  const [net, bitsRaw] = r.split('/');
+  const bits = Number(bitsRaw);
+  const a = v4ToInt(addr);
+  const n = v4ToInt(net ?? '');
+  // Only IPv4 CIDRs are supported; an IPv6 range must be given as an exact
+  // address rather than silently matching everything.
+  if (a === null || n === null || !Number.isInteger(bits) || bits < 0 || bits > 32) return false;
+  if (bits === 0) return true;
+  const mask = (-1 << (32 - bits)) >>> 0;
+  return (a & mask) === (n & mask);
+}
+
+/** Peers trusted to set forwarding headers when none are configured explicitly:
+ *  loopback, RFC1918 and link-local — i.e. a proxy on this host or a Docker
+ *  network, but nothing off-host. */
+const DEFAULT_TRUSTED_PROXIES = [
+  '127.0.0.0/8',
+  '::1',
+  '10.0.0.0/8',
+  '172.16.0.0/12',
+  '192.168.0.0/16',
+  '169.254.0.0/16',
+];
+
+/** Whether this request actually came from a trusted proxy. Without this check,
+ *  TRUST_PROXY would let ANY direct caller forge the client IP. */
+export function fromTrustedProxy(req: IncomingMessage): boolean {
+  const peer = req.socket.remoteAddress;
+  if (!peer) return false;
+  const rules = config.trustedProxyIps.length ? config.trustedProxyIps : DEFAULT_TRUSTED_PROXIES;
+  return rules.some((r) => ipMatches(peer, r));
+}
+
 function clientIp(req: IncomingMessage): string {
-  if (config.trustProxy) {
+  if (config.trustProxy && fromTrustedProxy(req)) {
     const cf = headerValue(req.headers['cf-connecting-ip']);
     if (cf) return cf;
     const real = headerValue(req.headers['x-real-ip']);
@@ -117,11 +170,14 @@ function agentActor(
 
 /** Whether the request reached us over HTTPS — gates the `Secure` cookie. Direct
  *  TLS always counts; X-Forwarded-Proto is client-forgeable, so it's only trusted
- *  behind a configured proxy (TRUST_PROXY) — otherwise a forged `https` header
- *  over plain HTTP would attach Secure and silently break login. */
+ *  behind a configured proxy (TRUST_PROXY) AND when the request actually arrived
+ *  from one — otherwise a forged `https` header over plain HTTP would attach
+ *  Secure and silently break login. */
 function isSecureRequest(req: IncomingMessage): boolean {
   if ((req.socket as { encrypted?: boolean }).encrypted === true) return true;
-  return config.trustProxy && req.headers['x-forwarded-proto'] === 'https';
+  return (
+    config.trustProxy && fromTrustedProxy(req) && req.headers['x-forwarded-proto'] === 'https'
+  );
 }
 
 /** Apply permissive CORS for the dashboard origin; answer preflight directly. */
