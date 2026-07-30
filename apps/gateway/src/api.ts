@@ -29,6 +29,7 @@ import { CAPABILITIES, listRoles, createRole, updateRole, deleteRole } from './r
 import {
   auditLog,
   logEvent,
+  SYSTEM_ACTOR,
   type AuditActor,
   type AuditCategory,
   type AuditEvent,
@@ -138,15 +139,55 @@ export function fromTrustedProxy(req: IncomingMessage): boolean {
   return rules.some((r) => ipMatches(peer, r));
 }
 
+/** Last time we complained about ignored forwarding headers (see below). */
+let lastUntrustedProxyWarn = 0;
+
+/**
+ * Warn when forwarding headers arrive from an untrusted peer.
+ *
+ * Two very different situations produce this, and both are worth seeing:
+ * a real proxy sitting outside the trusted ranges (in which case every audit
+ * entry silently records the proxy's address instead of the client's, and the
+ * whole world shares one throttle bucket), or someone forging the header to
+ * evade that throttle. Silence would hide a misconfiguration behind what looks
+ * like normal operation, so say something — throttled, since on a busy or
+ * misconfigured deployment this fires on every request.
+ */
+function warnUntrustedForwarding(req: IncomingMessage): void {
+  const now = Date.now();
+  if (now - lastUntrustedProxyWarn < 60_000) return;
+  lastUntrustedProxyWarn = now;
+  logEvent({
+    category: 'system',
+    action: 'system.proxy.untrusted',
+    message:
+      `ignoring forwarding headers from ${req.socket.remoteAddress ?? 'unknown'}: TRUST_PROXY is ` +
+      'on but this peer is not in TRUSTED_PROXY_IPS. If a real proxy sits there, add its address ' +
+      "— otherwise every audit entry records the proxy's IP and the login throttle is shared. " +
+      'If not, this is someone forging the header.',
+    actor: SYSTEM_ACTOR,
+    level: 'warn',
+    meta: { peer: req.socket.remoteAddress ?? null },
+  });
+}
+
 function clientIp(req: IncomingMessage): string {
-  if (config.trustProxy && fromTrustedProxy(req)) {
-    const cf = headerValue(req.headers['cf-connecting-ip']);
-    if (cf) return cf;
-    const real = headerValue(req.headers['x-real-ip']);
-    if (real) return real;
-    const xff = headerValue(req.headers['x-forwarded-for']);
-    const last = xff?.split(',').at(-1)?.trim();
-    if (last) return last;
+  if (config.trustProxy) {
+    if (fromTrustedProxy(req)) {
+      const cf = headerValue(req.headers['cf-connecting-ip']);
+      if (cf) return cf;
+      const real = headerValue(req.headers['x-real-ip']);
+      if (real) return real;
+      const xff = headerValue(req.headers['x-forwarded-for']);
+      const last = xff?.split(',').at(-1)?.trim();
+      if (last) return last;
+    } else if (
+      req.headers['cf-connecting-ip'] ||
+      req.headers['x-real-ip'] ||
+      req.headers['x-forwarded-for']
+    ) {
+      warnUntrustedForwarding(req);
+    }
   }
   return req.socket.remoteAddress || 'unknown';
 }
