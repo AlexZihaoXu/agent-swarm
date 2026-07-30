@@ -469,11 +469,16 @@ function modelRates(model, ctxTokens) {
  * reports uid 65534 (the overflow uid) instead of 0. The setuid bit only
  * elevates for a root-owned file, so sudo becomes silently inert.
  *
- * Observed live on four agents at once: they had an identical uid_map to the
- * healthy ones and resolved the very same inode for /usr/bin/sudo, so neither
- * the remap range nor the on-disk ownership was at fault — only the mount. It
- * went unnoticed because nothing fails until something needs apt; one agent
- * happened to check at startup. A stop/start re-applies the mount.
+ * Observed live on four agents at once. Ruled out by direct measurement: the
+ * uid_map (identical to the healthy agents), the on-disk ownership (the very
+ * same inode for /usr/bin/sudo), the image, the bind mounts, and the host
+ * config. A stop/start does NOT clear it either — three affected agents were
+ * stopped, migrated and started, and all three came back still broken. A
+ * freshly created container on the same image is fine, so the state is
+ * per-container and set at creation; the precise trigger is still unidentified.
+ *
+ * It went unnoticed because nothing fails until something needs apt — one agent
+ * happened to check at startup, which is the whole reason for this check.
  *
  * Cheap and cached: ownership cannot change while the container runs.
  */
@@ -490,9 +495,10 @@ function privilegeHealth() {
             sudoOwnerUid: uid,
             detail:
               `/usr/bin/sudo is owned by uid ${uid}, not root, so its setuid bit cannot ` +
-              'elevate and every privileged operation (apt, systemctl) will fail. The ' +
-              "container's ID-mapped rootfs mount is missing — restarting the agent " +
-              're-applies it.',
+              'elevate and every privileged operation (apt, systemctl) will fail. ' +
+              'Restarting does NOT fix this (measured — the fault survives a stop/start); ' +
+              'recreating the container does, but that discards anything installed inside ' +
+              'it outside the home volume. Nothing breaks until something needs apt.',
           };
   } catch (e) {
     // Absent sudo is a different problem; don't claim a mapping fault.

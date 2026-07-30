@@ -356,8 +356,10 @@ export const migrations: Migration[] = [
       // file read as uid 65534 and sudo was silently inert. Nothing fails until
       // something needs apt, so it was found only because one agent happened to
       // check at startup. /api/stats now reports it and the dashboard shows a
-      // "no sudo" flag. Detection only — the remedy is a stop/start, which
-      // re-applies the mount.
+      // "no sudo" flag. Detection only: a stop/start does NOT clear the fault
+      // (measured on three agents), while a freshly created container is fine —
+      // so the remedy is a recreate, at the cost of anything installed inside
+      // the container outside the home volume.
       await ctx.putDir('runtime', '/opt/agent-runtime');
       await ctx.exec('chown -R agent:agent /opt/agent-runtime; systemctl restart agent-terminals');
     },

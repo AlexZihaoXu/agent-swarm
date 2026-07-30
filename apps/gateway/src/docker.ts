@@ -4065,6 +4065,7 @@ export class AgentManager {
           // Stamp only after that migration's shell steps actually ran.
           await ctx.exec(`echo ${m.version} > ${VERSION_MARKER}`);
         }
+        await this.settleUnits(ctx.exec, pending.length);
       } else {
         if (!wasRunning) {
           bootFor('starting stopped agent');
@@ -4075,6 +4076,7 @@ export class AgentManager {
           await m.apply(ctx);
           await ctx.exec(`echo ${m.version} > ${VERSION_MARKER}`);
         }
+        await this.settleUnits(ctx.exec, pending.length);
       }
     } finally {
       // Put the container back the way we found it, in BOTH directions and even
@@ -4090,6 +4092,35 @@ export class AgentManager {
       }
     }
     return this.upgradeInfo(id);
+  }
+
+  /**
+   * Leave the units running after a multi-migration upgrade.
+   *
+   * Nearly every migration ends with `systemctl restart agent-terminals`, which
+   * is correct in isolation but compounds: applying N of them back to back
+   * restarts the unit N times within a few seconds, and systemd's default
+   * StartLimitBurst (5 starts / 10s) then refuses to start it at all. The unit
+   * lands in `failed` with `start-limit-hit` and the agent goes dark — no
+   * terminal, no stats, no claude session — even though nothing is actually
+   * wrong with it.
+   *
+   * Seen live: three agents given 8 and 11 migrations each all ended `failed`
+   * this way. `reset-failed` clears the counter, after which a plain start
+   * works. Cheap enough to run unconditionally, but only worth logging about
+   * when enough migrations ran to have plausibly tripped it.
+   */
+  private async settleUnits(
+    exec: (cmd: string) => Promise<string>,
+    migrationCount: number,
+  ): Promise<void> {
+    if (migrationCount < 2) return; // one restart can't hit the burst limit
+    await exec(
+      'systemctl reset-failed agent-terminals 2>/dev/null || true; ' +
+        // `start` not `restart`: if it survived the burst it is already up and
+        // this is a no-op, which avoids spending yet another start on it.
+        'systemctl start agent-terminals 2>/dev/null || true',
+    ).catch(() => '');
   }
 
   private toAgent(info: Docker.ContainerInspectInfo): Agent {
