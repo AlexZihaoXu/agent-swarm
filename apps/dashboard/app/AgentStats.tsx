@@ -270,6 +270,67 @@ function ContextCircle({
   );
 }
 
+/** "10080" minutes reads as nothing; "7d" reads as a week. */
+function fmtWindow(minutes: number): string {
+  if (!minutes || minutes <= 0) return '';
+  if (minutes % 1440 === 0) return `${minutes / 1440}d`;
+  if (minutes % 60 === 0) return `${minutes / 60}h`;
+  return `${minutes}m`;
+}
+
+/**
+ * ChatGPT (Codex) plan usage as a progress circle, mirroring ContextCircle.
+ *
+ * Shows the window that is furthest along, since that's the one that will
+ * actually cut the agent off. The percentage is USED — the Codex CLI shows
+ * REMAINING for the same numbers, so these two never agree and neither is wrong.
+ *
+ * The figures come from headers on the agent's last Codex call (there is no
+ * usage endpoint), so they are as fresh as its last request and absent until it
+ * makes one.
+ */
+function CodexLimitCircle({ limits }: { limits: NonNullable<AgentStats['codexLimits']> }) {
+  const windows = [limits.primary, limits.secondary].filter(
+    (w): w is NonNullable<typeof limits.primary> => !!w && w.windowMinutes > 0,
+  );
+  if (!windows.length) return null;
+  const worst = windows.reduce((a, b) => (b.usedPercent > a.usedPercent ? b : a));
+  const [v] = useLerp(worst.usedPercent);
+  const color = worst.usedPercent >= 90 ? 'danger' : worst.usedPercent >= 75 ? 'warning' : 'accent';
+  const resets = worst.resetsAt ? new Date(worst.resetsAt).toLocaleString() : 'unknown';
+  const title =
+    `Codex ${limits.plan ? `${limits.plan} ` : ''}usage — ${Math.round(worst.usedPercent)}% of the ` +
+    `${fmtWindow(worst.windowMinutes)} limit used, resets ${resets}` +
+    (windows.length > 1
+      ? ` (showing the fuller of ${windows.map((w) => `${fmtWindow(w.windowMinutes)} ${Math.round(w.usedPercent)}%`).join(', ')})`
+      : '');
+  return (
+    <Tooltip delay={300}>
+      <Tooltip.Trigger>
+        <span className="flex items-center gap-1.5 tabular-nums">
+          <ProgressCircle
+            aria-label={title}
+            size="sm"
+            color={color}
+            value={v}
+            maxValue={100}
+            className="scale-75"
+          >
+            <ProgressCircle.Track>
+              <ProgressCircle.TrackCircle />
+              <ProgressCircle.FillCircle />
+            </ProgressCircle.Track>
+          </ProgressCircle>
+          <span className="text-foreground">
+            {Math.round(v)}%{fmtWindow(worst.windowMinutes) && ` / ${fmtWindow(worst.windowMinutes)}`}
+          </span>
+        </span>
+      </Tooltip.Trigger>
+      <Tooltip.Content>{title}</Tooltip.Content>
+    </Tooltip>
+  );
+}
+
 /** Maps the container + claude-session status into a single chip. */
 export function agentChip(
   containerStatus: string,
@@ -525,6 +586,12 @@ export function AgentStatsBar({ agentId }: { agentId: string }) {
         </span>
       )}
       {s.exceeds200k && <span className="text-warning">200k+</span>}
+      {s.privileges && !s.privileges.ok && (
+        <span className="text-danger font-semibold" title={s.privileges.detail ?? undefined}>
+          no sudo
+        </span>
+      )}
+      {s.codexLimits && <CodexLimitCircle limits={s.codexLimits} />}
     </>
   );
 

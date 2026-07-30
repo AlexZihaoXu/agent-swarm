@@ -457,6 +457,50 @@ function modelRates(model, ctxTokens) {
   return { in: 3, out: 15, cw: 3.75, cr: 0.3 };
 }
 
+/**
+ * Whether setuid binaries can actually elevate.
+ *
+ * Under sysbox the container's rootfs is a userns-remapped view (uid_map maps
+ * container 0 to a host subuid). The shared read-only image layers stay owned by
+ * host root on disk, so they are only readable as root INSIDE the container
+ * because sysbox applies an ID-mapped mount over them at container start
+ * (shiftfs, its older mechanism, is not loaded on this kernel). When that mount
+ * is missing, every root-owned file — /usr/bin/sudo, /bin/ls, /usr/bin/apt —
+ * reports uid 65534 (the overflow uid) instead of 0. The setuid bit only
+ * elevates for a root-owned file, so sudo becomes silently inert.
+ *
+ * Observed live on four agents at once: they had an identical uid_map to the
+ * healthy ones and resolved the very same inode for /usr/bin/sudo, so neither
+ * the remap range nor the on-disk ownership was at fault — only the mount. It
+ * went unnoticed because nothing fails until something needs apt; one agent
+ * happened to check at startup. A stop/start re-applies the mount.
+ *
+ * Cheap and cached: ownership cannot change while the container runs.
+ */
+let privilegeCheck;
+function privilegeHealth() {
+  if (privilegeCheck) return privilegeCheck;
+  try {
+    const uid = fs.statSync('/usr/bin/sudo').uid;
+    privilegeCheck =
+      uid === 0
+        ? { ok: true, sudoOwnerUid: uid }
+        : {
+            ok: false,
+            sudoOwnerUid: uid,
+            detail:
+              `/usr/bin/sudo is owned by uid ${uid}, not root, so its setuid bit cannot ` +
+              'elevate and every privileged operation (apt, systemctl) will fail. The ' +
+              "container's ID-mapped rootfs mount is missing — restarting the agent " +
+              're-applies it.',
+          };
+  } catch (e) {
+    // Absent sudo is a different problem; don't claim a mapping fault.
+    privilegeCheck = { ok: true, sudoOwnerUid: null, detail: `could not check: ${e.message}` };
+  }
+  return privilegeCheck;
+}
+
 // Context-window size by model name, used when Claude Code's statusline omits
 // it (which happens for non-Anthropic models served through the opencode-proxy).
 // Best-effort: when in doubt we return 0 and the ring shows no denominator
@@ -1150,6 +1194,9 @@ function readStats() {
     linesAdded: cost.total_lines_added || 0,
     linesRemoved: cost.total_lines_removed || 0,
     exceeds200k: !!sl.exceeds_200k_tokens,
+    // Surfaced so a broken rootfs mapping shows up on the dashboard instead of
+    // waiting for an agent to trip over a failing apt. See privilegeHealth().
+    privileges: privilegeHealth(),
     lastActivity: t.lastTs || sess.updatedAt || null,
     // True when an interactive selector (AskUserQuestion/plan/permission) is
     // open and waiting; promptOptions lists its numbered choices so the chat

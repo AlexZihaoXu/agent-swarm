@@ -348,6 +348,20 @@ export const migrations: Migration[] = [
       );
     },
   },
+  {
+    version: 26,
+    name: 'stats: report when sudo cannot elevate (missing ID-mapped rootfs mount)',
+    apply: async (ctx) => {
+      // Four agents came up with no ID-mapped rootfs mount, so every root-owned
+      // file read as uid 65534 and sudo was silently inert. Nothing fails until
+      // something needs apt, so it was found only because one agent happened to
+      // check at startup. /api/stats now reports it and the dashboard shows a
+      // "no sudo" flag. Detection only — the remedy is a stop/start, which
+      // re-applies the mount.
+      await ctx.putDir('runtime', '/opt/agent-runtime');
+      await ctx.exec('chown -R agent:agent /opt/agent-runtime; systemctl restart agent-terminals');
+    },
+  },
 ];
 
 /** Highest migration version (the version a fully up-to-date agent is at). */

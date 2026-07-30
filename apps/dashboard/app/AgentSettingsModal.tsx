@@ -62,6 +62,39 @@ const MODEL_HELP: Record<string, string> = {
     'Only these are accepted by a ChatGPT account \u2014 the -codex model ids are API-key-only. Claude Code\u2019s internal tiers (background/think/fast) all map to this one model.',
 };
 
+/**
+ * The non-obvious consequences of the provider choice — the things that surprise
+ * people, kept out of the inline text because they only matter once you're
+ * deciding. Each entry is a heading plus a short body for the (?) popover.
+ */
+const PROVIDER_NOTES: { title: string; body: string }[] = [
+  {
+    title: 'Subagents and ultracode follow the provider',
+    body:
+      'The provider is set as environment on the claude process, and subagents are spawned as its children, so they inherit it. A wide ultracode fan-out therefore spends THIS provider’s quota, multiplied by the number of agents — not Anthropic’s. Concurrency is capped, but that bounds parallelism, not total spend.',
+  },
+  {
+    title: 'One model serves every tier',
+    body:
+      'Claude Code asks for different models per tier (background, think, fast, long-context). Those names mean nothing to a non-Anthropic backend, so the proxy maps them all to the single configured model. A cheap background task costs the same as a hard one.',
+  },
+  {
+    title: 'Model changes need a respawn',
+    body:
+      'The model is applied when claude next starts, not mid-session — the dashboard writes it to the agent’s identity and it takes effect on the following (re)spawn.',
+  },
+  {
+    title: 'Why a switch can be refused',
+    body:
+      'Selecting ChatGPT checks that the agent’s runtime actually contains the Codex proxy, and refuses if not. It checks the file rather than the migration version, because a freshly created agent is stamped current while its runtime comes from the image — an agent that looks up to date can still be missing it. Without that check the agent silently falls back to the Anthropic token and bills the wrong subscription. Fix by upgrading the agent, or rebuilding the agent image.',
+  },
+  {
+    title: 'Context windows differ by ~4x',
+    body:
+      'On ChatGPT, gpt-5.4 measures ~910k, the gpt-5.6 family ~355k, and gpt-5.5 / gpt-5.4-mini ~245k. Claude Code does not recognise these ids, so it applies its own 200k ceiling and compacts below that — the extra room is only reachable with CLAUDE_CODE_MAX_CONTEXT_TOKENS, which also requires DISABLE_COMPACT and so turns auto-compaction off entirely.',
+  },
+];
+
 /** Slider default when first enabling the override (a touch earlier than the
  *  ~83% claude default, so it's a meaningful change). */
 const DEFAULT_PCT = 80;
@@ -473,9 +506,33 @@ export function AgentSettingsModal({
                             </Tabs.List>
                           </Tabs.ListContainer>
                         </Tabs>
-                        <p className="text-muted text-xs">
-                          {PROVIDER_HELP[provider] ?? PROVIDER_HELP.anthropic}
-                        </p>
+                        <div className="flex items-start gap-1">
+                          <p className="text-muted text-xs">
+                            {PROVIDER_HELP[provider] ?? PROVIDER_HELP.anthropic}
+                          </p>
+                          <Tooltip>
+                            <Tooltip.Trigger
+                              aria-label="What changing the provider affects"
+                              className="text-muted hover:text-foreground focus-visible:text-foreground shrink-0 rounded-full p-0.5 focus-visible:outline-none"
+                            >
+                              <LuCircleHelp className="size-3.5" aria-hidden />
+                            </Tooltip.Trigger>
+                            <Tooltip.Content showArrow placement="left" className="max-w-[380px]">
+                              <Tooltip.Arrow />
+                              <div className="space-y-2 px-1 py-1.5">
+                                <div className="text-xs font-semibold">
+                                  What changing the provider affects
+                                </div>
+                                {PROVIDER_NOTES.map((n) => (
+                                  <div key={n.title} className="space-y-0.5">
+                                    <div className="text-xs font-medium">{n.title}</div>
+                                    <p className="text-muted text-xs leading-relaxed">{n.body}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            </Tooltip.Content>
+                          </Tooltip>
+                        </div>
                       </div>
 
                       <div className="space-y-2">

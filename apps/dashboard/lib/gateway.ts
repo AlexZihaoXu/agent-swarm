@@ -677,6 +677,24 @@ export interface AgentStats {
   linesAdded: number;
   linesRemoved: number;
   exceeds200k: boolean;
+  /** ChatGPT (Codex) plan rate limits, captured from response headers on the
+   *  agent's last Codex call — there is no usage endpoint to poll. `primary` is
+   *  typically the weekly window and `secondary` the shorter one.
+   *
+   *  NOTE `usedPercent` is USED, not remaining. The Codex CLI displays remaining,
+   *  so the same account reads 95% there and 5% here. Don't "fix" one to match
+   *  the other without checking which way round it is. */
+  codexLimits?: {
+    primary?: { usedPercent: number; windowMinutes: number; resetsAt: number | null } | null;
+    secondary?: { usedPercent: number; windowMinutes: number; resetsAt: number | null } | null;
+    plan?: string | null;
+    at?: number;
+  } | null;
+  /** Whether setuid binaries can actually elevate. Under sysbox a container can
+   *  come up without its ID-mapped rootfs mount, which leaves every root-owned
+   *  file reporting uid 65534 and sudo silently inert — nothing fails until the
+   *  agent needs apt, so it's worth showing rather than waiting to be found. */
+  privileges?: { ok: boolean; sudoOwnerUid: number | null; detail?: string } | null;
   lastActivity: string | number | null;
   /** An interactive selector (AskUserQuestion/plan/permission) is open and
    * waiting. TUI-only, but answerable from chat by driving the selector. */
