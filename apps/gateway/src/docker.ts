@@ -4066,6 +4066,7 @@ export class AgentManager {
           await ctx.exec(`echo ${m.version} > ${VERSION_MARKER}`);
         }
         await this.settleUnits(ctx.exec, pending.length);
+        await this.auditPrivileges(id, ctx.exec);
       } else {
         if (!wasRunning) {
           bootFor('starting stopped agent');
@@ -4077,6 +4078,7 @@ export class AgentManager {
           await ctx.exec(`echo ${m.version} > ${VERSION_MARKER}`);
         }
         await this.settleUnits(ctx.exec, pending.length);
+        await this.auditPrivileges(id, ctx.exec);
       }
     } finally {
       // Put the container back the way we found it, in BOTH directions and even
@@ -4121,6 +4123,42 @@ export class AgentManager {
         // this is a no-op, which avoids spending yet another start on it.
         'systemctl start agent-terminals 2>/dev/null || true',
     ).catch(() => '');
+  }
+
+  /**
+   * Check whether an agent's setuid binaries can still elevate, after we have
+   * stopped and started it.
+   *
+   * This is not hypothetical: an agent that was verifiably healthy went through
+   * a stop → migrate → start and came back with /usr/bin/sudo owned by 65534
+   * and `sudo -n true` failing. So a restart is not a neutral operation on this
+   * runtime — it can turn a working container into a broken one, and the damage
+   * does not wash out (a further plain restart leaves it broken; only recreating
+   * the container clears it, which costs anything installed outside the home
+   * volume).
+   *
+   * We cannot prevent it here, but a regression this quiet — nothing fails until
+   * something needs apt — must not pass unremarked, or the next upgrade reports
+   * success while leaving the agent unable to install anything.
+   */
+  private async auditPrivileges(id: string, exec: (cmd: string) => Promise<string>): Promise<void> {
+    const out = await exec('stat -c %u /usr/bin/sudo 2>/dev/null || echo -1').catch(() => '');
+    const uid = parseInt(out.trim(), 10);
+    if (!Number.isFinite(uid) || uid === 0) return;
+    logEvent({
+      category: 'docker',
+      action: 'agent.privileges.broken',
+      message:
+        `agent ${id} came back from an upgrade with /usr/bin/sudo owned by uid ${uid}, not root — ` +
+        'setuid can no longer elevate, so apt and systemctl will fail inside it. A further ' +
+        'restart does NOT clear this; recreating the container does, at the cost of anything ' +
+        'installed outside the home volume.',
+      actor: SYSTEM_ACTOR,
+      agentId: id,
+      target: this.containerName(id),
+      level: 'warn',
+      meta: { sudoOwnerUid: uid },
+    });
   }
 
   private toAgent(info: Docker.ContainerInspectInfo): Agent {
