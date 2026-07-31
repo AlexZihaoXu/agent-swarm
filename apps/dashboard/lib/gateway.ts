@@ -958,50 +958,103 @@ function fmtSize(n: number): string {
  *  fetch) so `onProgress` can report the upload fraction (0..1) for a progress
  *  UI. Same-origin cookies ride along automatically (no withCredentials, matching
  *  the rest of the API client). */
-export function uploadFile(
+/**
+ * Largest single request body we will send.
+ *
+ * The dashboard is served through Cloudflare, which caps request bodies at the
+ * EDGE by plan — 100 MB on Free and Pro — and rejects anything larger with a 413
+ * and its own HTML error page before the origin sees a byte. Nothing on our side
+ * is involved (the gateway streams up to 256 MB happily), and it can't be raised
+ * below an Enterprise plan. So anything bigger goes up in slices.
+ *
+ * Keep in step with UPLOAD_CHUNK_BYTES in the gateway's files.ts.
+ */
+const UPLOAD_CHUNK_BYTES = 32 * 1024 * 1024;
+
+/** POST one body to the upload endpoint, reporting bytes sent as it goes. */
+function putUploadBody(
+  url: string,
+  body: Blob,
+  totalSize: number,
+  alreadySent: number,
+  onProgress?: (fraction: number) => void,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    let sent = 0;
+    xhr.open('POST', url);
+    xhr.upload.onprogress = (e) => {
+      sent = e.loaded;
+      // Fraction of the WHOLE file, not of this slice — otherwise the bar
+      // restarts at 0 for every chunk.
+      onProgress?.(Math.min(1, (alreadySent + e.loaded) / totalSize));
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) return resolve();
+      let msg: string | undefined;
+      try {
+        msg = (JSON.parse(xhr.responseText) as { error?: string }).error;
+      } catch {
+        /* non-JSON error body */
+      }
+      // A 413 with no JSON body means something BETWEEN the browser and the
+      // gateway rejected the size, since the gateway always answers with JSON.
+      // With chunking in place this should no longer happen for size alone, so
+      // if it does, the intermediary's limit is tighter than our chunk.
+      if (!msg && xhr.status === 413) {
+        msg =
+          `rejected before reaching the gateway (${fmtSize(body.size)} chunk). A proxy or CDN in ` +
+          `front of the dashboard has a body limit below ${fmtSize(UPLOAD_CHUNK_BYTES)}.`;
+      }
+      reject(new Error(msg ?? `upload failed (HTTP ${xhr.status})`));
+    };
+    xhr.onerror = () =>
+      reject(
+        new Error(
+          `upload failed (network error after ${fmtSize(alreadySent + sent)} of ${fmtSize(totalSize)})`,
+        ),
+      );
+    xhr.ontimeout = () => reject(new Error('upload timed out'));
+    xhr.onabort = () => reject(new Error('upload aborted'));
+    xhr.send(body);
+  });
+}
+
+/** Upload a File into `dir` (raw body; filename in the query). Uses XHR (not
+ *  fetch) so `onProgress` can report the upload fraction (0..1) for a progress
+ *  UI. Same-origin cookies ride along automatically (no withCredentials, matching
+ *  the rest of the API client).
+ *
+ *  Files over UPLOAD_CHUNK_BYTES are sliced and sent as sequential appends,
+ *  because a CDN in front of the dashboard will reject one oversized body
+ *  outright. Sequential, not parallel: the server appends at a checked offset,
+ *  so order matters and out-of-order slices are refused rather than silently
+ *  producing a corrupt file. */
+export async function uploadFile(
   base: string,
   dir: string,
   file: File,
   onProgress?: (fraction: number) => void,
 ): Promise<void> {
   const url = `${GATEWAY_BASE}${base}?op=upload&path=${encodeURIComponent(dir)}&name=${encodeURIComponent(file.name)}`;
-  return new Promise<void>((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    // How far we got, so a mid-transfer failure can say where it died.
-    let sent = 0;
-    xhr.open('POST', url);
-    xhr.upload.onprogress = (e) => {
-      sent = e.loaded;
-      if (e.lengthComputable) onProgress?.(e.loaded / e.total);
-    };
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        onProgress?.(1);
-        resolve();
-      } else {
-        let msg: string | undefined;
-        try {
-          msg = (JSON.parse(xhr.responseText) as { error?: string }).error;
-        } catch {
-          /* non-JSON error body */
-        }
-        // A 413 with no JSON body almost always means something BETWEEN the
-        // browser and the gateway rejected the size (a reverse proxy or CDN),
-        // since the gateway answers with JSON. Say so, rather than a bare code.
-        if (!msg && xhr.status === 413) {
-          msg = `file too large — rejected before reaching the gateway (${fmtSize(file.size)}). Check any reverse proxy / CDN body-size limit in front of the dashboard.`;
-        }
-        reject(new Error(msg ?? `upload failed (HTTP ${xhr.status})`));
-      }
-    };
-    xhr.onerror = () =>
-      reject(
-        new Error(`upload failed (network error after ${fmtSize(sent)} of ${fmtSize(file.size)})`),
-      );
-    xhr.ontimeout = () => reject(new Error('upload timed out'));
-    xhr.onabort = () => reject(new Error('upload aborted'));
-    xhr.send(file);
-  });
+
+  if (file.size <= UPLOAD_CHUNK_BYTES) {
+    await putUploadBody(url, file, file.size || 1, 0, onProgress);
+    onProgress?.(1);
+    return;
+  }
+
+  for (let offset = 0; offset < file.size; offset += UPLOAD_CHUNK_BYTES) {
+    const slice = file.slice(offset, Math.min(offset + UPLOAD_CHUNK_BYTES, file.size));
+    await putUploadBody(
+      `${url}&offset=${offset}&total=${file.size}`,
+      slice,
+      file.size,
+      offset,
+      onProgress,
+    );
+  }
+  onProgress?.(1);
 }
 
 /** Patch an agent's editable settings (display name and/or auto-compact %).

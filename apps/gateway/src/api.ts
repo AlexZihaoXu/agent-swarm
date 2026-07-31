@@ -844,12 +844,31 @@ async function dispatchFileOp(
   if (method === 'POST') {
     if (op === 'upload') {
       const name = url.searchParams.get('name') ?? 'upload';
+      // `offset`/`total` present => one slice of a file the client split to get
+      // under Cloudflare's edge body limit. Absent => ordinary whole-file POST.
+      const rawOffset = url.searchParams.get('offset');
+      const rawTotal = url.searchParams.get('total');
+      const chunk =
+        rawOffset !== null && rawTotal !== null
+          ? { offset: Number(rawOffset), total: Number(rawTotal) }
+          : undefined;
       // Streamed to disk rather than buffered: see streamUpload. Errors (incl.
       // the 413 for an oversized body) propagate to handleApi's catch, which
       // maps statusCode -> HTTP status.
-      const saved = await streamUpload(root, qpath, name, req);
-      logFile('upload', `${qpath ? qpath + '/' : ''}${saved.name} (${saved.size} bytes)`);
-      return (sendJson(res, 200, { ok: true, name: saved.name }), true);
+      const saved = await streamUpload(root, qpath, name, req, chunk);
+      // Only log once the file is actually whole, so the log isn't a wall of
+      // partial lines for one upload.
+      if (saved.complete)
+        logFile('upload', `${qpath ? qpath + '/' : ''}${saved.name} (${saved.size} bytes)`);
+      return (
+        sendJson(res, 200, {
+          ok: true,
+          name: saved.name,
+          received: saved.size,
+          complete: saved.complete,
+        }),
+        true
+      );
     }
     const body = await readJson(req);
     if (op === 'write') {

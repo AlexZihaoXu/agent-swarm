@@ -29,6 +29,22 @@ import type { Readable } from 'node:stream';
 export const MAX_TEXT_BYTES = 2 * 1024 * 1024;
 /** Max size for an uploaded file. */
 export const MAX_UPLOAD_BYTES = 256 * 1024 * 1024;
+/**
+ * Largest single request body the client should send.
+ *
+ * Not a limit of ours — the gateway happily streams the full MAX_UPLOAD_BYTES.
+ * It exists because the dashboard is served through Cloudflare, which caps
+ * request bodies at the EDGE by plan (100 MB on Free and Pro, 200 MB Business,
+ * 500 MB Enterprise) and rejects anything larger with a 413 and its own HTML
+ * error page, before the origin sees a byte. That is not configurable from our
+ * side at any plan below Enterprise, so the fix is to never send a body that
+ * big: the client slices the file and uploads it in pieces.
+ *
+ * 32 MB rather than something just under 100 MB so it stays well clear of the
+ * lowest plan limit and of any intermediate proxy with its own tighter cap, and
+ * so a failed piece is cheap to retry.
+ */
+export const UPLOAD_CHUNK_BYTES = 32 * 1024 * 1024;
 
 export interface FileEntry {
   name: string;
@@ -220,17 +236,27 @@ export async function streamUpload(
   relDir: string,
   name: string,
   body: Readable,
-): Promise<{ name: string; size: number }> {
+  /**
+   * Set for a CHUNKED upload — one slice of a larger file that had to be split
+   * to get past Cloudflare's edge body limit (see UPLOAD_CHUNK_BYTES).
+   * `offset` is where this slice starts in the finished file and `total` is that
+   * file's full size. Absent for an ordinary single-request upload.
+   */
+  chunk?: { offset: number; total: number },
+): Promise<{ name: string; size: number; complete: boolean }> {
   const safeName = basename(name || 'upload').replace(/[^\w.\- ]/g, '_') || 'upload';
   const dir = safe(root, relDir);
   mkdirSync(dir, { recursive: true });
   const dest = safe(root, join((relDir || '').replace(/^\/+/, ''), safeName));
   const tmp = `${dest}.part`;
+  if (chunk) return await appendChunk(dest, tmp, safeName, body, chunk);
   const out = createWriteStream(tmp);
   let size = 0;
   try {
-    for await (const chunk of body) {
-      const buf = chunk as Buffer;
+    // `part` not `chunk`: the parameter of that name is the chunked-upload
+    // descriptor, and shadowing it here would be a trap for the next edit.
+    for await (const part of body) {
+      const buf = part as Buffer;
       size += buf.byteLength;
       if (size > MAX_UPLOAD_BYTES) throw err('file too large', 413);
       // Respect backpressure — without this a fast client outruns the disk and
@@ -240,9 +266,13 @@ export async function streamUpload(
     await new Promise<void>((res, rej) => out.end((e?: Error | null) => (e ? rej(e) : res())));
     renameSync(tmp, dest);
     chownAgent(dest);
-    return { name: safeName, size };
+    return { name: safeName, size, complete: true };
   } catch (e) {
+    // Same lazy-open hazard as appendChunk: a late failure on a destroyed
+    // stream would otherwise land as an unhandled 'error'.
+    out.on('error', () => {});
     out.destroy();
+    if (!out.closed) await once(out, 'close').catch(() => {});
     try {
       rmSync(tmp, { force: true });
     } catch {
@@ -250,4 +280,65 @@ export async function streamUpload(
     }
     throw e;
   }
+}
+
+/**
+ * Append one slice of a chunked upload to the `.part` file, and promote it to
+ * the real filename once the last slice lands.
+ *
+ * `offset` is checked against what is already on disk rather than trusted. A
+ * mismatch means slices arrived out of order or one was lost, and appending
+ * anyway would silently produce a corrupt file that still looks complete — so
+ * it 409s with the offset the client should resume from instead. That also
+ * makes a retry of an already-applied slice safe to reason about.
+ */
+async function appendChunk(
+  dest: string,
+  tmp: string,
+  safeName: string,
+  body: Readable,
+  { offset, total }: { offset: number; total: number },
+): Promise<{ name: string; size: number; complete: boolean }> {
+  if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(total) || total <= 0)
+    throw err('invalid chunk offset/total', 400);
+  if (total > MAX_UPLOAD_BYTES) throw err('file too large', 413);
+
+  const onDisk = offset === 0 ? 0 : existsSync(tmp) ? statSync(tmp).size : 0;
+  // Starting over truncates any abandoned .part from an earlier failed attempt.
+  if (offset === 0) rmSync(tmp, { force: true });
+  else if (onDisk !== offset)
+    throw Object.assign(new Error(`chunk out of order (have ${onDisk}, got ${offset})`), {
+      statusCode: 409,
+      resumeFrom: onDisk,
+    });
+
+  const out = createWriteStream(tmp, { flags: offset === 0 ? 'w' : 'a' });
+  let size = offset;
+  try {
+    for await (const part of body) {
+      const buf = part as Buffer;
+      size += buf.byteLength;
+      // The declared total is the contract; a client that overruns it is either
+      // buggy or probing, and either way must not write past what we vetted.
+      if (size > total || size > MAX_UPLOAD_BYTES) throw err('upload exceeds declared size', 413);
+      if (!out.write(buf)) await once(out, 'drain');
+    }
+    await new Promise<void>((res, rej) => out.end((e?: Error | null) => (e ? rej(e) : res())));
+  } catch (e) {
+    // A write stream opens lazily, so tearing it down before the open lands
+    // leaves the failed open to surface later as an unhandled 'error' — which
+    // crashes the process rather than failing this one request. Swallow it: we
+    // are already throwing something more useful, and wait for the close so no
+    // stray activity outlives the request.
+    out.on('error', () => {});
+    out.destroy();
+    if (!out.closed) await once(out, 'close').catch(() => {});
+    // Keep the .part on a mid-transfer failure so the client can resume from
+    // the byte we actually have, rather than restarting a multi-GB upload.
+    throw e;
+  }
+  if (size < total) return { name: safeName, size, complete: false };
+  renameSync(tmp, dest);
+  chownAgent(dest);
+  return { name: safeName, size, complete: true };
 }
