@@ -469,13 +469,17 @@ function modelRates(model, ctxTokens) {
  * reports uid 65534 (the overflow uid) instead of 0. The setuid bit only
  * elevates for a root-owned file, so sudo becomes silently inert.
  *
- * Observed live on four agents at once. Ruled out by direct measurement: the
- * uid_map (identical to the healthy agents), the on-disk ownership (the very
- * same inode for /usr/bin/sudo), the image, the bind mounts, and the host
- * config. A stop/start does NOT clear it either — three affected agents were
- * stopped, migrated and started, and all three came back still broken. A
- * freshly created container on the same image is fine, so the state is
- * per-container and set at creation; the precise trigger is still unidentified.
+ * Root cause, confirmed: sysbox chowns a container's overlay upper layer
+ * 0 -> BASE on start and BASE -> 0 on stop. An affected container gets stuck
+ * SHIFTED — its upper layer reads BASE even while stopped — so on every start
+ * sysbox sees a rootfs that already looks mapped, does nothing, and the shared
+ * lower layers stay owned by host root (an unmapped uid inside the userns).
+ * That is why restarting never helps and why the migration version is
+ * irrelevant: migrations ship files, not mount configuration.
+ *
+ * Repaired in place by shifting the upper layer back down while the container
+ * is stopped — see scripts/fix-sysbox-idmap.py. Verified on a live agent: sudo
+ * and apt both work again and it survives subsequent restarts.
  *
  * It went unnoticed because nothing fails until something needs apt — one agent
  * happened to check at startup, which is the whole reason for this check.
@@ -495,10 +499,12 @@ function privilegeHealth() {
             sudoOwnerUid: uid,
             detail:
               `/usr/bin/sudo is owned by uid ${uid}, not root, so its setuid bit cannot ` +
-              'elevate and every privileged operation (apt, systemctl) will fail. ' +
-              'Restarting does NOT fix this (measured — the fault survives a stop/start); ' +
-              'recreating the container does, but that discards anything installed inside ' +
-              'it outside the home volume. Nothing breaks until something needs apt.',
+              'elevate and every privileged operation (apt, systemctl) will fail. The ' +
+              "container's overlay upper layer is stuck in sysbox's shifted frame, so " +
+              'sysbox thinks the rootfs is already mapped and never sets up the mapping. ' +
+              'Restarting does NOT help (each start re-confirms it). Fix in place with ' +
+              'scripts/fix-sysbox-idmap.py — stop the agent, shift the upper layer back, ' +
+              'start it. No recreate needed. Nothing breaks until something needs apt.',
           };
   } catch (e) {
     // Absent sudo is a different problem; don't claim a mapping fault.
