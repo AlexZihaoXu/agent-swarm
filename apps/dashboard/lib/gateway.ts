@@ -376,12 +376,15 @@ export interface DiscordDmPeer extends DiscordAuthor {
    *  bot); displayName then falls back to the raw snowflake. */
   resolved: boolean;
   /** 'history' — a DM really was exchanged, so the channel demonstrably works.
-   *  'allowlist' — permitted by the operator but nothing ever came through. */
-  source: 'history' | 'allowlist';
+   *  'allowlist' — permitted by the operator but nothing ever came through.
+   *  'blocked'   — they DID message the bot and it was not forwarded. */
+  source: 'history' | 'allowlist' | 'blocked';
   /** Set only when a send was actually REFUSED by Discord (50007). Agents send
    *  with their own token, so their failures never reach the gateway — absence
    *  of this is not evidence that delivery works. */
   undeliverable: { at: number; reason: string } | null;
+  /** Their DM reached the bot but was turned away; `count` is how many. */
+  blocked: { at: number; last: number; reason: string; count: number } | null;
 }
 export interface DiscordAttachment {
   id: string;

@@ -215,6 +215,10 @@ type MetricsResult = {
 };
 
 /** Drives the Docker engine for agent lifecycle + proxy target resolution. */
+/** Most turned-away DM senders remembered per agent. A bot in a public server
+ *  can be DMed by anyone, so this is both a spam guard and a file-size bound. */
+const MAX_BLOCKED_DM_PEERS = 50;
+
 export class AgentManager {
   private building = false;
   /** Receive-side Discord connections, keyed by agent id (apply → connect). */
@@ -3332,7 +3336,13 @@ export class AgentManager {
     for (const i of integrations.listIntegrations(this.agentDataDir(id))) {
       if (i.type === 'discord' && i.status === 'active' && i.credentials.botToken) {
         await this.discord
-          .connect(id, i.credentials.botToken, i.rules, (m) => this.queueDeliver(id, m))
+          .connect(
+            id,
+            i.credentials.botToken,
+            i.rules,
+            (m) => this.queueDeliver(id, m),
+            (uid, why) => this.recordBlockedDm(id, uid, why),
+          )
           .catch(() => {});
       }
     }
@@ -3378,20 +3388,25 @@ export class AgentManager {
      *  Discord lets a bot open a DM channel with anyone, and only rejects at
      *  send time, so nothing short of a real attempt can prove it. */
     undeliverable?: Record<string, { at: number; reason: string }>;
+    /** Senders whose DM reached the bot but was NOT forwarded (allow-list, or
+     *  DM forwarding off). Recorded so a dropped message is still discoverable. */
+    blocked?: Record<string, { at: number; last: number; reason: string; count: number }>;
   } {
     try {
       const raw = JSON.parse(readFileSync(this.dmPeersFile(id), 'utf8')) as {
         ids?: string[];
         backfilled?: boolean;
         undeliverable?: Record<string, { at: number; reason: string }>;
+        blocked?: Record<string, { at: number; last: number; reason: string; count: number }>;
       };
       return {
         ids: Array.isArray(raw.ids) ? raw.ids : [],
         backfilled: !!raw.backfilled,
         undeliverable: raw.undeliverable ?? {},
+        blocked: raw.blocked ?? {},
       };
     } catch {
-      return { ids: [], undeliverable: {} };
+      return { ids: [], undeliverable: {}, blocked: {} };
     }
   }
 
@@ -3401,6 +3416,7 @@ export class AgentManager {
       ids: string[];
       backfilled?: boolean;
       undeliverable?: Record<string, { at: number; reason: string }>;
+      blocked?: Record<string, { at: number; last: number; reason: string; count: number }>;
     },
   ): void {
     try {
@@ -3419,6 +3435,37 @@ export class AgentManager {
     const cur = this.readDmPeers(id);
     if (cur.ids.includes(userId)) return;
     this.writeDmPeers(id, { ...cur, ids: [...cur.ids, userId] });
+  }
+
+  /**
+   * Note a DM that ARRIVED but was not forwarded to the agent.
+   *
+   * The bridge used to just `return` on these, so a message from someone off
+   * the allow-list left no trace at all — not in the agent, not in the
+   * dashboard, not in a log. The operator could not tell the difference between
+   * "nobody messaged the bot" and "someone did and we dropped it", which is
+   * exactly the case worth seeing.
+   *
+   * Capped and evicted oldest-first: a bot in a public server can be DMed by
+   * anyone, and an unbounded list would be a spam surface as well as an
+   * unbounded file.
+   */
+  recordBlockedDm(id: string, userId: string, reason: string): void {
+    if (!/^\d{5,25}$/.test(userId)) return;
+    const cur = this.readDmPeers(id);
+    // Already a real correspondent — the rules must have changed since. Nothing
+    // to flag; the conversation is reachable either way.
+    if (cur.ids.includes(userId)) return;
+    const blocked = { ...(cur.blocked ?? {}) };
+    // Keep the FIRST time we saw them plus a running count, which is more
+    // useful than a bare timestamp for judging whether to allow-list someone.
+    const prev = blocked[userId];
+    blocked[userId] = { at: prev?.at ?? Date.now(), last: Date.now(), reason, count: (prev?.count ?? 0) + 1 };
+    const entries = Object.entries(blocked).sort((a, b) => b[1].last - a[1].last);
+    this.writeDmPeers(id, {
+      ...cur,
+      blocked: Object.fromEntries(entries.slice(0, MAX_BLOCKED_DM_PEERS)),
+    });
   }
 
   /** Agents already running before the record existed have their history only
@@ -3498,11 +3545,25 @@ export class AgentManager {
     // them but nothing has ever come through — which is exactly what a DM
     // rejected for having DMs disabled also looks like, since the agent sends
     // with its own token and that failure never reaches us.
-    return [...new Set([...ids, ...(allow ?? [])])].map((uid) => ({
+    const blocked = cur.blocked ?? {};
+    const known = [...new Set([...ids, ...(allow ?? [])])].map((uid) => ({
       id: uid,
       source: seen.has(uid) ? ('history' as const) : ('allowlist' as const),
       undeliverable: undeliverable[uid] ?? null,
+      blocked: null,
     }));
+    // Senders we turned away. Listed last and clearly marked, so the operator
+    // can see who tried and decide whether to allow-list them.
+    const turnedAway = Object.entries(blocked)
+      .filter(([uid]) => !known.some((k) => k.id === uid))
+      .sort((a, b) => b[1].last - a[1].last)
+      .map(([uid, b]) => ({
+        id: uid,
+        source: 'blocked' as const,
+        undeliverable: null,
+        blocked: b,
+      }));
+    return [...known, ...turnedAway];
   }
 
   /** Record that Discord refused a DM to this user (50007 and friends), so the
@@ -3572,8 +3633,12 @@ export class AgentManager {
     if (!cur.credentials.botToken)
       throw Object.assign(new Error('add a bot token first'), { statusCode: 400 });
     if (type === 'discord') {
-      await this.discord.connect(id, cur.credentials.botToken, cur.rules, (m) =>
-        this.queueDeliver(id, m),
+      await this.discord.connect(
+        id,
+        cur.credentials.botToken,
+        cur.rules,
+        (m) => this.queueDeliver(id, m),
+        (uid, why) => this.recordBlockedDm(id, uid, why),
       );
     }
     cur.status = 'active';

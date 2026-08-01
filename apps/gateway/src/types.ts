@@ -159,12 +159,16 @@ export interface GroupMessage {
 export interface DmPeer {
   id: string;
   /** 'history' — a DM really was exchanged with them, so the channel works.
-   *  'allowlist' — the operator permitted them but nothing ever came through. */
-  source: 'history' | 'allowlist';
+   *  'allowlist' — the operator permitted them but nothing ever came through.
+   *  'blocked'   — they DID message the bot and it was not forwarded. */
+  source: 'history' | 'allowlist' | 'blocked';
   /** Set when a send was actually refused (Discord 50007), which is the only
    *  hard proof of undeliverability available: a bot may open a DM channel with
    *  anyone and is only rejected at send time. */
   undeliverable: { at: number; reason: string } | null;
+  /** Set when their DM arrived but was turned away (allow-list, or DM
+   *  forwarding off). `count` is how many were dropped. */
+  blocked: { at: number; last: number; reason: string; count: number } | null;
 }
 
 export type IntegrationType = 'discord';

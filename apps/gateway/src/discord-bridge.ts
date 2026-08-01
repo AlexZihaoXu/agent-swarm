@@ -182,6 +182,10 @@ export class DiscordBridge {
     token: string,
     rules: DiscordRules,
     deliver: Deliver,
+    /** Called for a DM that arrived but was NOT forwarded, so the operator can
+     *  still see that someone messaged this bot. Without it such a DM leaves no
+     *  trace anywhere — not in the agent, not in the dashboard, not in a log. */
+    onBlockedDm?: (userId: string, reason: string) => void,
   ): Promise<void> {
     await this.disconnect(agentId);
     const client = new Client({
@@ -335,9 +339,23 @@ export class DiscordBridge {
         };
 
         if (isDm) {
-          if (!rules.forwardDms) return;
+          // A DM we decline to forward is still a DM that ARRIVED. Dropping it
+          // here without a trace meant nothing recorded it anywhere — the
+          // operator had no way to discover that someone had messaged the bot
+          // at all, which is precisely the silent case worth surfacing. Note it
+          // (capped, so a stranger can't flood the list) and then stop.
+          if (!rules.forwardDms) {
+            onBlockedDm?.(msg.author.id, 'DM forwarding is turned off for this agent');
+            return;
+          }
           // DM allow-list: if set, only these users may DM the agent.
-          if (rules.allowedUserIds.length && !rules.allowedUserIds.includes(msg.author.id)) return;
+          if (rules.allowedUserIds.length && !rules.allowedUserIds.includes(msg.author.id)) {
+            onBlockedDm?.(
+              msg.author.id,
+              `sender is not on this agent's DM allow-list (${rules.allowedUserIds.length} allowed)`,
+            );
+            return;
+          }
           bumpOnline();
           // A DM is direct address → interrupt if the agent is mid-turn.
           return forward(formatLine(msg, true, opts), addressOf(msg, true), attachments, true);

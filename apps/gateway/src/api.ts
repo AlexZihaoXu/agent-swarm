@@ -1555,6 +1555,7 @@ async function handleDiscord(
               resolved: !!user,
               source: p.source,
               undeliverable: p.undeliverable,
+              blocked: p.blocked,
             };
           }),
         );

@@ -70,6 +70,16 @@ interface ChannelRow {
  * was rejected is indistinguishable from one that was simply never started.
  */
 function dmWarning(u: DiscordDmPeer): { hard: boolean; label: string; detail: string } | null {
+  // Checked first: this is the one case where a real message definitely arrived
+  // and the agent definitely never saw it. Everything else is about sending.
+  if (u.blocked) {
+    const n = u.blocked.count;
+    return {
+      hard: true,
+      label: `Not delivered to the agent${n > 1 ? ` · ${n} messages` : ''}`,
+      detail: `They messaged this bot and it was NOT passed to the agent — ${u.blocked.reason}. The messages are still in Discord and readable here. Last attempt ${new Date(u.blocked.last).toLocaleString()}. Add them to the agent's Discord allow-list to let future messages through.`,
+    };
+  }
   if (u.undeliverable) {
     return {
       hard: true,
