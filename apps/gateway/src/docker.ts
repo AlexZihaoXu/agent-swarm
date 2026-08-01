@@ -48,6 +48,7 @@ import type {
   Agent,
   Capability,
   CreateAgentOptions,
+  DmPeer,
   GroupMessage,
   IntegrationPatch,
   IntegrationPublic,
@@ -3369,19 +3370,39 @@ export class AgentManager {
     return join(this.agentDataDir(id), '.swarm', 'discord-dms.json');
   }
 
-  private readDmPeers(id: string): { ids: string[]; backfilled?: boolean } {
+  private readDmPeers(id: string): {
+    ids: string[];
+    backfilled?: boolean;
+    /** Peers a send has actually been REFUSED for (Discord 50007), with when.
+     *  Kept because it is the only hard evidence of undeliverability we get —
+     *  Discord lets a bot open a DM channel with anyone, and only rejects at
+     *  send time, so nothing short of a real attempt can prove it. */
+    undeliverable?: Record<string, { at: number; reason: string }>;
+  } {
     try {
       const raw = JSON.parse(readFileSync(this.dmPeersFile(id), 'utf8')) as {
         ids?: string[];
         backfilled?: boolean;
+        undeliverable?: Record<string, { at: number; reason: string }>;
       };
-      return { ids: Array.isArray(raw.ids) ? raw.ids : [], backfilled: !!raw.backfilled };
+      return {
+        ids: Array.isArray(raw.ids) ? raw.ids : [],
+        backfilled: !!raw.backfilled,
+        undeliverable: raw.undeliverable ?? {},
+      };
     } catch {
-      return { ids: [] };
+      return { ids: [], undeliverable: {} };
     }
   }
 
-  private writeDmPeers(id: string, next: { ids: string[]; backfilled?: boolean }): void {
+  private writeDmPeers(
+    id: string,
+    next: {
+      ids: string[];
+      backfilled?: boolean;
+      undeliverable?: Record<string, { at: number; reason: string }>;
+    },
+  ): void {
     try {
       const file = this.dmPeersFile(id);
       mkdirSync(dirname(file), { recursive: true });
@@ -3460,16 +3481,48 @@ export class AgentManager {
    * delivery, and an agent with prior history is backfilled from its transcripts
    * exactly once. Reads are then a small JSON file, not a 1.9 GB scan.
    */
-  discordDmPeers(id: string): string[] {
+  discordDmPeers(id: string): DmPeer[] {
     const cur = this.readDmPeers(id);
     let ids = cur.ids;
     if (!cur.backfilled) {
       ids = [...new Set([...ids, ...this.backfillDmPeers(id)])];
-      this.writeDmPeers(id, { ids, backfilled: true });
+      this.writeDmPeers(id, { ...cur, ids, backfilled: true });
     }
     const allow = integrations.getIntegration(this.requireAgentDir(id), 'discord')?.rules
       ?.allowedUserIds;
-    return [...new Set([...ids, ...(allow ?? [])])];
+    const seen = new Set(ids);
+    const undeliverable = cur.undeliverable ?? {};
+    // `source` is what lets the UI be honest about a DM that looks empty.
+    // 'history' means a message really was exchanged with this person, so the
+    // channel working is established. 'allowlist' means the operator permitted
+    // them but nothing has ever come through — which is exactly what a DM
+    // rejected for having DMs disabled also looks like, since the agent sends
+    // with its own token and that failure never reaches us.
+    return [...new Set([...ids, ...(allow ?? [])])].map((uid) => ({
+      id: uid,
+      source: seen.has(uid) ? ('history' as const) : ('allowlist' as const),
+      undeliverable: undeliverable[uid] ?? null,
+    }));
+  }
+
+  /** Record that Discord refused a DM to this user (50007 and friends), so the
+   *  client can label it as a real delivery failure rather than a guess. */
+  recordDmUndeliverable(id: string, userId: string, reason: string): void {
+    const cur = this.readDmPeers(id);
+    this.writeDmPeers(id, {
+      ...cur,
+      undeliverable: { ...(cur.undeliverable ?? {}), [userId]: { at: Date.now(), reason } },
+    });
+  }
+
+  /** Clear the failure note once a send to this user succeeds — otherwise a
+   *  person who simply had DMs off for a while stays labelled forever. */
+  clearDmUndeliverable(id: string, userId: string): void {
+    const cur = this.readDmPeers(id);
+    if (!cur.undeliverable?.[userId]) return;
+    const next = { ...cur.undeliverable };
+    delete next[userId];
+    this.writeDmPeers(id, { ...cur, undeliverable: next });
   }
 
   /** The agent's Discord bot token, for operator-side REST (the dashboard's

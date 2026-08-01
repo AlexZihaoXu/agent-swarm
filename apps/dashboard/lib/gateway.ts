@@ -368,6 +368,21 @@ export interface DiscordAuthor {
   avatarUrl: string;
   bot: boolean;
 }
+/** A DM correspondent in the sidebar. Unlike a plain author this is always
+ *  returned even when it can't be resolved or delivered to — hiding those was
+ *  hiding exactly the conversations worth inspecting. */
+export interface DiscordDmPeer extends DiscordAuthor {
+  /** false when the user lookup failed (deleted account, or not visible to the
+   *  bot); displayName then falls back to the raw snowflake. */
+  resolved: boolean;
+  /** 'history' — a DM really was exchanged, so the channel demonstrably works.
+   *  'allowlist' — permitted by the operator but nothing ever came through. */
+  source: 'history' | 'allowlist';
+  /** Set only when a send was actually REFUSED by Discord (50007). Agents send
+   *  with their own token, so their failures never reach the gateway — absence
+   *  of this is not evidence that delivery works. */
+  undeliverable: { at: number; reason: string } | null;
+}
 export interface DiscordAttachment {
   id: string;
   filename: string;
@@ -424,7 +439,7 @@ export const discordWhoami = (id: string) => api<DiscordSelf>(`${dcBase(id)}/who
 /** DM correspondents this bot actually has. Discord won't enumerate a bot's DM
  *  channels, so the gateway reconstructs the list from the allow-list plus the
  *  `discord://dm/<id>` addresses in the agent's own transcripts. */
-export const discordDms = (id: string) => api<DiscordAuthor[]>(`${dcBase(id)}/dms`);
+export const discordDms = (id: string) => api<DiscordDmPeer[]>(`${dcBase(id)}/dms`);
 export const discordUser = (id: string, user: string) =>
   api<DiscordAuthor>(`${dcBase(id)}/user?id=${encodeURIComponent(user)}`);
 export const discordGuilds = (id: string) => api<DiscordGuild[]>(`${dcBase(id)}/guilds`);
@@ -454,11 +469,21 @@ export const discordSearch = (
   if (opts.limit) qs.set('limit', String(opts.limit));
   return api<DiscordMessage[]>(`${dcBase(id)}/search?${qs}`);
 };
-export const discordSend = (id: string, channel: string, content: string, replyTo?: string) =>
+/** `dmUser` is the recipient when `channel` is a DM. It lets the gateway record
+ *  a refusal (Discord 50007) against the person rather than an opaque channel
+ *  id — the only hard evidence of undeliverability we ever get, since agents
+ *  send with their own token and their failures never reach us. */
+export const discordSend = (
+  id: string,
+  channel: string,
+  content: string,
+  replyTo?: string,
+  dmUser?: string,
+) =>
   api<DiscordMessage>(`${dcBase(id)}/send`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ channel, content, replyTo }),
+    body: JSON.stringify({ channel, content, replyTo, dmUser }),
   });
 export const discordReact = (id: string, channel: string, message: string, emoji: string) =>
   api<{ ok: true }>(`${dcBase(id)}/react`, {

@@ -1535,14 +1535,30 @@ async function handleDiscord(
       case 'guilds':
         return (sendJson(res, 200, await discord.listGuilds(token)), true);
       case 'dms': {
-        // Resolve each discovered correspondent so the sidebar can show a
-        // person. A lookup that fails (deleted account, bot blocked) is dropped
-        // rather than surfacing a bare snowflake.
+        // Every correspondent is returned, including ones that can't be
+        // resolved or delivered to. Dropping them used to hide exactly the
+        // conversations worth looking at — a DM that silently goes nowhere
+        // looks identical to one that was never started. The client labels
+        // them instead, using `source` and `undeliverable`.
         const peers = manager.discordDmPeers(id);
         const resolved = await Promise.all(
-          peers.map((uid) => discord.getUser(token, uid).catch(() => null)),
+          peers.map(async (p) => {
+            const user = await discord.getUser(token, p.id).catch(() => null);
+            return {
+              // Fall back to the raw snowflake so the row still renders and the
+              // operator can see WHICH user could not be looked up.
+              id: p.id,
+              username: user?.username ?? p.id,
+              displayName: user?.displayName ?? `Unknown user ${p.id}`,
+              avatarUrl: user?.avatarUrl ?? '',
+              bot: user?.bot ?? false,
+              resolved: !!user,
+              source: p.source,
+              undeliverable: p.undeliverable,
+            };
+          }),
         );
-        return (sendJson(res, 200, resolved.filter(Boolean)), true);
+        return (sendJson(res, 200, resolved), true);
       }
       case 'user': {
         // Resolves a DM correspondent to a real name + avatar; without it the
@@ -1599,12 +1615,32 @@ async function handleDiscord(
         const content = String(body.content ?? '').trim();
         if (!channel || !content)
           return (sendJson(res, 400, { error: 'channel and content required' }), true);
-        const msg = await discord.sendMessage(
-          token,
-          channel,
-          content,
-          body.replyTo ? String(body.replyTo) : undefined,
-        );
+        // `dmUser` is the recipient when this channel is a DM, so a refusal can
+        // be recorded against the person rather than the opaque channel id.
+        const dmUser = (body as { dmUser?: string }).dmUser?.trim() ?? '';
+        let msg;
+        try {
+          msg = await discord.sendMessage(
+            token,
+            channel,
+            content,
+            body.replyTo ? String(body.replyTo) : undefined,
+          );
+        } catch (e) {
+          // 50007 "Cannot send messages to this user" — DMs closed, or no
+          // shared server. This is the ONLY hard evidence of undeliverability
+          // we ever get, so persist it; the agent sends with its own token and
+          // its failures never reach us.
+          const code = (e as { code?: number; rawError?: { code?: number } })?.code ??
+            (e as { rawError?: { code?: number } })?.rawError?.code;
+          if (dmUser && code === 50007) {
+            manager.recordDmUndeliverable(id, dmUser, 'Discord 50007: cannot send to this user');
+          }
+          throw e;
+        }
+        // A success retires any earlier failure note, so someone who merely had
+        // DMs off for a while doesn't stay labelled forever.
+        if (dmUser) manager.clearDmUndeliverable(id, dmUser);
         logEvent({
           category: 'integration',
           action: 'discord.send',

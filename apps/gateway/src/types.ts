@@ -155,6 +155,18 @@ export interface GroupMessage {
 // the `scheme://` message-routing convention (see docs/discord-mcp-plan.md).
 
 /** Connector kind. Extend the union as connectors are added. */
+/** A Discord DM correspondent, before the user object is resolved. */
+export interface DmPeer {
+  id: string;
+  /** 'history' — a DM really was exchanged with them, so the channel works.
+   *  'allowlist' — the operator permitted them but nothing ever came through. */
+  source: 'history' | 'allowlist';
+  /** Set when a send was actually refused (Discord 50007), which is the only
+   *  hard proof of undeliverability available: a bot may open a DM channel with
+   *  anyone and is only rejected at send time. */
+  undeliverable: { at: number; reason: string } | null;
+}
+
 export type IntegrationType = 'discord';
 
 /** Lifecycle of one configured integration — drives the dashboard UI state.

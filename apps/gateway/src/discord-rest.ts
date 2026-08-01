@@ -17,6 +17,11 @@ const rest = (token: string) => new REST({ version: '10' }).setToken(token);
 /** Discord channel types we care about. 4 = category, 0/5 = text/announcement. */
 export const CHANNEL_CATEGORY = 4;
 export const TEXT_CHANNEL_TYPES = [0, 5];
+/** 11 = public thread, 12 = private thread, 10 = announcement thread.
+ *  Threads are NOT returned by GET /guilds/:id/channels, so without fetching
+ *  them separately a thread the agent is active in has no name, no parent and
+ *  no way to open it — it shows as a bare snowflake, if at all. */
+export const THREAD_TYPES = [10, 11, 12];
 
 export interface DiscordGuild {
   id: string;
@@ -149,7 +154,7 @@ export async function listChannels(token: string, guildId: string): Promise<Disc
     position: number;
     topic?: string | null;
   }[];
-  return (chans ?? [])
+  const base = (chans ?? [])
     .filter((c) => c.type === CHANNEL_CATEGORY || TEXT_CHANNEL_TYPES.includes(c.type))
     .map((c) => ({
       id: c.id,
@@ -160,6 +165,42 @@ export async function listChannels(token: string, guildId: string): Promise<Disc
       topic: c.topic ?? null,
     }))
     .sort((a, b) => a.position - b.position);
+
+  // Threads come from a different endpoint. An agent asked to watch a channel
+  // routinely ends up talking in a thread under it, so leaving these out meant
+  // the conversation the operator actually wanted was unreachable.
+  // Best-effort: a guild where this 403s (missing intent/permission) should
+  // still render its normal channels rather than failing the whole sidebar.
+  let threads: DiscordChannel[] = [];
+  try {
+    const active = (await rest(token).get(
+      `/guilds/${guildId}/threads/active`,
+    )) as {
+      threads?: {
+        id: string;
+        type: number;
+        name: string;
+        parent_id: string | null;
+        thread_metadata?: { archived?: boolean };
+      }[];
+    };
+    threads = (active?.threads ?? [])
+      .filter((t) => THREAD_TYPES.includes(t.type))
+      .map((t) => ({
+        id: t.id,
+        type: t.type,
+        name: t.name,
+        // A thread's parent is a text CHANNEL, not a category — the client
+        // nests it under that channel rather than in the category list.
+        parentId: t.parent_id ?? null,
+        position: 0,
+        topic: null,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  } catch {
+    /* no thread access in this guild — channels alone are still useful */
+  }
+  return [...base, ...threads];
 }
 
 interface RawMessage {

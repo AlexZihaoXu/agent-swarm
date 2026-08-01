@@ -26,6 +26,7 @@ import {
   LuSearch,
   LuSend,
   LuSmile,
+  LuTriangleAlert,
   LuUser,
   LuX,
 } from 'react-icons/lu';
@@ -41,13 +42,59 @@ import {
   discordSend,
   discordWhoami,
   type DiscordAttachment,
-  type DiscordAuthor,
   type DiscordChannel,
+  type DiscordDmPeer,
   type DiscordEmbed,
   type DiscordGuild,
   type DiscordMessage,
   type DiscordSelf,
 } from '@/lib/gateway';
+
+/** Thread channel types (announcement / public / private). A thread hangs off a
+ *  text channel rather than a category, so the sidebar nests it accordingly. */
+const DISCORD_THREAD_TYPES = [10, 11, 12];
+
+/** One sidebar row: a channel, or a thread indented under its parent. */
+interface ChannelRow {
+  channel: DiscordChannel;
+  thread: boolean;
+}
+
+/**
+ * What, if anything, to warn about for a DM correspondent.
+ *
+ * `hard` is a delivery Discord actually refused — the only certain case, since
+ * a bot may open a DM channel with anyone and is rejected only at send time.
+ * Everything else is a genuine inference and is worded as one: an agent sends
+ * with its own token, so its failures never reach the gateway, and a DM that
+ * was rejected is indistinguishable from one that was simply never started.
+ */
+function dmWarning(u: DiscordDmPeer): { hard: boolean; label: string; detail: string } | null {
+  if (u.undeliverable) {
+    return {
+      hard: true,
+      label: 'Delivery failed',
+      detail: `Discord refused a message to this user (${u.undeliverable.reason}). They likely have DMs from server members turned off, or share no server with this bot.`,
+    };
+  }
+  if (!u.resolved) {
+    return {
+      hard: false,
+      label: 'Unknown user',
+      detail:
+        'This user id could not be resolved — the account may be deleted, or invisible to this bot. Messages to it will not be delivered.',
+    };
+  }
+  if (u.source === 'allowlist') {
+    return {
+      hard: false,
+      label: 'No messages yet',
+      detail:
+        'Allow-listed by the operator, but no DM has ever been exchanged. If the agent has tried to message them, Discord most likely rejected it — DMs disabled, or no shared server. Nothing distinguishes that from "never contacted" until a send is attempted from here.',
+    };
+  }
+  return null;
+}
 
 /** How often an open channel re-polls. The bridge has no operator-facing push
  *  stream, so this is a plain interval — cheap, since Discord returns ≤50 rows. */
@@ -510,7 +557,7 @@ export function DiscordClient({ agentId }: { agentId: string }) {
   const [guilds, setGuilds] = useState<DiscordGuild[]>([]);
   const [guildId, setGuildId] = useState<string | null>(null);
   const [channels, setChannels] = useState<DiscordChannel[]>([]);
-  const [dmPeers, setDmPeers] = useState<DiscordAuthor[]>([]);
+  const [dmPeers, setDmPeers] = useState<DiscordDmPeer[]>([]);
   const [target, setTarget] = useState<Target | null>(null);
   const [messages, setMessages] = useState<DiscordMessage[]>([]);
   const [replyTo, setReplyTo] = useState<DiscordMessage | null>(null);
@@ -699,7 +746,13 @@ export function DiscordClient({ agentId }: { agentId: string }) {
     setSending(true);
     setInput('');
     try {
-      await discordSend(agentId, target.id, content, replyTo?.id);
+      await discordSend(
+        agentId,
+        target.id,
+        content,
+        replyTo?.id,
+        target.kind === 'dm' ? target.userId : undefined,
+      );
       setReplyTo(null);
       atBottomRef.current = true;
       setAtBottom(true);
@@ -754,18 +807,38 @@ export function DiscordClient({ agentId }: { agentId: string }) {
     return m;
   }, [messages, dmPeers, me]);
 
-  // Text channels grouped under their category. Two channels can share a name
-  // in different categories, so the grouping is what disambiguates them.
+  // Text channels grouped under their category, with each channel's threads
+  // nested beneath it. Two channels can share a name in different categories,
+  // so the grouping is what disambiguates them.
+  //
+  // A thread's parentId is a text CHANNEL, not a category — grouping it the
+  // same way as a channel would file every thread under "no category" and
+  // detach it from the conversation it belongs to.
   const grouped = useMemo(() => {
     const cats = channels.filter((c) => c.type === DISCORD_CATEGORY);
-    const text = channels.filter((c) => c.type !== DISCORD_CATEGORY);
-    const out: { category: string | null; channels: DiscordChannel[] }[] = [];
+    const threads = channels.filter((c) => DISCORD_THREAD_TYPES.includes(c.type));
+    const text = channels.filter(
+      (c) => c.type !== DISCORD_CATEGORY && !DISCORD_THREAD_TYPES.includes(c.type),
+    );
+    const withThreads = (list: DiscordChannel[]): ChannelRow[] =>
+      list.flatMap((c) => [
+        { channel: c, thread: false },
+        ...threads.filter((t) => t.parentId === c.id).map((t) => ({ channel: t, thread: true })),
+      ]);
+
+    const out: { category: string | null; rows: ChannelRow[] }[] = [];
     const loose = text.filter((c) => !c.parentId);
-    if (loose.length) out.push({ category: null, channels: loose });
+    if (loose.length) out.push({ category: null, rows: withThreads(loose) });
     for (const cat of cats) {
       const kids = text.filter((c) => c.parentId === cat.id);
-      if (kids.length) out.push({ category: cat.name, channels: kids });
+      if (kids.length) out.push({ category: cat.name, rows: withThreads(kids) });
     }
+    // A thread whose parent channel the bot can't see would otherwise vanish
+    // entirely — surface it rather than silently dropping the conversation.
+    const shown = new Set(out.flatMap((g) => g.rows.map((r) => r.channel.id)));
+    const orphans = threads.filter((t) => !shown.has(t.id));
+    if (orphans.length)
+      out.push({ category: 'Threads', rows: orphans.map((t) => ({ channel: t, thread: true })) });
     return out;
   }, [channels]);
 
@@ -833,22 +906,41 @@ export function DiscordClient({ agentId }: { agentId: string }) {
                   this is reconstructed from conversations this agent has actually received.
                 </p>
               )}
-              {dmPeers.map((u) => (
-                <button
-                  key={u.id}
-                  type="button"
-                  onClick={() => void openDm(u.id)}
-                  title={`${u.displayName} · ${u.id}`}
-                  className={`hover:bg-surface-tertiary mx-2 flex w-[calc(100%-1rem)] cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors duration-100 ${
-                    target?.kind === 'dm' && target.userId === u.id
-                      ? 'bg-surface-tertiary text-foreground'
-                      : 'text-muted'
-                  }`}
-                >
-                  <img src={u.avatarUrl} alt="" className="size-6 shrink-0 rounded-full" />
-                  <span className="truncate">{u.displayName}</span>
-                </button>
-              ))}
+              {dmPeers.map((u) => {
+                const warn = dmWarning(u);
+                return (
+                  <button
+                    key={u.id}
+                    type="button"
+                    onClick={() => void openDm(u.id)}
+                    title={warn ? `${u.displayName} · ${u.id}\n${warn.detail}` : `${u.displayName} · ${u.id}`}
+                    className={`hover:bg-surface-tertiary mx-2 flex w-[calc(100%-1rem)] cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors duration-100 ${
+                      target?.kind === 'dm' && target.userId === u.id
+                        ? 'bg-surface-tertiary text-foreground'
+                        : 'text-muted'
+                    }`}
+                  >
+                    {u.avatarUrl ? (
+                      <img src={u.avatarUrl} alt="" className="size-6 shrink-0 rounded-full" />
+                    ) : (
+                      // Unresolvable user — still listed, because a DM that goes
+                      // nowhere is exactly the one worth seeing.
+                      <span className="bg-surface-tertiary text-muted flex size-6 shrink-0 items-center justify-center rounded-full text-[10px]">
+                        ?
+                      </span>
+                    )}
+                    <span className="truncate">{u.displayName}</span>
+                    {warn && (
+                      <span
+                        className={`ml-auto shrink-0 ${warn.hard ? 'text-danger' : 'text-warning'}`}
+                        aria-label={warn.detail}
+                      >
+                        <LuTriangleAlert className="size-3.5" />
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </>
           ) : (
             grouped.map((group) => (
@@ -858,7 +950,7 @@ export function DiscordClient({ agentId }: { agentId: string }) {
                     {group.category}
                   </p>
                 )}
-                {group.channels.map((c) => (
+                {group.rows.map(({ channel: c, thread }) => (
                   <button
                     key={c.id}
                     type="button"
@@ -866,13 +958,20 @@ export function DiscordClient({ agentId }: { agentId: string }) {
                       setResults(null);
                       setTarget({ kind: 'channel', id: c.id, name: c.name });
                     }}
-                    className={`hover:bg-surface-tertiary mx-2 flex w-[calc(100%-1rem)] cursor-pointer items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm transition-colors duration-100 ${
+                    title={thread ? `Thread · ${c.id}` : `#${c.name} · ${c.id}`}
+                    className={`hover:bg-surface-tertiary mx-2 flex w-[calc(100%-1rem)] cursor-pointer items-center gap-1.5 rounded py-1.5 pr-2 text-left text-sm transition-colors duration-100 ${
+                      thread ? 'pl-6' : 'pl-2'
+                    } ${
                       target?.id === c.id
                         ? 'bg-surface-tertiary text-foreground'
                         : 'text-muted hover:text-foreground'
                     }`}
                   >
-                    <LuHash className="size-4 shrink-0 opacity-70" />
+                    {thread ? (
+                      <LuMessagesSquare className="size-3.5 shrink-0 opacity-70" />
+                    ) : (
+                      <LuHash className="size-4 shrink-0 opacity-70" />
+                    )}
                     <span className="truncate">{c.name}</span>
                   </button>
                 ))}
@@ -976,6 +1075,29 @@ export function DiscordClient({ agentId }: { agentId: string }) {
         {error && (
           <p className="text-danger border-separator border-b px-4 py-2 text-sm">{error}</p>
         )}
+
+        {/* Why this DM may look empty. Shown here as well as in the sidebar
+            because an empty conversation otherwise reads as "nothing to see",
+            which is precisely the failure being reported. */}
+        {(() => {
+          if (target?.kind !== 'dm') return null;
+          const peer = dmPeers.find((p) => p.id === target.userId);
+          const warn = peer && dmWarning(peer);
+          if (!warn) return null;
+          return (
+            <div
+              className={`border-separator flex items-start gap-2 border-b px-4 py-2 text-xs leading-relaxed ${
+                warn.hard ? 'text-danger' : 'text-warning'
+              }`}
+            >
+              <LuTriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+              <span>
+                <span className="font-semibold">{warn.label}.</span>{' '}
+                <span className="text-muted">{warn.detail}</span>
+              </span>
+            </div>
+          );
+        })()}
 
         <div className="relative min-h-0 flex-1">
           <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto pb-4">
