@@ -247,6 +247,14 @@ RUN set -eux; \
     curl -fsSL "$URL" -o /usr/local/bin/oc-go-cc; \
     chmod +x /usr/local/bin/oc-go-cc; \
     /usr/local/bin/oc-go-cc --version || true
+# `serve` hard-fails without a config file, so bake the default one in. Without
+# it the supervisor forked the binary, saw it exit(1), and reforked every 2s for
+# the life of the container. The api_key field is the literal `${OC_GO_CC_API_KEY}`,
+# which the supervisor supplies from ~/.swarm/opencode-go-key at spawn time.
+# HOME is set explicitly: a USER directive does not change it, so `init` would
+# otherwise drop the config in /root and the agent would never find it.
+RUN HOME=/home/agent runuser -u agent -- /usr/local/bin/oc-go-cc init \
+    && test -f /home/agent/.config/oc-go-cc/config.json
 # GitHub CLI + Tailscale: tools the swarm uses routinely. gh auth lives in
 # ~/.config/gh/ (bind-mounted, survives recreate); tailscale auth + state live
 # in /var/lib/tailscale (writable layer, lost on recreate) — restored on first

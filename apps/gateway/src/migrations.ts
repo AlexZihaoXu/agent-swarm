@@ -356,12 +356,39 @@ export const migrations: Migration[] = [
       // file read as uid 65534 and sudo was silently inert. Nothing fails until
       // something needs apt, so it was found only because one agent happened to
       // check at startup. /api/stats now reports it and the dashboard shows a
-      // "no sudo" flag. Detection only: a stop/start does NOT clear the fault
-      // (measured on three agents), while a freshly created container is fine —
-      // so the remedy is a recreate, at the cost of anything installed inside
-      // the container outside the home volume.
+      // "no sudo" flag. Detection only — the repair is scripts/fix-sysbox-idmap.py
+      // (upper layer stuck shifted) or scripts/fix-sysbox-overshift.py (shifted
+      // one time too many). A plain stop/start does NOT clear either.
       await ctx.putDir('runtime', '/opt/agent-runtime');
       await ctx.exec('chown -R agent:agent /opt/agent-runtime; systemctl restart agent-terminals');
+    },
+  },
+  {
+    version: 27,
+    name: 'opencode-proxy: stop respawning a proxy that cannot start',
+    apply: async (ctx) => {
+      // oc-go-cc refuses to start without a config file, and nothing ever ran
+      // `oc-go-cc init`, so on EVERY agent the supervisor forked it, watched it
+      // exit(1), and forked it again 2s later — forever. It went unnoticed
+      // because the proxy is only load-bearing for opencodeGo agents and there
+      // were none; the visible damage was a console full of the same usage
+      // banner ~30x/minute and a journal growing without bound.
+      //
+      // Two independent fixes, since either alone would have prevented this:
+      // the supervisor now starts the chain only for an agent that can actually
+      // use it and gives up after bounded backoff, and the config it wanted is
+      // created here (and at image build) so opencodeGo agents still work.
+      await ctx.putDir('runtime', '/opt/agent-runtime');
+      await ctx.exec(
+        [
+          'chown -R agent:agent /opt/agent-runtime',
+          // runuser, not su: PAM is what breaks on an ID-map fault, and this
+          // must not become the thing that fails on an otherwise fine agent.
+          'test -f /home/agent/.config/oc-go-cc/config.json || ' +
+            'HOME=/home/agent runuser -u agent -- /usr/local/bin/oc-go-cc init || true',
+          'systemctl restart agent-terminals',
+        ].join('; '),
+      );
     },
   },
 ];

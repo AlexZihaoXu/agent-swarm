@@ -74,14 +74,17 @@ const OPENCODE_CONFIG_FILE = path.join(HOME, '.swarm', 'oc-go-cc-config.json');
 //   - `.swarm/auth`            → CLAUDE_CODE_OAUTH_TOKEN (subscription auth)
 //   - identity.autoCompactPct  → CLAUDE_AUTOCOMPACT_PCT_OVERRIDE (auto-compact %)
 //   - identity.provider        → routes claude through opencode-proxy when 'opencodeGo'
+function readIdentity() {
+  try {
+    return JSON.parse(fs.readFileSync(IDENTITY_FILE, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 function settingsEnv() {
   const env = {};
-  let identity = null;
-  try {
-    identity = JSON.parse(fs.readFileSync(IDENTITY_FILE, 'utf8'));
-  } catch {
-    /* no identity — defaults below */
-  }
+  const identity = readIdentity();
   const provider = (identity && identity.provider) || 'anthropic';
   // Anthropic stays on OAuth (auth file → CLAUDE_CODE_OAUTH_TOKEN, no base URL
   // override or Claude Code disables OAuth and bails). OpenCode Go uses the
@@ -110,7 +113,9 @@ function settingsEnv() {
   } else {
     // Unknown provider (e.g. an agent created by a newer gateway). Give it
     // nothing rather than defaulting to the Anthropic credential.
-    console.error(`[settings] unknown provider ${JSON.stringify(provider)} — no credential applied`);
+    console.error(
+      `[settings] unknown provider ${JSON.stringify(provider)} — no credential applied`,
+    );
   }
   if (identity) {
     const pct = identity.autoCompactPct;
@@ -134,22 +139,48 @@ function settingsEnv() {
   return env;
 }
 
+// Whether this agent has any reason to run the OpenCode Go chain. It used to be
+// started for every agent on the theory that an idle proxy costs nothing, but
+// oc-go-cc REFUSES to start without a config file and the supervisor respawned
+// it every 2s forever — so on every agent that had never been given OpenCode Go
+// credentials (i.e. all of them) it was an infinite fork loop flooding the
+// console. Start it only when it can actually serve someone.
+function opencodeNeeded() {
+  const identity = readIdentity();
+  if (identity && identity.provider === 'opencodeGo') return true;
+  // An operator may provision credentials ahead of flipping the provider; honour
+  // either as intent to run the chain.
+  return fs.existsSync(OPENCODE_KEY_FILE) || fs.existsSync(OPENCODE_CONFIG_FILE);
+}
+
+// Restart policy for supervised children: back off exponentially and give up
+// rather than spin. A child that dies instantly every time is misconfigured, not
+// unlucky, and retrying it 30x/minute until the container stops helps nobody.
+const CHILD_RESTART_BASE_MS = 2000;
+const CHILD_RESTART_MAX_MS = 60_000;
+const CHILD_RESTART_LIMIT = 8;
+/** A child that stayed up this long is considered to have started successfully,
+ *  so its backoff resets and a later crash gets the full retry budget again. */
+const CHILD_HEALTHY_MS = 60_000;
+
 // Start oc-go-cc as a long-lived child of the supervisor. It listens on
-// 127.0.0.1 only (never reachable from outside the container) and serves every
-// agent regardless of provider — the env wiring above only points claude at
-// it when the agent is set to opencodeGo, so anthropic agents pay nothing for
-// it being up. The API key is read from disk on each (re)spawn so an operator
-// edit propagates without a recreate.
+// 127.0.0.1 only (never reachable from outside the container). The API key is
+// read from disk on each (re)spawn so an operator edit propagates without a
+// recreate.
 function startOpencodeProxy() {
   if (!fs.existsSync(OPENCODE_PROXY_BIN)) return;
+  if (!opencodeNeeded()) {
+    console.log('[opencode-proxy] not configured for this agent — not starting');
+    return;
+  }
   // oc-go-cc writes its PID file under ~/.config/oc-go-cc/ — ensure the dir
-  // exists before the first spawn, otherwise it errors out and the supervisor
-  // loops on restart forever.
+  // exists before the first spawn, otherwise it errors out on that too.
   try {
     fs.mkdirSync(path.join(HOME, '.config', 'oc-go-cc'), { recursive: true });
   } catch {
     /* best-effort — the proxy reports its own dir-error if this somehow fails */
   }
+  let failures = 0;
   const start = () => {
     let apiKey = '';
     try {
@@ -166,6 +197,7 @@ function startOpencodeProxy() {
     };
     const args = ['serve'];
     if (fs.existsSync(OPENCODE_CONFIG_FILE)) args.push('-c', OPENCODE_CONFIG_FILE);
+    const startedAt = Date.now();
     const child = cp.spawn(OPENCODE_PROXY_BIN, args, {
       env,
       stdio: ['ignore', 'inherit', 'inherit'],
@@ -173,8 +205,21 @@ function startOpencodeProxy() {
     child.on('exit', (code) => {
       // Restart on unexpected exit — no systemd unit keeps it up, so a one-off
       // crash shouldn't kill the agent's ability to reach OpenCode Go.
-      console.warn(`[opencode-proxy] exited (${code}) — restarting in 2s`);
-      setTimeout(start, 2000);
+      if (Date.now() - startedAt >= CHILD_HEALTHY_MS) failures = 0;
+      failures += 1;
+      if (failures > CHILD_RESTART_LIMIT) {
+        console.error(
+          `[opencode-proxy] exited (${code}) ${failures} times in a row — giving up. ` +
+            'Fix the OpenCode Go config/key and restart the agent to retry.',
+        );
+        return;
+      }
+      const delay = Math.min(CHILD_RESTART_MAX_MS, CHILD_RESTART_BASE_MS * 2 ** (failures - 1));
+      console.warn(
+        `[opencode-proxy] exited (${code}) — restarting in ${Math.round(delay / 1000)}s ` +
+          `(attempt ${failures}/${CHILD_RESTART_LIMIT})`,
+      );
+      setTimeout(start, delay);
     });
   };
   start();
@@ -708,9 +753,10 @@ function toolDetail(input) {
     // Fall back to the first array of scalars (computer-use `hotkey` passes
     // `keys: ["ctrl","c"]`, which the string search above never matched — so
     // hotkeys used to render with no detail at all).
-    (Object.values(input).find((x) => Array.isArray(x) && x.every((e) => typeof e !== 'object')) ||
-      [])
-      .join('+') ||
+    (
+      Object.values(input).find((x) => Array.isArray(x) && x.every((e) => typeof e !== 'object')) ||
+      []
+    ).join('+') ||
     '';
   const s = String(v).replace(/\s+/g, ' ').trim();
   return s.length > 140 ? s.slice(0, 140) + '…' : s;
@@ -733,7 +779,8 @@ function toolArgs(input) {
     if (n >= 8) break;
     let val;
     if (v == null) continue;
-    else if (typeof v === 'string') val = v.length > TOOL_ARG_MAX ? v.slice(0, TOOL_ARG_MAX) + '…' : v;
+    else if (typeof v === 'string')
+      val = v.length > TOOL_ARG_MAX ? v.slice(0, TOOL_ARG_MAX) + '…' : v;
     else if (typeof v === 'number' || typeof v === 'boolean') val = v;
     else if (Array.isArray(v) && v.every((e) => typeof e !== 'object'))
       val = v.slice(0, 12).map((e) => String(e));
