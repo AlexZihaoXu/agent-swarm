@@ -3460,7 +3460,12 @@ export class AgentManager {
     // Keep the FIRST time we saw them plus a running count, which is more
     // useful than a bare timestamp for judging whether to allow-list someone.
     const prev = blocked[userId];
-    blocked[userId] = { at: prev?.at ?? Date.now(), last: Date.now(), reason, count: (prev?.count ?? 0) + 1 };
+    blocked[userId] = {
+      at: prev?.at ?? Date.now(),
+      last: Date.now(),
+      reason,
+      count: (prev?.count ?? 0) + 1,
+    };
     const entries = Object.entries(blocked).sort((a, b) => b[1].last - a[1].last);
     this.writeDmPeers(id, {
       ...cur,

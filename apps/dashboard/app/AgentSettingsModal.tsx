@@ -70,28 +70,23 @@ const MODEL_HELP: Record<string, string> = {
 const PROVIDER_NOTES: { title: string; body: string }[] = [
   {
     title: 'Subagents and ultracode follow the provider',
-    body:
-      'The provider is set as environment on the claude process, and subagents are spawned as its children, so they inherit it. A wide ultracode fan-out therefore spends THIS provider’s quota, multiplied by the number of agents — not Anthropic’s. Concurrency is capped, but that bounds parallelism, not total spend.',
+    body: 'The provider is set as environment on the claude process, and subagents are spawned as its children, so they inherit it. A wide ultracode fan-out therefore spends THIS provider’s quota, multiplied by the number of agents — not Anthropic’s. Concurrency is capped, but that bounds parallelism, not total spend.',
   },
   {
     title: 'One model serves every tier',
-    body:
-      'Claude Code asks for different models per tier (background, think, fast, long-context). Those names mean nothing to a non-Anthropic backend, so the proxy maps them all to the single configured model. A cheap background task costs the same as a hard one.',
+    body: 'Claude Code asks for different models per tier (background, think, fast, long-context). Those names mean nothing to a non-Anthropic backend, so the proxy maps them all to the single configured model. A cheap background task costs the same as a hard one.',
   },
   {
     title: 'Model changes need a respawn',
-    body:
-      'The model is applied when claude next starts, not mid-session — the dashboard writes it to the agent’s identity and it takes effect on the following (re)spawn.',
+    body: 'The model is applied when claude next starts, not mid-session — the dashboard writes it to the agent’s identity and it takes effect on the following (re)spawn.',
   },
   {
     title: 'Why a switch can be refused',
-    body:
-      'Selecting ChatGPT checks that the agent’s runtime actually contains the Codex proxy, and refuses if not. It checks the file rather than the migration version, because a freshly created agent is stamped current while its runtime comes from the image — an agent that looks up to date can still be missing it. Without that check the agent silently falls back to the Anthropic token and bills the wrong subscription. Fix by upgrading the agent, or rebuilding the agent image.',
+    body: 'Selecting ChatGPT checks that the agent’s runtime actually contains the Codex proxy, and refuses if not. It checks the file rather than the migration version, because a freshly created agent is stamped current while its runtime comes from the image — an agent that looks up to date can still be missing it. Without that check the agent silently falls back to the Anthropic token and bills the wrong subscription. Fix by upgrading the agent, or rebuilding the agent image.',
   },
   {
     title: 'Context windows differ by ~4x',
-    body:
-      'On ChatGPT, gpt-5.4 measures ~910k, the gpt-5.6 family ~355k, and gpt-5.5 / gpt-5.4-mini ~245k. Claude Code does not recognise these ids, so it applies its own 200k ceiling and compacts below that — the extra room is only reachable with CLAUDE_CODE_MAX_CONTEXT_TOKENS, which also requires DISABLE_COMPACT and so turns auto-compaction off entirely.',
+    body: 'On ChatGPT, gpt-5.4 measures ~910k, the gpt-5.6 family ~355k, and gpt-5.5 / gpt-5.4-mini ~245k. Claude Code does not recognise these ids, so it applies its own 200k ceiling and compacts below that — the extra room is only reachable with CLAUDE_CODE_MAX_CONTEXT_TOKENS, which also requires DISABLE_COMPACT and so turns auto-compaction off entirely.',
   },
 ];
 

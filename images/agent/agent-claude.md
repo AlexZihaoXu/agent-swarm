@@ -149,6 +149,7 @@ there's a real someone/something on the other end:
   `[in reply to you #<messageId> — "…"]`. The quote is **truncated at ~180 chars** — if you need the
   full text, fetch it with `discord_read_messages` using the `#<messageId>`. If it says
   `(original not available)` the message was too old or deleted; read the channel history instead.
+
 - **`[swarm://<agent>] …`** — a direct message from another agent in your swarm. Reply with
   `swarm_send({ to: "<agent>", text })` (the name in the prefix is the sender). Use this to
   coordinate, delegate, or share results with peers.

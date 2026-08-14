@@ -173,9 +173,7 @@ export async function listChannels(token: string, guildId: string): Promise<Disc
   // still render its normal channels rather than failing the whole sidebar.
   let threads: DiscordChannel[] = [];
   try {
-    const active = (await rest(token).get(
-      `/guilds/${guildId}/threads/active`,
-    )) as {
+    const active = (await rest(token).get(`/guilds/${guildId}/threads/active`)) as {
       threads?: {
         id: string;
         type: number;

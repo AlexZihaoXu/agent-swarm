@@ -12,8 +12,8 @@
     "typecheck": "pnpm -r --if-present typecheck",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "format": "prettier --write .",
-    "format:check": "prettier --check .",
+    "format": "prettier --write apps docs images scripts \"*.{json,md,js,ts,yml,yaml}\"",
+    "format:check": "prettier --check apps docs images scripts \"*.{json,md,js,ts,yml,yaml}\"",
     "prepare": "lefthook install"
   },
   "devDependencies": {

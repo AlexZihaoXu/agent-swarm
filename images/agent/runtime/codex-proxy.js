@@ -411,7 +411,10 @@ function createCodexProxy({ logger = console } = {}) {
           return res.end(
             JSON.stringify({
               type: 'error',
-              error: { type: 'api_error', message: `Codex backend ${upstream.status}: ${text.slice(0, 300)}` },
+              error: {
+                type: 'api_error',
+                message: `Codex backend ${upstream.status}: ${text.slice(0, 300)}`,
+              },
             }),
           );
         }

@@ -322,7 +322,8 @@ function CodexLimitCircle({ limits }: { limits: NonNullable<AgentStats['codexLim
             </ProgressCircle.Track>
           </ProgressCircle>
           <span className="text-foreground">
-            {Math.round(v)}%{fmtWindow(worst.windowMinutes) && ` / ${fmtWindow(worst.windowMinutes)}`}
+            {Math.round(v)}%
+            {fmtWindow(worst.windowMinutes) && ` / ${fmtWindow(worst.windowMinutes)}`}
           </span>
         </span>
       </Tooltip.Trigger>

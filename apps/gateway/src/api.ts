@@ -216,9 +216,7 @@ function agentActor(
  *  Secure and silently break login. */
 function isSecureRequest(req: IncomingMessage): boolean {
   if ((req.socket as { encrypted?: boolean }).encrypted === true) return true;
-  return (
-    config.trustProxy && fromTrustedProxy(req) && req.headers['x-forwarded-proto'] === 'https'
-  );
+  return config.trustProxy && fromTrustedProxy(req) && req.headers['x-forwarded-proto'] === 'https';
 }
 
 /** Apply permissive CORS for the dashboard origin; answer preflight directly. */
@@ -1632,7 +1630,8 @@ async function handleDiscord(
           // shared server. This is the ONLY hard evidence of undeliverability
           // we ever get, so persist it; the agent sends with its own token and
           // its failures never reach us.
-          const code = (e as { code?: number; rawError?: { code?: number } })?.code ??
+          const code =
+            (e as { code?: number; rawError?: { code?: number } })?.code ??
             (e as { rawError?: { code?: number } })?.rawError?.code;
           if (dmUser && code === 50007) {
             manager.recordDmUndeliverable(id, dmUser, 'Discord 50007: cannot send to this user');

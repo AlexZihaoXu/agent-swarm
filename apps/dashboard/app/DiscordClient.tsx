@@ -923,7 +923,11 @@ export function DiscordClient({ agentId }: { agentId: string }) {
                     key={u.id}
                     type="button"
                     onClick={() => void openDm(u.id)}
-                    title={warn ? `${u.displayName} · ${u.id}\n${warn.detail}` : `${u.displayName} · ${u.id}`}
+                    title={
+                      warn
+                        ? `${u.displayName} · ${u.id}\n${warn.detail}`
+                        : `${u.displayName} · ${u.id}`
+                    }
                     className={`hover:bg-surface-tertiary mx-2 flex w-[calc(100%-1rem)] cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors duration-100 ${
                       target?.kind === 'dm' && target.userId === u.id
                         ? 'bg-surface-tertiary text-foreground'
