@@ -386,6 +386,14 @@ export const migrations: Migration[] = [
           // must not become the thing that fails on an otherwise fine agent.
           'test -f /home/agent/.config/oc-go-cc/config.json || ' +
             'HOME=/home/agent runuser -u agent -- /usr/local/bin/oc-go-cc init || true',
+          // The loop wrote ~10 GB of identical usage banners across the fleet and
+          // pushed two agents to journald's 4 GB default cap, where it began
+          // evicting the real history. Cap it and reclaim what it took.
+          'install -d /etc/systemd/journald.conf.d',
+          "printf '[Journal]\\nSystemMaxUse=300M\\nRuntimeMaxUse=100M\\n' > /etc/systemd/journald.conf.d/50-swarm-size.conf",
+          'systemctl restart systemd-journald || true',
+          'journalctl --rotate || true',
+          'journalctl --vacuum-size=300M || true',
           'systemctl restart agent-terminals',
         ].join('; '),
       );

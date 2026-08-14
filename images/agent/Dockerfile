@@ -366,6 +366,14 @@ RUN install -d /etc/systemd/system/tigervncserver@:1.service.d \
     && printf '[Unit]\nConditionPathExists=!/home/agent/.swarm/desktop-disabled\n[Service]\nRestart=always\nRestartSec=5\n' \
        > /etc/systemd/system/novnc.service.d/50-desktop-toggle.conf
 
+# Cap the journal. journald's default is 10% of the filesystem, which on this
+# host meant 4 GB per agent — a misbehaving service filled it in days and then
+# evicted the history you would need to diagnose the thing that filled it. A
+# few hundred MB is far more log than an agent container is ever read back for.
+RUN install -d /etc/systemd/journald.conf.d \
+    && printf '[Journal]\nSystemMaxUse=300M\nRuntimeMaxUse=100M\n' \
+       > /etc/systemd/journald.conf.d/50-swarm-size.conf
+
 # Boot to multi-user (no gdm greeter — the session comes up via TigerVNC),
 # and enable our services.
 RUN systemctl set-default multi-user.target \

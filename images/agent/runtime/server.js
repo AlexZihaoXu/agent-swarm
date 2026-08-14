@@ -92,6 +92,10 @@ function settingsEnv() {
   // placeholder Claude Code requires when an explicit base URL is set (the
   // proxy reads the real key from disk).
   if (provider === 'opencodeGo') {
+    // The chain is no longer started for every agent, so an agent switched to
+    // opencodeGo after boot would otherwise point claude at a dead port. This is
+    // a no-op once it's up.
+    startOpencodeProxy();
     env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${OPENCODE_PROXY_PORT}`;
     env.ANTHROPIC_AUTH_TOKEN = 'opencode-go-via-proxy';
   } else if (provider === 'chatgpt') {
@@ -167,12 +171,18 @@ const CHILD_HEALTHY_MS = 60_000;
 // 127.0.0.1 only (never reachable from outside the container). The API key is
 // read from disk on each (re)spawn so an operator edit propagates without a
 // recreate.
+let opencodeStarted = false;
 function startOpencodeProxy() {
+  if (opencodeStarted) return;
   if (!fs.existsSync(OPENCODE_PROXY_BIN)) return;
   if (!opencodeNeeded()) {
+    // Not fatal and not final — settingsEnv() calls back here on every session
+    // spawn, so flipping an agent to opencodeGo brings the chain up on its next
+    // session instead of waiting for a supervisor restart.
     console.log('[opencode-proxy] not configured for this agent — not starting');
     return;
   }
+  opencodeStarted = true;
   // oc-go-cc writes its PID file under ~/.config/oc-go-cc/ — ensure the dir
   // exists before the first spawn, otherwise it errors out on that too.
   try {
