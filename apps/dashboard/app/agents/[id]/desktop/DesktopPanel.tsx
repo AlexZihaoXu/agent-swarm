@@ -1,7 +1,7 @@
 'use client';
 
 import { LuMonitorOff } from 'react-icons/lu';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { getAgent } from '@/lib/gateway';
 import { useDesktopLock } from '../DesktopLock';
 
@@ -26,7 +26,16 @@ export function DesktopPanel({
   title: string;
 }) {
   const { locked } = useDesktopLock();
+  const frameRef = useRef<HTMLIFrameElement>(null);
   const [desktopOn, setDesktopOn] = useState<boolean | null>(null);
+
+  // Unlocking is what hands the keyboard to the agent. Focus the iframe on that
+  // transition so its own shortcuts — Ctrl-C/Ctrl-V included — work immediately,
+  // rather than only after the user happens to click into the desktop. Without
+  // this the keys stay with the dashboard and Ctrl-C copies this page.
+  useEffect(() => {
+    if (!locked) frameRef.current?.focus();
+  }, [locked]);
   useEffect(() => {
     let alive = true;
     const load = () =>
@@ -57,7 +66,7 @@ export function DesktopPanel({
 
   return (
     <div className="relative h-full w-full">
-      <iframe title={title} src={src} className="h-full w-full border-0 bg-black" />
+      <iframe ref={frameRef} title={title} src={src} className="h-full w-full border-0 bg-black" />
 
       {locked && (
         // Capture-phase blockers so nothing reaches the iframe while locked.

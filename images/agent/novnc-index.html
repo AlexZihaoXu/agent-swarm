@@ -34,7 +34,8 @@
       const base = location.pathname.replace(/[^/]*$/, '');
       const url = `${wsProto}://${location.host}${base}websockify`;
 
-      const rfb = new RFB(document.getElementById('screen'), url);
+      const screen = document.getElementById('screen');
+      const rfb = new RFB(screen, url);
 
       // Scale the remote framebuffer to fit the window (CSS scaling at 1x —
       // the canvas stays at the server's 1920x1080, so no HiDPI doubling).
@@ -42,6 +43,28 @@
       // Never request a server-side resolution change — desktop is locked 1080p.
       rfb.resizeSession = false;
       rfb.clipViewport = false;
+
+      // Keyboard shortcuts land in the agent's OWN session, not the browser's.
+      // noVNC preventDefaults every keydown and forwards the keysym, so once it
+      // holds focus a Ctrl-C/Ctrl-V is copy/paste inside this container — against
+      // its own X selection, isolated from the host and from every other agent.
+      // Nothing is bridged either way; there is no clipboard pass-through here.
+      //
+      // The catch is entirely about focus: noVNC only focuses on click, so a
+      // click anywhere else silently hands the shortcuts back to the browser and
+      // Ctrl-C copies the surrounding page instead. Grab focus on connect and
+      // whenever the pointer is over the screen, which is when those keys are
+      // meant for the desktop anyway.
+      const grab = () => {
+        try {
+          rfb.focus();
+        } catch {
+          /* not connected yet — the connect handler below covers it */
+        }
+      };
+      rfb.addEventListener('connect', grab);
+      screen.addEventListener('pointerenter', grab);
+      screen.addEventListener('pointerdown', grab);
     </script>
   </body>
 </html>

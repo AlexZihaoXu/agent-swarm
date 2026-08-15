@@ -399,6 +399,29 @@ export const migrations: Migration[] = [
       );
     },
   },
+  {
+    version: 28,
+    name: 'desktop: let Ctrl-C/Ctrl-V reach the agent’s own session',
+    apply: async (ctx) => {
+      // noVNC preventDefaults every keydown and forwards the keysym, so once it
+      // holds focus these are copy/paste INSIDE the container, against its own X
+      // selection — nothing is bridged to or from the host clipboard. The bug was
+      // only ever about focus: noVNC grabs it on click alone, so a click anywhere
+      // else quietly handed the shortcuts back to the browser and Ctrl-C copied
+      // the surrounding page instead of the agent's selection.
+      //
+      // Staged through /opt/agent-runtime rather than written straight to
+      // /usr/share/novnc: putArchive resolves the destination in the container's
+      // rootfs, and on a running sysbox agent that fails for a path still sitting
+      // in a lower image layer. /opt/agent-runtime is already copied up.
+      await ctx.putFile('novnc-index.html', '/opt/agent-runtime/novnc-index.html');
+      // Static file — websockify reads it per request, so nothing restarts and no
+      // session is interrupted.
+      await ctx.exec(
+        'install -m 0644 /opt/agent-runtime/novnc-index.html /usr/share/novnc/index.html',
+      );
+    },
+  },
 ];
 
 /** Highest migration version (the version a fully up-to-date agent is at). */
