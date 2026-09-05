@@ -422,6 +422,47 @@ export const migrations: Migration[] = [
       );
     },
   },
+  {
+    version: 29,
+    name: 'cups: mask the printing stack that filled the host disk',
+    apply: async (ctx) => {
+      // An agent has no printer, but ubuntu-desktop-minimal's recommends pull in
+      // cups-daemon and systemd starts it. On an agent carrying the sysbox
+      // ID-shift fault, /usr/lib/cups/notifier/dbus reads as uid 65534, cupsd
+      // refuses to run a notifier whose permissions it cannot trust, and the
+      // dbus subscription retries forever -- two lines per iteration, no backoff.
+      // /var/log/cups/error_log reached ~50 GB on each of four agents (202 GB)
+      // and took the host to 100% full twice before anyone looked, because the
+      // file lives in the container's writable layer rather than under
+      // .swarm_data, so it is invisible to a du of the agent workspaces.
+      //
+      // Migration 27's journald cap cannot catch this: cupsd writes error_log
+      // directly and never goes through the journal.
+      //
+      // Every step is `|| true`. On an ID-shifted agent /etc and /var/log are
+      // owned outside the container's userns map, so the persistent mask and the
+      // truncate can both legitimately fail with EACCES -- and a migration that
+      // throws there would block every later migration on the agents that need
+      // them most. `mask --runtime` writes to /run (tmpfs, always writable) and
+      // holds until the next container start, by which point an agent recreated
+      // from the current image is masked at build time anyway.
+      await ctx.exec(
+        [
+          'systemctl stop cups.service cups.socket cups.path cups-browsed.service || true',
+          'systemctl mask cups.service cups.socket cups.path cups-browsed.service || ' +
+            'systemctl mask --runtime cups.service cups.socket cups.path cups-browsed.service || true',
+          // Reclaim what the loop already wrote. truncate, not rm: on an agent
+          // where cupsd somehow survived the stop it still holds the fd, and an
+          // unlinked inode would hold the blocks until it exits.
+          'truncate -s 0 /var/log/cups/error_log 2>/dev/null || true',
+          // Secondary net, matching the image: bound the file even if something
+          // later unmasks cups.
+          "grep -q '^MaxLogSize' /etc/cups/cupsd.conf 2>/dev/null || " +
+            "printf 'MaxLogSize 16m\\nMaxLogFiles 1\\n' >> /etc/cups/cupsd.conf 2>/dev/null || true",
+        ].join('; '),
+      );
+    },
+  },
 ];
 
 /** Highest migration version (the version a fully up-to-date agent is at). */

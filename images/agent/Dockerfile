@@ -386,7 +386,24 @@ RUN systemctl set-default multi-user.target \
     && systemctl enable tailscaled.service \
     && systemctl enable ts-hosts-sync.timer \
     && (systemctl mask gdm3.service 2>/dev/null || true) \
+    && (systemctl mask cups.service cups.socket cups.path cups-browsed.service \
+        2>/dev/null || true) \
     && echo 'DISABLE_AUTOUPDATER=1' >> /etc/environment
+
+# CUPS: masked above, and capped here in case anything ever unmasks it.
+# An agent container has no printer, but ubuntu-desktop-minimal's recommends
+# pull in cups-daemon anyway and systemd starts it. On an agent whose rootfs
+# carries the sysbox ID-shift fault, /usr/lib/cups/notifier/dbus reads as
+# uid 65534, cupsd's security check refuses to run a notifier it cannot trust,
+# and the dbus subscription retries forever - two log lines per iteration with
+# no backoff. That filled /var/log/cups/error_log to ~50 GB on each of four
+# agents (202 GB total) and took the host to 100% full, twice.
+#
+# The journald cap below does not cover this: cupsd writes error_log itself
+# instead of going through the journal, so the existing cap never saw it.
+# MaxLogSize makes cupsd rotate at 16 MB and keep one generation, bounding the
+# damage to ~32 MB per agent even if the retry loop ever returns.
+RUN printf 'MaxLogSize 16m\nMaxLogFiles 1\n' >> /etc/cups/cupsd.conf 2>/dev/null || true
 
 # No GDM means GNOME can't lock the screen and nags "Screen Lock disabled" at
 # login. Disable lock/idle-blanking entirely (ephemeral agent desktops).
