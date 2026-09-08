@@ -463,6 +463,21 @@ export const migrations: Migration[] = [
       );
     },
   },
+  {
+    version: 30,
+    name: 'codex: the Default model id was one OpenAI has since dropped',
+    apply: async (ctx) => {
+      // The proxy's DEFAULT_MODEL was gpt-5.4, which the ChatGPT/Codex backend
+      // now refuses outright ("not supported when using Codex with a ChatGPT
+      // account"), so every chatgpt-provider agent left on Default was talking
+      // to a model that no longer exists for it. Re-probed 2026-09-08: the
+      // accepted set is gpt-6-astra, gpt-5.6-sol/terra/luna, gpt-5.5 and
+      // gpt-5.4-mini; the default is now gpt-6-astra, which is also the largest
+      // context of the set. An agent with an explicit model keeps it.
+      await ctx.putDir('runtime', '/opt/agent-runtime');
+      await ctx.exec('chown -R agent:agent /opt/agent-runtime; systemctl restart agent-terminals');
+    },
+  },
 ];
 
 /** Highest migration version (the version a fully up-to-date agent is at). */

@@ -86,7 +86,7 @@ const PROVIDER_NOTES: { title: string; body: string }[] = [
   },
   {
     title: 'Context windows differ by ~4x',
-    body: 'On ChatGPT, gpt-5.4 measures ~910k, the gpt-5.6 family ~355k, and gpt-5.5 / gpt-5.4-mini ~245k. Claude Code does not recognise these ids, so it applies its own 200k ceiling and compacts below that — the extra room is only reachable with CLAUDE_CODE_MAX_CONTEXT_TOKENS, which also requires DISABLE_COMPACT and so turns auto-compaction off entirely.',
+    body: 'On ChatGPT, gpt-6-astra is 1.05M (OpenAI’s published figure), the gpt-5.6 family measures ~355k, and gpt-5.5 / gpt-5.4-mini ~245k. Claude Code does not recognise these ids, so it applies its own 200k ceiling and compacts below that — the extra room is only reachable with CLAUDE_CODE_MAX_CONTEXT_TOKENS, which also requires DISABLE_COMPACT and so turns auto-compaction off entirely.',
   },
 ];
 

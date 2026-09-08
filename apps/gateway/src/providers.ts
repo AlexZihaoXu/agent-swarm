@@ -36,25 +36,31 @@ const CHATGPT: ProviderInfo = {
   auth: 'oauth',
   label: 'ChatGPT (Codex)',
   // ENUMERATED BY PROBING the live backend with a ChatGPT account — there is no
-  // models endpoint (codex/models 400s, backend-api/models 403s). Everything
-  // else tried is rejected with "not supported when using Codex with a ChatGPT
-  // account": the -codex ids (gpt-5.4-codex, gpt-5.5-codex, codex-max) are
-  // API-key-only, and gpt-5.6 / gpt-5.5-fast / gpt-5.4-nano / gpt-5.1 are not
-  // available on this path. Re-probe when OpenAI ships new models.
-  // Context windows are MEASURED, not published: probed 2026-07-28 by growing
-  // the input until the stream returned `context_length_exceeded`, so they are
-  // floors (the largest input actually accepted) rather than exact figures.
+  // models endpoint (codex/models 400s, backend-api/models 403s). Anything not
+  // listed here came back "not supported when using Codex with a ChatGPT
+  // account": the -codex ids are API-key-only, and so are the bare family names
+  // (gpt-6, gpt-5.6) and the Astra variants (gpt-6-astra-mini/-pro/-codex).
+  // Re-probe when OpenAI ships new models — the set MOVES, it does not only grow.
+  //
+  // Re-probed 2026-09-08, which is how gpt-5.4 came off this list: OpenAI had
+  // dropped it from the ChatGPT path and it was still our Default, so every
+  // agent left on Default was talking to a model the backend refused.
+  //
+  // Context windows for the 5.x ids are MEASURED, not published: probed
+  // 2026-07-28 by growing the input until the stream returned
+  // `context_length_exceeded`, so they are floors rather than exact figures.
+  // Astra's is OpenAI's published 1,050,000 and has NOT been measured here.
   // Worth surfacing because they differ by ~4x across the list, and because
   // Claude Code caps itself at 200k for these ids unless
   // CLAUDE_CODE_MAX_CONTEXT_TOKENS is set — so the extra room is only reachable
   // when that override is on.
   models: [
-    { label: 'Default (gpt-5.4) — 910k ctx', value: '' },
+    { label: 'Default (gpt-6-astra) — 1.05M ctx', value: '' },
+    { label: 'GPT-6 Astra — 1.05M ctx', value: 'gpt-6-astra' },
     { label: 'GPT-5.6 Sol — 355k ctx', value: 'gpt-5.6-sol' },
     { label: 'GPT-5.6 Terra — 355k ctx', value: 'gpt-5.6-terra' },
     { label: 'GPT-5.6 Luna — 355k ctx', value: 'gpt-5.6-luna' },
     { label: 'GPT-5.5 — 245k ctx', value: 'gpt-5.5' },
-    { label: 'GPT-5.4 — 910k ctx', value: 'gpt-5.4' },
     { label: 'GPT-5.4 mini — 245k ctx', value: 'gpt-5.4-mini' },
   ],
 };

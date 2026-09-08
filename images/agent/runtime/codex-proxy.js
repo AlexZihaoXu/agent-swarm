@@ -33,11 +33,15 @@ const UPSTREAM = 'https://chatgpt.com/backend-api/codex/responses';
 /** Sent verbatim by the Codex CLI; the backend rejects unknown originators. */
 const ORIGINATOR = 'codex_cli_rs';
 // The `-codex` ids are API-key-only and 400 here, so this default MUST NOT be
-// one. Of the ids a ChatGPT account does accept, gpt-5.4 also has by far the
-// largest context window (~910k measured, vs ~355k for the gpt-5.6 family and
-// ~245k for gpt-5.5 / gpt-5.4-mini), which makes it the right default for
-// long-running agents.
-const DEFAULT_MODEL = 'gpt-5.4';
+// one. It was gpt-5.4 until OpenAI dropped that id from the ChatGPT path, at
+// which point every agent on Default was silently talking to a model the
+// backend refused — so this needs re-probing whenever OpenAI ships a release,
+// not just extending. Of the ids a ChatGPT account accepts as of 2026-09-08,
+// gpt-6-astra is both the most capable and much the largest context
+// (1,050,000 published, vs ~355k for the gpt-5.6 family and ~245k for
+// gpt-5.5 / gpt-5.4-mini), which makes it the right default for long-running
+// agents. Keep it in step with the Default entry in providers.ts.
+const DEFAULT_MODEL = 'gpt-6-astra';
 
 /** Latest rate-limit snapshot seen on a response, for the dashboard's usage
  *  ring. The backend reports these on real calls, which is the only reliable
