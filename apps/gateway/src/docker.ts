@@ -265,10 +265,20 @@ export class AgentManager {
   private packagesDir(): string {
     return join(this.cfg.swarmDataMount, 'packages');
   }
-  /** The agent's identity file, on its persistent disk (gateway-local view).
-   *  Bind-mounted to /home/agent/.swarm/identity.json inside the agent. */
+  /** The agent's identity mirror, on its persistent disk (gateway-local view);
+   *  the agent sees it at /home/agent/.swarm/identity.json. */
   private identityFile(id: string): string {
     return join(this.agentDataDir(id), '.swarm', 'identity.json');
+  }
+  /** The gateway's own per-agent state directory (see config.agentStateDir). */
+  private agentStateDir(id: string): string {
+    return join(this.cfg.agentStateDir, id);
+  }
+  /** The identity the gateway trusts. The agent is root in its container and
+   *  can rewrite its disk, so permissions, roles, groups and resource caps are
+   *  never read back from the mirror. */
+  private trustedIdentityFile(id: string): string {
+    return join(this.agentStateDir(id), 'identity.json');
   }
 
   /** Whether an agent with this id exists (its disk is present). */
@@ -281,13 +291,26 @@ export class AgentManager {
     return this.readIdentity(id)?.name || id;
   }
 
-  /** Read an agent's self-identity from its disk (null if not yet written). */
+  /** Read an agent's identity (null if not yet written). Agents from before the
+   *  gateway kept its own copy have their disk copy adopted once, as it stands
+   *  then; after that the disk copy is only ever written. */
   private readIdentity(id: string): AgentIdentity | null {
-    try {
-      return JSON.parse(readFileSync(this.identityFile(id), 'utf8')) as AgentIdentity;
-    } catch {
-      return null;
+    const read = (file: string) => {
+      try {
+        return JSON.parse(readFileSync(file, 'utf8')) as AgentIdentity;
+      } catch {
+        return null;
+      }
+    };
+    const trusted = this.trustedIdentityFile(id);
+    if (existsSync(trusted)) return read(trusted);
+    if (!existsSync(this.agentDataDir(id))) return null;
+    const adopted = read(this.identityFile(id));
+    if (adopted) {
+      mkdirSync(dirname(trusted), { recursive: true });
+      writeFileSync(trusted, JSON.stringify(adopted, null, 2));
     }
+    return adopted;
   }
 
   /** Write/merge the agent's identity to its disk so it can read its own name. */
@@ -315,8 +338,10 @@ export class AgentManager {
       avatarSeed: patch.avatarSeed !== undefined ? patch.avatarSeed : cur?.avatarSeed,
       volumes: patch.volumes !== undefined ? patch.volumes : (cur?.volumes ?? []),
     };
-    mkdirSync(dirname(this.identityFile(id)), { recursive: true });
-    writeFileSync(this.identityFile(id), JSON.stringify(next, null, 2));
+    for (const file of [this.trustedIdentityFile(id), this.identityFile(id)]) {
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, JSON.stringify(next, null, 2));
+    }
     return next;
   }
 
@@ -2615,6 +2640,7 @@ export class AgentManager {
     // Also delete the agent's persistent disk (the caller must have warned the
     // user — this is irreversible).
     rmSync(this.agentDataDir(id), { recursive: true, force: true });
+    rmSync(this.agentStateDir(id), { recursive: true, force: true });
   }
 
   // --- Integrations --------------------------------------------------------
@@ -3344,7 +3370,8 @@ export class AgentManager {
 
   /** On (re)start, bring back any integration that was left `active`. */
   private async reconnectIntegrations(id: string): Promise<void> {
-    for (const i of integrations.listIntegrations(this.agentDataDir(id))) {
+    const dirs = { state: this.agentStateDir(id), disk: this.agentDataDir(id) };
+    for (const i of integrations.listIntegrations(dirs)) {
       if (i.type === 'discord' && i.status === 'active' && i.credentials.botToken) {
         await this.discord
           .connect(
@@ -3359,10 +3386,10 @@ export class AgentManager {
     }
   }
 
-  private requireAgentDir(id: string): string {
+  private requireAgentDir(id: string): integrations.StoreDirs {
     const dir = this.agentDataDir(id);
     if (!existsSync(dir)) throw Object.assign(new Error('agent not found'), { statusCode: 404 });
-    return dir;
+    return { state: this.agentStateDir(id), disk: dir };
   }
 
   listIntegrations(id: string): IntegrationPublic[] {
@@ -3771,6 +3798,9 @@ export class AgentManager {
     });
     // 7z may restore files as root; the agent runs as uid 1000.
     await execFileAsync('chown', ['-R', '1000:1000', dir]).catch(() => {});
+    // The package's identity and integrations are the operator's to bring
+    // along: drop the fresh agent's gateway copies so they're adopted from it.
+    rmSync(this.agentStateDir(agent.id), { recursive: true, force: true });
     await this.start(agent.id);
     return agent;
   }

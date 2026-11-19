@@ -1,8 +1,10 @@
-// Per-agent integration storage. Integrations live on the agent's persistent
-// disk at `.swarm/integrations.json` (the same place as identity.json), so the
-// in-agent MCP server can read its own credentials and the gateway can manage
-// them. Keyed by integration type (one per type per agent for now).
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+// Per-agent integration storage, keyed by integration type (one per type per
+// agent for now). The gateway's own copy (under config.agentStateDir) is the
+// one it reads: the Discord rules decide who may talk to the agent, and the
+// agent can rewrite anything on its own disk. The disk copy at
+// `.swarm/integrations.json` is a mirror, so the in-agent MCP server can read
+// its own credentials.
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type {
   DiscordRules,
@@ -14,7 +16,24 @@ import type {
 
 type Store = Partial<Record<IntegrationType, Integration>>;
 
-const fileFor = (dataDir: string): string => join(dataDir, '.swarm', 'integrations.json');
+/** Where one agent's integrations live: `state` is the gateway's directory for
+ *  the agent, `disk` its persistent home (as the gateway sees it). */
+export interface StoreDirs {
+  state: string;
+  disk: string;
+}
+
+const stateFile = (dirs: StoreDirs): string => join(dirs.state, 'integrations.json');
+const diskFile = (dirs: StoreDirs): string => join(dirs.disk, '.swarm', 'integrations.json');
+
+function parse(file: string): Store | null {
+  try {
+    const raw = JSON.parse(readFileSync(file, 'utf8')) as Store;
+    return raw && typeof raw === 'object' ? raw : {};
+  } catch {
+    return null;
+  }
+}
 
 /** Defaults a brand-new Discord integration starts with. */
 export const DEFAULT_DISCORD_RULES: DiscordRules = {
@@ -26,32 +45,34 @@ export const DEFAULT_DISCORD_RULES: DiscordRules = {
   respondToMentionsAnywhere: false,
 };
 
-export function readStore(dataDir: string): Store {
-  try {
-    const raw = JSON.parse(readFileSync(fileFor(dataDir), 'utf8')) as Store;
-    return raw && typeof raw === 'object' ? raw : {};
-  } catch {
-    return {};
+/** The gateway's copy. Before one exists (agents from before it did), the disk
+ *  copy is adopted once, as it stands then. */
+export function readStore(dirs: StoreDirs): Store {
+  if (existsSync(stateFile(dirs))) return parse(stateFile(dirs)) ?? {};
+  const adopted = parse(diskFile(dirs));
+  if (adopted) writeStore(dirs, adopted);
+  return adopted ?? {};
+}
+
+function writeStore(dirs: StoreDirs, store: Store): void {
+  const json = JSON.stringify(store, null, 2);
+  for (const f of [stateFile(dirs), diskFile(dirs)]) {
+    mkdirSync(dirname(f), { recursive: true });
+    writeFileSync(f, json);
   }
 }
 
-function writeStore(dataDir: string, store: Store): void {
-  const f = fileFor(dataDir);
-  mkdirSync(dirname(f), { recursive: true });
-  writeFileSync(f, JSON.stringify(store, null, 2));
+export function listIntegrations(dirs: StoreDirs): Integration[] {
+  return Object.values(readStore(dirs)).filter((i): i is Integration => !!i);
 }
 
-export function listIntegrations(dataDir: string): Integration[] {
-  return Object.values(readStore(dataDir)).filter((i): i is Integration => !!i);
-}
-
-export function getIntegration(dataDir: string, type: IntegrationType): Integration | null {
-  return readStore(dataDir)[type] ?? null;
+export function getIntegration(dirs: StoreDirs, type: IntegrationType): Integration | null {
+  return readStore(dirs)[type] ?? null;
 }
 
 /** Create the integration shell if missing (status `added`, default rules). */
-export function addIntegration(dataDir: string, type: IntegrationType, now: number): Integration {
-  const store = readStore(dataDir);
+export function addIntegration(dirs: StoreDirs, type: IntegrationType, now: number): Integration {
+  const store = readStore(dirs);
   if (store[type]) return store[type]!;
   const created: Integration = {
     type,
@@ -62,7 +83,7 @@ export function addIntegration(dataDir: string, type: IntegrationType, now: numb
     updatedAt: now,
   };
   store[type] = created;
-  writeStore(dataDir, store);
+  writeStore(dirs, store);
   return created;
 }
 
@@ -70,12 +91,12 @@ export function addIntegration(dataDir: string, type: IntegrationType, now: numb
  *  bare `added` integration to `configured`; any change clears a prior pass
  *  (back to `configured`) so it must be re-tested before re-applying. */
 export function patchIntegration(
-  dataDir: string,
+  dirs: StoreDirs,
   type: IntegrationType,
   patch: IntegrationPatch,
   now: number,
 ): Integration {
-  const store = readStore(dataDir);
+  const store = readStore(dirs);
   const cur = store[type];
   if (!cur) throw Object.assign(new Error('integration not found'), { statusCode: 404 });
 
@@ -91,21 +112,21 @@ export function patchIntegration(
 
   cur.updatedAt = now;
   store[type] = cur;
-  writeStore(dataDir, store);
+  writeStore(dirs, store);
   return cur;
 }
 
 /** Persist an arbitrary status/test update (used after test/apply/disable). */
-export function setIntegration(dataDir: string, type: IntegrationType, next: Integration): void {
-  const store = readStore(dataDir);
+export function setIntegration(dirs: StoreDirs, type: IntegrationType, next: Integration): void {
+  const store = readStore(dirs);
   store[type] = next;
-  writeStore(dataDir, store);
+  writeStore(dirs, store);
 }
 
-export function removeIntegration(dataDir: string, type: IntegrationType): void {
-  const store = readStore(dataDir);
+export function removeIntegration(dirs: StoreDirs, type: IntegrationType): void {
+  const store = readStore(dirs);
   delete store[type];
-  writeStore(dataDir, store);
+  writeStore(dirs, store);
 }
 
 /** Strip secrets for the API: token → presence flag + last-4 hint. */

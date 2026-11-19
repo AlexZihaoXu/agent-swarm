@@ -63,6 +63,10 @@ export const config = {
   groupsFile: process.env.GROUPS_FILE ?? join(dirname(settingsFile), 'groups.json'),
   /** Per-group chat logs (the running group-chat transcript shown in the UI). */
   groupChatsFile: process.env.GROUP_CHATS_FILE ?? join(dirname(settingsFile), 'group-chats.json'),
+  /** Gateway-owned copy of per-agent state the gateway trusts (identity:
+   *  roles, permissions, groups, caps; integrations: Discord rules). The
+   *  agent's disk only gets a mirror, since the agent can rewrite its disk. */
+  agentStateDir: process.env.AGENT_STATE_DIR ?? join(dirname(settingsFile), 'agents'),
   /** Shared-volume registry (name + size of each loop-image-backed volume). */
   volumesFile: process.env.VOLUMES_FILE ?? join(dirname(settingsFile), 'volumes.json'),
   /** Append-only audit/event log (NDJSON), in the gateway-data volume. Rotated
