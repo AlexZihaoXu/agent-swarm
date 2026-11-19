@@ -8,6 +8,7 @@ import { isAuthed, swarmTokenMayAccess, validSwarmToken } from './auth.js';
 import { proxyHttp, proxyToUpstream, relayWs } from './proxy.js';
 import { logEvent, SYSTEM_ACTOR } from './audit.js';
 import { isCrossSite, isPublicRequest, isUnsafeMethod } from './gate.js';
+import { serveDesktop } from './desktop.js';
 
 const dashboard = new URL(config.dashboardUpstream);
 const dashboardHost = dashboard.hostname;
@@ -92,6 +93,14 @@ const server = http.createServer(async (req, res) => {
     //    Preserve the query string (the terminal WS needs ?session=&cols=&rows=).
     const route = parseAgentPath(url.pathname);
     if (route) {
+      // The desktop viewer page and its scripts come from the gateway's own
+      // copy, never from the agent (see desktop.ts); only its VNC WebSocket is
+      // relayed. An unknown agent is still a 404 (agentHome throws).
+      if (route.service === 'desktop') {
+        manager.agentHome(route.id);
+        serveDesktop(req.method ?? 'GET', route.rest, res);
+        return;
+      }
       const target = await manager.resolveTarget(route.id, route.service);
       // The screenshot is a preview: a stuck one must never hold a browser
       // connection open, since the dashboard polls it for every agent.
@@ -134,7 +143,9 @@ server.on('upgrade', async (req, socket, head) => {
     const route = parseAgentPath(url.pathname);
     if (route) {
       const target = await manager.resolveTarget(route.id, route.service);
-      relayWs(req, socket, head, target.host, target.port, route.rest + url.search);
+      relayWs(req, socket, head, target.host, target.port, route.rest + url.search, {
+        toAgent: true,
+      });
       return;
     }
     // Dashboard HMR socket (Next.js dev) and anything else → the dashboard.
