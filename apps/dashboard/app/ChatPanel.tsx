@@ -38,6 +38,7 @@ import {
   type ChatTurn,
 } from '@/lib/gateway';
 import { useAgentStatsShared } from './AgentStats';
+import { sanitizePromptHtml } from '@/lib/sanitize';
 
 /** The plain-text of a transcript turn, trimmed — for matching queued sends. */
 const userTurnText = (t: ChatTurn): string =>
@@ -601,7 +602,7 @@ export function ChatPanel({ agentId, active }: { agentId: string; active: boolea
     let alive = true;
     const load = () =>
       getPromptHtml(agentId)
-        .then((r) => alive && setPromptHtml(r.html))
+        .then((r) => alive && setPromptHtml(r.html ? sanitizePromptHtml(r.html) : null))
         .catch(() => {});
     void load();
     const t = setInterval(load, 1500);
