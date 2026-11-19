@@ -29,7 +29,7 @@ import tar from 'tar-fs';
 import { config as defaultConfig, type Config } from './config.js';
 import { getSettings } from './settings.js';
 import { logEvent, SYSTEM_ACTOR } from './audit.js';
-import { agentToken } from './auth.js';
+import { agentRuntimeKey, agentToken, runtimeHeaders } from './auth.js';
 import { LATEST_VERSION, migrations, VERSION_MARKER, type MigrationCtx } from './migrations.js';
 import {
   addVolumeMeta,
@@ -803,12 +803,19 @@ export class AgentManager {
    *  existing agents on gateway boot so running agents keep working. */
   private writeSwarmToken(id: string): void {
     const dir = this.ensureSwarmDir(id);
-    const file = join(dir, 'gateway-token');
-    try {
-      writeFileSync(file, agentToken(id), { mode: 0o600 });
-      chownSync(file, 1000, 1000);
-    } catch {
-      /* best-effort */
+    // runtime-key: what the agent's terminal runtime and websockify require
+    // from any caller other than the agent itself (see runtimeHeaders).
+    for (const [name, value] of [
+      ['gateway-token', agentToken(id)],
+      ['runtime-key', agentRuntimeKey(id)],
+    ] as const) {
+      const file = join(dir, name);
+      try {
+        writeFileSync(file, value, { mode: 0o600 });
+        chownSync(file, 1000, 1000);
+      } catch {
+        /* best-effort */
+      }
     }
   }
 
@@ -1535,7 +1542,10 @@ export class AgentManager {
       const { host, port } = await this.resolveTarget(id, 'terminal');
       const ac = new AbortController();
       const timer = setTimeout(() => ac.abort(), 2000);
-      const resp = await fetch(`http://${host}:${port}/api/system`, { signal: ac.signal });
+      const resp = await fetch(`http://${host}:${port}/api/system`, {
+        signal: ac.signal,
+        headers: runtimeHeaders(id),
+      });
       clearTimeout(timer);
       if (!resp.ok) return null;
       const d = (await resp.json()) as {
@@ -1824,7 +1834,9 @@ export class AgentManager {
         if (Date.now() < cooldownUntil) continue;
 
         const { host, port } = await this.resolveTarget(a.id, 'terminal');
-        const resp = await fetch(`http://${host}:${port}/api/stats`);
+        const resp = await fetch(`http://${host}:${port}/api/stats`, {
+          headers: runtimeHeaders(a.id),
+        });
         if (!resp.ok) continue;
         const s = (await resp.json()) as {
           context?: number | null;
@@ -1919,7 +1931,9 @@ export class AgentManager {
       }
       try {
         const { host, port } = await this.resolveTarget(a.id, 'terminal');
-        const resp = await fetch(`http://${host}:${port}/api/stats`);
+        const resp = await fetch(`http://${host}:${port}/api/stats`, {
+          headers: runtimeHeaders(a.id),
+        });
         if (!resp.ok) continue;
         const s = (await resp.json()) as { status?: string | null; awaitingInput?: boolean };
         // Claude is back to idle and not parked at a selector — safe to nudge.
@@ -2674,7 +2688,7 @@ export class AgentManager {
         const t = await this.resolveTarget(id, 'terminal');
         const res = await fetch(`http://${t.host}:${t.port}/api/inject`, {
           method: 'POST',
-          headers: { 'content-type': 'application/json' },
+          headers: { 'content-type': 'application/json', ...runtimeHeaders(id) },
           body: JSON.stringify(payload),
         });
         if (res.ok) return;
@@ -2767,11 +2781,14 @@ export class AgentManager {
   private async restartClaudeSession(id: string): Promise<void> {
     try {
       const t = await this.resolveTarget(id, 'terminal');
-      await fetch(`http://${t.host}:${t.port}/api/sessions/claude`, { method: 'DELETE' });
+      await fetch(`http://${t.host}:${t.port}/api/sessions/claude`, {
+        method: 'DELETE',
+        headers: runtimeHeaders(id),
+      });
       await new Promise((r) => setTimeout(r, 300));
       await fetch(`http://${t.host}:${t.port}/api/sessions`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...runtimeHeaders(id) },
         body: JSON.stringify({
           name: 'claude',
           command:
@@ -3043,7 +3060,9 @@ export class AgentManager {
       throw Object.assign(new Error('target agent is not running'), { statusCode: 409 });
 
     const { host, port } = await this.resolveTarget(target.id, 'terminal');
-    const resp = await fetch(`http://${host}:${port}/api/screenshot`);
+    const resp = await fetch(`http://${host}:${port}/api/screenshot`, {
+      headers: runtimeHeaders(target.id),
+    });
     if (!resp.ok)
       throw Object.assign(new Error(`could not capture ${to}'s screen`), { statusCode: 502 });
     const buf = Buffer.from(await resp.arrayBuffer());
@@ -3316,7 +3335,9 @@ export class AgentManager {
       throw Object.assign(new Error('target agent is not running'), { statusCode: 409 });
     try {
       const { host, port } = await this.resolveTarget(target.id, 'terminal');
-      const resp = await fetch(`http://${host}:${port}/api/stats`);
+      const resp = await fetch(`http://${host}:${port}/api/stats`, {
+        headers: runtimeHeaders(target.id),
+      });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const s = (await resp.json()) as {
         status?: string | null;

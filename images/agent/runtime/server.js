@@ -21,6 +21,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const cp = require('child_process');
+const crypto = require('crypto');
 const { StringDecoder } = require('string_decoder');
 const { WebSocketServer } = require('ws');
 const pty = require('node-pty');
@@ -42,6 +43,33 @@ let counter = 0;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const AUTH_FILE = path.join(HOME, '.swarm', 'auth');
+
+// Callers other than this agent itself must present the per-agent key the
+// gateway writes to .swarm/runtime-key. Every agent shares swarm-net, so
+// without it any agent could open a shell here (POST /api/sessions, /ws) or
+// type into claude (/api/inject) directly, bypassing the gateway. Loopback
+// is this container's own tools (swarm-signal-ready, local curl).
+const RUNTIME_KEY_FILE = path.join(HOME, '.swarm', 'runtime-key');
+const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+
+function runtimeKey() {
+  try {
+    return fs.readFileSync(RUNTIME_KEY_FILE, 'utf8').trim();
+  } catch {
+    return '';
+  }
+}
+
+/** Whether a request may reach this runtime. Fails closed without a key. */
+function callerAllowed(req) {
+  if (LOOPBACK.has(req.socket.remoteAddress)) return true;
+  const key = runtimeKey();
+  const got = req.headers['x-swarm-runtime-key'];
+  if (!key || typeof got !== 'string') return false;
+  const a = Buffer.from(got);
+  const b = Buffer.from(key);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
 
 // In-agent opencode-proxy stack:
 //   claude  ──HTTP──►  retry-proxy (8765)  ──HTTP──►  oc-go-cc (8766)  ──TLS──►  opencode.ai
@@ -1434,6 +1462,10 @@ function readBody(req) {
 }
 
 const server = http.createServer(async (req, res) => {
+  if (!callerAllowed(req)) {
+    res.writeHead(401, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ error: 'unauthorized' }));
+  }
   const u = new URL(req.url, `http://${req.headers.host}`);
 
   if (u.pathname === '/api/sessions' && req.method === 'GET') {
@@ -1646,6 +1678,7 @@ const wss = new WebSocketServer({ noServer: true });
 // Single upgrade router — multiple WebSocketServers can't each bind the same
 // HTTP server's 'upgrade' event (they'd abort each other's sockets).
 server.on('upgrade', (req, socket, head) => {
+  if (!callerAllowed(req)) return socket.destroy();
   const { pathname } = new URL(req.url, `http://${req.headers.host}`);
   if (pathname === '/ws') {
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));

@@ -5,7 +5,10 @@ Wants=tigervncserver@:1.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/websockify --web=/usr/share/novnc 6080 localhost:5901
+# Only the gateway may connect: it sends Basic credentials built from the
+# per-agent key it writes to ~/.swarm/runtime-key. Without them any agent on
+# swarm-net could drive this desktop directly. (`$$` is a literal `$`.)
+ExecStart=/bin/sh -c 'exec /usr/bin/websockify --web=/usr/share/novnc --web-auth --auth-plugin BasicHTTPAuth --auth-source "gateway:$$(cat /home/agent/.swarm/runtime-key)" 6080 localhost:5901'
 Restart=always
 RestartSec=2
 

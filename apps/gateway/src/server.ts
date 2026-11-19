@@ -4,7 +4,13 @@ import { config } from './config.js';
 import { AgentManager } from './docker.js';
 import { parseAgentPath } from './router.js';
 import { applyCors, fromTrustedProxy, handleApi } from './api.js';
-import { agentFromSwarmToken, isAuthed, swarmTokenMayAccess } from './auth.js';
+import {
+  agentFromSwarmToken,
+  desktopAuthorization,
+  isAuthed,
+  runtimeHeaders,
+  swarmTokenMayAccess,
+} from './auth.js';
 import { proxyHttp, proxyToUpstream, relayWs } from './proxy.js';
 import { logEvent, SYSTEM_ACTOR } from './audit.js';
 import { isCrossSite, isPublicRequest, isUnsafeMethod } from './gate.js';
@@ -108,7 +114,14 @@ const server = http.createServer(async (req, res) => {
       // The screenshot is a preview: a stuck one must never hold a browser
       // connection open, since the dashboard polls it for every agent.
       const isShot = route.rest.startsWith('/api/screenshot');
-      proxyHttp(req, res, target, route.rest + url.search, isShot ? 6_000 : undefined);
+      proxyHttp(
+        req,
+        res,
+        target,
+        route.rest + url.search,
+        isShot ? 6_000 : undefined,
+        runtimeHeaders(route.id),
+      );
       return;
     }
 
@@ -148,6 +161,10 @@ server.on('upgrade', async (req, socket, head) => {
       const target = await manager.resolveTarget(route.id, route.service);
       relayWs(req, socket, head, target.host, target.port, route.rest + url.search, {
         toAgent: true,
+        headers:
+          route.service === 'desktop'
+            ? { authorization: desktopAuthorization(route.id) }
+            : runtimeHeaders(route.id),
       });
       return;
     }

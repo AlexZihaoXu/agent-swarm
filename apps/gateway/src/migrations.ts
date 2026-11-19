@@ -478,6 +478,31 @@ export const migrations: Migration[] = [
       await ctx.exec('chown -R agent:agent /opt/agent-runtime; systemctl restart agent-terminals');
     },
   },
+  {
+    version: 31,
+    name: "security: only the gateway may reach the agent's terminal and desktop",
+    apply: async (ctx) => {
+      // The terminal runtime (:7681) and websockify (:6080) accepted anyone on
+      // swarm-net, so one agent could open a shell in, or drive the desktop
+      // of, another. Both now require the per-agent key the gateway writes to
+      // ~/.swarm/runtime-key (callers on loopback, i.e. the agent's own tools,
+      // are exempt). Restarting agent-terminals restarts the claude session;
+      // its transcript persists. try-restart leaves a turned-off desktop off.
+      // The unit is staged through /opt/agent-runtime, like novnc-index.html in
+      // migration 28 (putArchive can't write into a lower sysbox image layer).
+      await ctx.putDir('runtime', '/opt/agent-runtime');
+      await ctx.putFile('novnc.service', '/opt/agent-runtime/novnc.service');
+      await ctx.exec(
+        [
+          'install -m 0644 /opt/agent-runtime/novnc.service /etc/systemd/system/novnc.service',
+          'chown -R agent:agent /opt/agent-runtime',
+          'systemctl daemon-reload',
+          'systemctl restart agent-terminals',
+          'systemctl try-restart novnc || true',
+        ].join('; '),
+      );
+    },
+  },
 ];
 
 /** Highest migration version (the version a fully up-to-date agent is at). */

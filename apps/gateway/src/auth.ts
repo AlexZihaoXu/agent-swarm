@@ -297,6 +297,25 @@ export function agentFromSwarmToken(header: string | string[] | undefined): stri
   return agentFromTokenWith(swarmSecret(), header);
 }
 
+/** The key agent `id`'s own services (terminal runtime :7681, websockify
+ *  :6080) require from every caller but the agent itself. Without it any
+ *  agent on swarm-net could open a shell in, or take the desktop of, any
+ *  other agent directly, bypassing the gateway. Written to the agent's disk
+ *  (`.swarm/runtime-key`), which only that agent and the gateway can read. */
+export function agentRuntimeKey(id: string): string {
+  return createHmac('sha256', swarmSecret()).update(`runtime:${id}`).digest('hex');
+}
+
+/** Headers the gateway adds to its requests to agent `id`'s terminal runtime. */
+export function runtimeHeaders(id: string): Record<string, string> {
+  return { 'x-swarm-runtime-key': agentRuntimeKey(id) };
+}
+
+/** Basic credentials for agent `id`'s websockify (BasicHTTPAuth plugin). */
+export function desktopAuthorization(id: string): string {
+  return `Basic ${Buffer.from(`gateway:${agentRuntimeKey(id)}`).toString('base64')}`;
+}
+
 /** Endpoints the machine-to-machine swarm token may reach — exactly the agent-
  *  facing routes the in-agent swarm tools (swarm.py) call: the roster + groups
  *  it reads, and the agent↔agent messaging/manage/view actions. Everything else

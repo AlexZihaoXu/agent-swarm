@@ -60,12 +60,14 @@ export function proxyHttp(
   target: ProxyTarget,
   rest: string,
   timeoutMs?: number,
+  headers: Record<string, string> = {},
 ): void {
   req.url = rest;
   for (const h of AGENT_STRIPPED) delete req.headers[h];
   toAgent.add(req);
   proxy.web(req, res, {
     target: `http://${target.host}:${target.port}`,
+    headers,
     ...(timeoutMs ? { proxyTimeout: timeoutMs, timeout: timeoutMs } : {}),
   });
 }
@@ -87,7 +89,7 @@ export function relayWs(
   host: string,
   port: number,
   path: string,
-  opts: { toAgent?: boolean } = {},
+  opts: { toAgent?: boolean; headers?: Record<string, string> } = {},
 ): void {
   const upstream = net.connect(port, host, () => {
     // Terminal keystrokes (up) and cursor/redraw deltas (down) are tiny, latency-
@@ -99,10 +101,13 @@ export function relayWs(
     (clientSocket as Partial<net.Socket>).setNoDelay?.(true);
     const lines = [`${req.method ?? 'GET'} ${path} HTTP/1.1`];
     const h = req.rawHeaders;
+    const added = new Set(Object.keys(opts.headers ?? {}).map((k) => k.toLowerCase()));
     for (let i = 0; i < h.length; i += 2) {
-      if (opts.toAgent && AGENT_STRIPPED.has(h[i]!.toLowerCase())) continue;
+      const name = h[i]!.toLowerCase();
+      if (added.has(name) || (opts.toAgent && AGENT_STRIPPED.has(name))) continue;
       lines.push(`${h[i]}: ${h[i + 1]}`);
     }
+    for (const [k, v] of Object.entries(opts.headers ?? {})) lines.push(`${k}: ${v}`);
     upstream.write(lines.join('\r\n') + '\r\n\r\n');
     if (head && head.length) upstream.write(head);
     upstream.pipe(clientSocket);
