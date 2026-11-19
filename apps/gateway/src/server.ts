@@ -7,22 +7,7 @@ import { applyCors, fromTrustedProxy, handleApi } from './api.js';
 import { isAuthed, swarmTokenMayAccess, validSwarmToken } from './auth.js';
 import { proxyHttp, proxyToUpstream, relayWs } from './proxy.js';
 import { logEvent, SYSTEM_ACTOR } from './audit.js';
-
-/** Paths reachable without a session: the login page + its assets, the auth API,
- *  and CORS preflights. Everything else (dashboard, API, agent proxy) is gated. */
-function isPublicPath(pathname: string): boolean {
-  return (
-    pathname === '/login' ||
-    pathname.startsWith('/api/auth/') ||
-    pathname.startsWith('/_next/') ||
-    pathname.startsWith('/__next') || // Next dev internals
-    pathname === '/favicon.ico' ||
-    // PWA assets must load without a session (install + service worker + icon).
-    pathname === '/manifest.webmanifest' ||
-    pathname === '/sw.js' ||
-    pathname === '/icon.svg'
-  );
-}
+import { isPublicRequest } from './gate.js';
 
 const dashboard = new URL(config.dashboardUpstream);
 const dashboardHost = dashboard.hostname;
@@ -53,7 +38,7 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
   try {
     applySecurityHeaders(req, res);
-    // 0. Auth gate. Preflights pass (no cookie/side effects); everything else
+    // 0. Auth gate. API preflights pass (no cookie/side effects); everything else
     //    that isn't public needs either a valid operator session (browser) or a
     //    valid swarm token (agents' machine-to-machine /api/swarm/* calls). The
     //    operator session grants full access; the swarm token is confined to the
@@ -64,7 +49,7 @@ const server = http.createServer(async (req, res) => {
     const byToken = !byCookie && validSwarmToken(req.headers['x-swarm-token']);
     const authorized =
       byCookie || (byToken && swarmTokenMayAccess(req.method ?? 'GET', url.pathname));
-    if (req.method !== 'OPTIONS' && !isPublicPath(url.pathname) && !authorized) {
+    if (!authorized && !isPublicRequest(req.method ?? 'GET', url.pathname)) {
       if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/a/')) {
         // A valid-but-out-of-scope swarm token is forbidden (403), not 401.
         res.writeHead(byToken ? 403 : 401, { 'content-type': 'application/json' });
@@ -114,14 +99,16 @@ function isNotFound(err: unknown): boolean {
 server.on('upgrade', async (req, socket, head) => {
   try {
     const url = new URL(req.url ?? '/', 'http://localhost');
+    // Every upgrade needs a session (browsers send the cookie on the upgrade
+    // request): agent terminal/desktop streams obviously, and the dashboard's
+    // own sockets too, so an anonymous caller can't open one to Next.js. Only
+    // the dev server's HMR socket is public, and only under `next dev`.
+    if (!isAuthed(req.headers.cookie) && !isPublicRequest('GET', url.pathname)) {
+      socket.destroy();
+      return;
+    }
     const route = parseAgentPath(url.pathname);
     if (route) {
-      // Agent terminal/desktop streams are sensitive — require a valid session
-      // (browsers send the cookie on the upgrade request).
-      if (!isAuthed(req.headers.cookie)) {
-        socket.destroy();
-        return;
-      }
       const target = await manager.resolveTarget(route.id, route.service);
       relayWs(req, socket, head, target.host, target.port, route.rest + url.search);
       return;
