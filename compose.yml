@@ -74,9 +74,13 @@ services:
       SWARM_DATA_HOST: ${PWD}/.swarm_data
       SWARM_DATA_MOUNT: /swarmdata
     ports:
-      # Host port is configurable (DASHBOARD_PORT) for hosts where 8080 is taken;
+      # Host address and port are configurable. DASHBOARD_BIND defaults to
+      # loopback, so the dashboard isn't published on every interface (LAN,
+      # Docker bridges the agents can reach, public addresses); set it to the
+      # one address remote clients or your tunnel/reverse proxy use, e.g. this
+      # host's Tailscale IP. DASHBOARD_PORT is for hosts where 8080 is taken;
       # the gateway still listens on 8080 inside the container.
-      - '${DASHBOARD_PORT:-8080}:8080'
+      - '${DASHBOARD_BIND:-127.0.0.1}:${DASHBOARD_PORT:-8080}:8080'
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - gateway-data:/data

@@ -68,7 +68,9 @@ docker compose up --build -d         # control plane → http://localhost:8080
 
 </details>
 
-Open **`http://<your-server>:8080`** once it's up.
+Open **`http://localhost:8080`** on the host once it's up. The port is published
+on `127.0.0.1` only; set `DASHBOARD_BIND` in `.env` to reach it from elsewhere (see
+[Remote access](#remote-access)).
 
 ### First run
 
@@ -126,10 +128,15 @@ the daemon — though `--purge` of `./.swarm_data` only runs from the clone.
 ### Remote access
 
 `:8080` is gated by the operator login (set on first run), but it serves plain HTTP
-with no TLS. For a remote mini-server, reach it over your LAN, an **SSH tunnel**
-(`ssh -L 8080:localhost:8080 user@server`), or a VPN (e.g. Tailscale); if you do
-expose it, put it behind a reverse proxy that adds **HTTPS** so the password and
-session cookie aren't sent in clear text.
+with no TLS, and by default it is published on `127.0.0.1` only. For a remote
+mini-server, either use an **SSH tunnel** (`ssh -L 8080:localhost:8080 user@server`)
+or set `DASHBOARD_BIND` in `.env` to the one address clients connect to — e.g. the
+host's Tailscale IP (`tailscale ip -4`) or LAN IP — and `docker compose up -d`. Avoid
+`0.0.0.0`: it also publishes the dashboard on the Docker bridges the agents sit on.
+If you expose it beyond that, put it behind a reverse proxy or tunnel that adds
+**HTTPS**, set `TRUST_PROXY=1`, and set `TRUSTED_PROXY_IPS` to the address the
+gateway sees the proxy connect from (the audit log's `system.proxy.untrusted`
+warning names it), so agents on the Docker network can't forge client addresses.
 
 ### Security
 

@@ -96,8 +96,13 @@ else
 fi
 
 PORT="$(awk -F= '/^DASHBOARD_PORT=/{print $2}' .env 2>/dev/null)"; PORT="${PORT:-8080}"
+BIND="$(awk -F= '/^DASHBOARD_BIND=/{print $2}' .env 2>/dev/null)"; BIND="${BIND:-127.0.0.1}"
 
-printf '\n\033[1;32m✓ Agent Swarm is up.\033[0m  Open  \033[1mhttp://localhost:%s\033[0m  (or http://<this-host>:%s)\n\n' "$PORT" "$PORT"
+printf '\n\033[1;32m✓ Agent Swarm is up.\033[0m  Open  \033[1mhttp://%s:%s\033[0m\n\n' "$BIND" "$PORT"
+if [ "$BIND" = "127.0.0.1" ]; then
+  note "Published on this host only. To reach it remotely, set DASHBOARD_BIND in $DIR/.env"
+  note "to the address clients use (e.g. this host's Tailscale IP) and re-run this installer."
+fi
 cat <<EOF
 First run:
   1. Create your operator login (username + password) on first open.
