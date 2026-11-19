@@ -7,7 +7,7 @@ import { applyCors, fromTrustedProxy, handleApi } from './api.js';
 import { isAuthed, swarmTokenMayAccess, validSwarmToken } from './auth.js';
 import { proxyHttp, proxyToUpstream, relayWs } from './proxy.js';
 import { logEvent, SYSTEM_ACTOR } from './audit.js';
-import { isPublicRequest } from './gate.js';
+import { isCrossSite, isPublicRequest, isUnsafeMethod } from './gate.js';
 
 const dashboard = new URL(config.dashboardUpstream);
 const dashboardHost = dashboard.hostname;
@@ -34,6 +34,15 @@ function applySecurityHeaders(req: http.IncomingMessage, res: http.ServerRespons
   }
 }
 
+/** Options for isCrossSite: a trusted proxy may have rewritten Host, and the
+ *  host-run dev setup calls the gateway from the Next dev origin. */
+function crossSiteOpts(req: http.IncomingMessage) {
+  return {
+    trustForwarded: config.trustProxy && fromTrustedProxy(req),
+    allowOrigin: process.env.NODE_ENV === 'production' ? undefined : config.corsOrigin,
+  };
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
   try {
@@ -58,6 +67,18 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(302, { location: '/login' });
         res.end();
       }
+      return;
+    }
+
+    // 0b. Cross-site guard. SameSite=Lax keeps other sites' requests cookie-
+    //     less, but not sibling subdomains', so refuse any browser request from
+    //     another site that could change state, and any cross-site request at
+    //     all into the API or the agent proxy (no legitimate flow needs one).
+    const method = req.method ?? 'GET';
+    const sensitive = url.pathname.startsWith('/api/') || url.pathname.startsWith('/a/');
+    if ((isUnsafeMethod(method) || sensitive) && isCrossSite(req.headers, crossSiteOpts(req))) {
+      res.writeHead(403, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'cross-site request refused' }));
       return;
     }
 
@@ -103,7 +124,10 @@ server.on('upgrade', async (req, socket, head) => {
     // request): agent terminal/desktop streams obviously, and the dashboard's
     // own sockets too, so an anonymous caller can't open one to Next.js. Only
     // the dev server's HMR socket is public, and only under `next dev`.
-    if (!isAuthed(req.headers.cookie) && !isPublicRequest('GET', url.pathname)) {
+    if (
+      (!isAuthed(req.headers.cookie) && !isPublicRequest('GET', url.pathname)) ||
+      isCrossSite(req.headers, crossSiteOpts(req))
+    ) {
       socket.destroy();
       return;
     }

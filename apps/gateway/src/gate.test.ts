@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isPublicRequest } from './gate.js';
+import { isCrossSite, isPublicRequest } from './gate.js';
 
 test('the login page and its static assets are public for GET/HEAD', () => {
   for (const p of ['/login', '/_next/static/chunks/app.js', '/sw.js', '/manifest.webmanifest'])
@@ -30,4 +30,38 @@ test('preflights pass only for the API, never into the agent proxy', () => {
   assert.equal(isPublicRequest('OPTIONS', '/api/agents', false), true);
   assert.equal(isPublicRequest('OPTIONS', '/a/x/terminal/api/inject', false), false);
   assert.equal(isPublicRequest('OPTIONS', '/login', false), false);
+});
+
+test('fetch metadata decides when present', () => {
+  assert.equal(isCrossSite({ 'sec-fetch-site': 'same-origin' }), false);
+  assert.equal(isCrossSite({ 'sec-fetch-site': 'none' }), false); // typed URL / bookmark
+  // A sibling subdomain is same-site, and SameSite=Lax would send the cookie.
+  assert.equal(
+    isCrossSite({ 'sec-fetch-site': 'same-site', origin: 'https://x.example.com' }),
+    true,
+  );
+  assert.equal(isCrossSite({ 'sec-fetch-site': 'cross-site' }), true);
+});
+
+test('falls back to Origin against Host, then passes non-browser clients', () => {
+  const host = 'dash.example.com';
+  assert.equal(isCrossSite({ origin: `https://${host}`, host }), false);
+  assert.equal(isCrossSite({ origin: 'https://evil.example.com', host }), true);
+  assert.equal(isCrossSite({ origin: 'null', host }), true); // sandboxed / opaque
+  assert.equal(isCrossSite({ host }), false); // agents' swarm calls, curl
+});
+
+test('a forwarded host counts only from a trusted proxy', () => {
+  const h = {
+    origin: 'https://dash.example.com',
+    host: '10.0.0.2:8080',
+    'x-forwarded-host': 'dash.example.com',
+  };
+  assert.equal(isCrossSite(h), true);
+  assert.equal(isCrossSite(h, { trustForwarded: true }), false);
+});
+
+test('the configured dev origin is allowed explicitly', () => {
+  const h = { origin: 'http://localhost:3000', 'sec-fetch-site': 'same-site' };
+  assert.equal(isCrossSite(h, { allowOrigin: 'http://localhost:3000' }), false);
 });
