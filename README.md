@@ -141,16 +141,35 @@ warning names it), so agents on the Docker network can't forge client addresses.
 ### Security
 
 - **Login** — the dashboard, API, and agent terminal/desktop streams require an
-  operator sign-in (salted scrypt password hash; HttpOnly session cookie). Agents'
-  own gateway calls authenticate with a separate shared token written to their
-  disk, so enabling login doesn't break the swarm.
+  operator sign-in (salted scrypt password hash; HttpOnly session cookie). Without a
+  session only the auth API and GET/HEAD for the login page and its static assets
+  reach the stack; cross-site requests into the API, the agent proxy and every
+  WebSocket are refused (Fetch Metadata / Origin).
+- **Agents are not trusted** — an agent is root in its own container and can be
+  steered by what it reads (Discord, the web). Each agent authenticates its gateway
+  calls with its **own** token (`~/.swarm/gateway-token`), and the gateway takes
+  the sender from that token, never from the request. Its identity (roles,
+  permissions, groups, caps) and Discord rules are kept in the gateway's volume;
+  the copies on the agent's disk are mirrors. An agent's terminal runtime and
+  websockify only accept the gateway (a per-agent key in `~/.swarm/runtime-key`).
+  The operator's cookie is never forwarded to an agent, the desktop viewer is
+  served by the gateway itself, and anything an agent serves is sandboxed by CSP.
 - **Host access** — the dashboard mounts the host's **Docker socket** and spawns
   agents with **privileged flags** (`SYS_ADMIN`/`SYS_BOOT`, unconfined
-  seccomp/apparmor) — required for systemd + GNOME inside a container, but it means
-  an agent is **not strongly isolated** from the host. Treat the whole stack as
-  trusted-host software: run it on a machine you own, prefer not to expose `:8080`
-  publicly (or only behind HTTPS), and only hand agents work you're comfortable
-  running with that level of access.
+  seccomp/apparmor) unless `AGENT_RUNTIME=sysbox-runc` — required for systemd +
+  GNOME inside a container under plain runc, where an agent is **not strongly
+  isolated** from the host. Shared volumes are loop-mounted through a privileged,
+  host-PID helper container. Code execution in the dashboard container, or an
+  operator session, is therefore root on the host. Treat the whole stack as
+  trusted-host software: run it on a machine you own, use Sysbox on Linux, keep
+  `DASHBOARD_BIND` off `0.0.0.0`, put it behind HTTPS if it is reachable remotely,
+  and only hand agents work you're comfortable running with that level of access.
+- **Not yet narrowed: the Docker socket.** The plan is (1) loop-mount shared
+  volumes from a small host-side helper instead of the privileged, host-PID
+  container, (2) put a filtering proxy in front of the socket that only allows the
+  calls the gateway makes (create from the agent image with the known HostConfig
+  shapes and binds under `SWARM_DATA_HOST`, start/stop/remove/inspect/exec/archive
+  on `swarm-agent-*`, image build), and (3) run the gateway as a non-root user.
 
 ---
 
