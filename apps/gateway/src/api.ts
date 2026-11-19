@@ -351,7 +351,6 @@ export async function handleApi(
 
   try {
     if (pathname.startsWith('/api/auth/')) return await handleAuth(req, res, method);
-    if (pathname === '/api/fs') return await handleFs(req, res, manager, method);
     // Reveal the full stored OAuth token (operator-only — the gate already
     // requires a session). Lets the operator copy back what they pasted.
     if (pathname === '/api/settings/token') {
@@ -1443,19 +1442,6 @@ async function handlePackages(
     return (manager.deletePackage(file), sendJson(res, 200, { ok: true }), true);
   }
   sendJson(res, 405, { error: 'method not allowed' });
-  return true;
-}
-
-async function handleFs(
-  req: IncomingMessage,
-  res: ServerResponse,
-  manager: AgentManager,
-  method: string,
-): Promise<boolean> {
-  if (method !== 'GET') return (sendJson(res, 405, { error: 'method not allowed' }), true);
-  const url = new URL(req.url ?? '/', 'http://localhost');
-  const path = url.searchParams.get('path') || process.env.HOME || '/';
-  sendJson(res, 200, await manager.listHostDir(path));
   return true;
 }
 

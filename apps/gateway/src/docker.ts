@@ -3889,61 +3889,6 @@ export class AgentManager {
     }
   }
 
-  /** Pull `image` if it isn't present locally. */
-  private async ensureImage(image: string): Promise<void> {
-    try {
-      await this.docker.getImage(image).inspect();
-      return;
-    } catch {
-      /* not present — pull below */
-    }
-    const stream = (await this.docker.pull(image)) as unknown as Readable;
-    await new Promise<void>((resolve, reject) => {
-      this.docker.modem.followProgress(stream, (err) => (err ? reject(err) : resolve()));
-    });
-  }
-
-  /**
-   * List a host directory's entries by mounting it read-only into a probe
-   * container and running `ls`. Lets the dashboard offer a host file browser
-   * (the gateway can't read host files directly, only via a mount). Returns the
-   * directory's parent for "up" navigation.
-   */
-  async listHostDir(
-    path: string,
-  ): Promise<{ path: string; parent: string | null; entries: { name: string; dir: boolean }[] }> {
-    if (!path.startsWith('/'))
-      throw Object.assign(new Error('path must be absolute'), {
-        statusCode: 400,
-      });
-    await this.ensureImage(this.cfg.probeImage);
-    let container;
-    try {
-      container = await this.docker.createContainer({
-        Image: this.cfg.probeImage,
-        Tty: true, // plain (non-multiplexed) log output
-        // Pipe through `cat` so ls's stdout isn't a TTY → no ANSI colorization.
-        Cmd: ['sh', '-c', 'ls -1Ap /probe | cat'],
-        HostConfig: { Binds: [`${path}:/probe:ro`] },
-      });
-      await container.start();
-      await container.wait();
-      const buf = (await container.logs({ stdout: true, stderr: true })) as unknown as Buffer;
-      const entries = buf
-        .toString('utf8')
-        .split('\n')
-        .map((s) => s.trim())
-        .filter((n) => n && n !== './' && n !== '../')
-        .map((n) =>
-          n.endsWith('/') ? { name: n.slice(0, -1), dir: true } : { name: n, dir: false },
-        )
-        .sort((a, b) => Number(b.dir) - Number(a.dir) || a.name.localeCompare(b.name));
-      return { path, parent: path === '/' ? null : dirname(path), entries };
-    } finally {
-      if (container) await container.remove({ force: true }).catch(() => {});
-    }
-  }
-
   /** Run a command in a container and return its combined stdout/stderr. */
   private async exec(container: Docker.Container, cmd: string[]): Promise<string> {
     const ex = await container.exec({

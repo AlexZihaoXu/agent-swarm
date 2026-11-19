@@ -42,8 +42,6 @@ export const config = {
   agentContextDir:
     process.env.AGENT_CONTEXT_DIR ??
     fileURLToPath(new URL('../../../images/agent', import.meta.url)),
-  /** Tiny image used to probe whether a host path exists (pulled if missing). */
-  probeImage: process.env.PROBE_IMAGE ?? 'busybox',
   /** Container name = `${agentNamePrefix}${id}`; the id is what the URL carries. */
   agentNamePrefix: 'swarm-agent-',
   /** Claude Code OAuth token (`claude setup-token`) injected into each agent as
