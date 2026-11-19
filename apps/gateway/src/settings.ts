@@ -53,8 +53,8 @@ export interface Settings {
   /** Random secret used to sign session cookies; generated at first setup so
    *  sessions survive gateway restarts. */
   sessionSecret?: string;
-  /** Random shared token agents present (x-swarm-token) so their machine-to-
-   *  machine calls to /api/swarm/* pass the operator-login gate. */
+  /** Random secret each agent's own swarm token (x-swarm-token) is derived
+   *  from (auth.ts agentToken); it never leaves the gateway. */
   swarmSecret?: string;
   /** Per-provider credentials. The Anthropic OAuth token lives at the top level
    *  (above) for historical reasons; new providers nest here. */

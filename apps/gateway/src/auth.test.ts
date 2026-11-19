@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   swarmTokenMayAccess,
+  agentTokenFor,
+  agentFromTokenWith,
   loginThrottle,
   noteLoginFailure,
   noteLoginSuccess,
@@ -103,4 +105,23 @@ test('global breaker: a burst from one IP counts toward the global total', () =>
   _resetLoginThrottle();
   for (let i = 0; i < 26; i++) noteLoginFailure('203.0.113.66');
   assert.equal(loginThrottle('203.0.113.77').blocked, true, 'unrelated IP blocked too');
+});
+
+// ── Per-agent swarm tokens ────────────────────────────────────────────────────
+
+test('an agent token names exactly its own agent', () => {
+  const secret = 'k'.repeat(64);
+  const t = agentTokenFor(secret, 'alpha');
+  assert.equal(agentFromTokenWith(secret, t), 'alpha');
+  assert.equal(agentFromTokenWith('x'.repeat(64), t), null); // another swarm's secret
+});
+
+test("an agent can't turn its token into another agent's", () => {
+  const secret = 'k'.repeat(64);
+  const mac = agentTokenFor(secret, 'alpha').split('.')[1];
+  assert.equal(agentFromTokenWith(secret, `beta.${mac}`), null);
+  assert.equal(agentFromTokenWith(secret, mac), null); // the bare MAC
+  assert.equal(agentFromTokenWith(secret, secret), null); // the old shared secret
+  assert.equal(agentFromTokenWith(secret, `../x.${mac}`), null);
+  assert.equal(agentFromTokenWith(secret, undefined), null);
 });

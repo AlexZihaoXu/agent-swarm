@@ -343,6 +343,7 @@ export async function handleApi(
   req: IncomingMessage,
   res: ServerResponse,
   manager: AgentManager,
+  swarmAgent?: string,
 ): Promise<boolean> {
   const { pathname } = new URL(req.url ?? '/', 'http://localhost');
   if (!pathname.startsWith('/api/')) return false;
@@ -393,7 +394,7 @@ export async function handleApi(
     }
     if (pathname === '/api/swarm/send') {
       if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
-      const body = await readJson(req);
+      const body = await readSwarmJson(req, manager, swarmAgent);
       await manager.sendSwarmMessage(
         body.fromId ?? '',
         body.from ?? '',
@@ -413,7 +414,7 @@ export async function handleApi(
     }
     if (pathname === '/api/swarm/send-file') {
       if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
-      const body = await readJson(req);
+      const body = await readSwarmJson(req, manager, swarmAgent);
       const dest = await manager.sendSwarmFile(
         body.fromId ?? '',
         body.fromName ?? body.from ?? '',
@@ -433,7 +434,7 @@ export async function handleApi(
     }
     if (pathname === '/api/swarm/manage') {
       if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
-      const body = await readJson(req);
+      const body = await readSwarmJson(req, manager, swarmAgent);
       const agent = await manager.manageAgent(
         body.fromId ?? '',
         body.to ?? '',
@@ -452,7 +453,7 @@ export async function handleApi(
     }
     if (pathname === '/api/swarm/view') {
       if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
-      const body = await readJson(req);
+      const body = await readSwarmJson(req, manager, swarmAgent);
       const savedPath = await manager.viewAgent(body.fromId ?? '', body.to ?? '');
       logEvent({
         category: 'swarm',
@@ -466,7 +467,7 @@ export async function handleApi(
     }
     if (pathname === '/api/swarm/compact') {
       if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
-      const body = await readJson(req);
+      const body = await readSwarmJson(req, manager, swarmAgent);
       const result = await manager.compactPeer(body.fromId ?? '', body.to ?? '');
       logEvent({
         category: 'swarm',
@@ -480,7 +481,7 @@ export async function handleApi(
     }
     if (pathname === '/api/swarm/stats') {
       if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
-      const body = await readJson(req);
+      const body = await readSwarmJson(req, manager, swarmAgent);
       const stats = await manager.statsForPeer(body.fromId ?? '', body.to ?? '');
       logEvent({
         category: 'swarm',
@@ -494,7 +495,7 @@ export async function handleApi(
     }
     if (pathname === '/api/swarm/usage') {
       if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
-      const body = await readJson(req);
+      const body = await readSwarmJson(req, manager, swarmAgent);
       const usage = await manager.usageForAgent(body.fromId ?? '');
       logEvent({
         category: 'swarm',
@@ -507,7 +508,7 @@ export async function handleApi(
     }
     if (pathname === '/api/swarm/desktop') {
       if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
-      const body = await readJson(req);
+      const body = await readSwarmJson(req, manager, swarmAgent);
       const enabled = body.desktop !== false; // any non-explicit-false = enable
       const result = await manager.toggleDesktopSelf(body.fromId ?? '', enabled);
       logEvent({
@@ -522,7 +523,7 @@ export async function handleApi(
     }
     if (pathname === '/api/swarm/effort') {
       if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
-      const body = await readJson(req);
+      const body = await readSwarmJson(req, manager, swarmAgent);
       const result = await manager.setEffortSelf(body.fromId ?? '', String(body.effort ?? ''));
       logEvent({
         category: 'swarm',
@@ -536,7 +537,7 @@ export async function handleApi(
     }
     if (pathname === '/api/swarm/append-guidance') {
       if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
-      const body = await readJson(req);
+      const body = await readSwarmJson(req, manager, swarmAgent);
       const result = await manager.appendAgentGuidance(body.fromId ?? '', body.text ?? '');
       logEvent({
         category: 'swarm',
@@ -550,7 +551,7 @@ export async function handleApi(
     }
     if (pathname === '/api/swarm/restart-self') {
       if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
-      const body = await readJson(req);
+      const body = await readSwarmJson(req, manager, swarmAgent);
       const result = await manager.restartSelf(body.fromId ?? '');
       logEvent({
         category: 'swarm',
@@ -563,7 +564,7 @@ export async function handleApi(
     }
     if (pathname === '/api/swarm/discord-status') {
       if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
-      const body = await readJson(req);
+      const body = await readSwarmJson(req, manager, swarmAgent);
       const text = String(body.text ?? '');
       const applied = manager.setDiscordStatus(body.fromId ?? '', text);
       logEvent({
@@ -583,7 +584,7 @@ export async function handleApi(
     }
     if (pathname === '/api/swarm/group-send') {
       if (method !== 'POST') return (sendJson(res, 405, { error: 'method not allowed' }), true);
-      const body = await readJson(req);
+      const body = await readSwarmJson(req, manager, swarmAgent);
       // fromId set = a peer agent; omitted = the human operator (dashboard).
       const msg = await manager.sendGroupMessage({
         fromId: body.fromId || undefined,
@@ -1928,6 +1929,24 @@ async function handleImageBuild(
     res.end(`\n✗ build failed: ${err instanceof Error ? err.message : String(err)}\n`);
   }
   return true;
+}
+
+/** readJson for /api/swarm/*: when an agent token authenticated the call, the
+ *  sender is that agent, whatever the body claims. Its id and name are
+ *  overwritten, so an agent can't act with another agent's permissions or
+ *  files, or post to a group chat as the human operator (an omitted fromId
+ *  means the operator; only a session can do that). */
+async function readSwarmJson(
+  req: IncomingMessage,
+  manager: AgentManager,
+  swarmAgent: string | undefined,
+): ReturnType<typeof readJson> {
+  const body = await readJson(req);
+  if (swarmAgent) {
+    const name = manager.agentName(swarmAgent);
+    Object.assign(body, { fromId: swarmAgent, from: name, fromName: name });
+  }
+  return body;
 }
 
 /** Default cap on a JSON request body. Generous because the file editor sends

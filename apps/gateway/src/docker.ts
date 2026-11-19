@@ -29,7 +29,7 @@ import tar from 'tar-fs';
 import { config as defaultConfig, type Config } from './config.js';
 import { getSettings } from './settings.js';
 import { logEvent, SYSTEM_ACTOR } from './audit.js';
-import { swarmToken } from './auth.js';
+import { agentToken } from './auth.js';
 import { LATEST_VERSION, migrations, VERSION_MARKER, type MigrationCtx } from './migrations.js';
 import {
   addVolumeMeta,
@@ -269,6 +269,16 @@ export class AgentManager {
    *  Bind-mounted to /home/agent/.swarm/identity.json inside the agent. */
   private identityFile(id: string): string {
     return join(this.agentDataDir(id), '.swarm', 'identity.json');
+  }
+
+  /** Whether an agent with this id exists (its disk is present). */
+  hasAgent(id: string): boolean {
+    return existsSync(this.agentDataDir(id));
+  }
+
+  /** An agent's display name (its id when unnamed). */
+  agentName(id: string): string {
+    return this.readIdentity(id)?.name || id;
   }
 
   /** Read an agent's self-identity from its disk (null if not yet written). */
@@ -761,15 +771,16 @@ export class AgentManager {
     }
   }
 
-  /** Write the shared swarm token to the agent's disk at `.swarm/gateway-token`
+  /** Write the agent's own swarm token to its disk at `.swarm/gateway-token`
    *  so swarm.py can authenticate its calls to the gateway (which is gated by the
-   *  operator login). Called on create + every start; also backfilled to all
+   *  operator login). The token names this agent, so its calls can't claim to
+   *  come from another. Called on create + every start; also backfilled to all
    *  existing agents on gateway boot so running agents keep working. */
   private writeSwarmToken(id: string): void {
     const dir = this.ensureSwarmDir(id);
     const file = join(dir, 'gateway-token');
     try {
-      writeFileSync(file, swarmToken(), { mode: 0o600 });
+      writeFileSync(file, agentToken(id), { mode: 0o600 });
       chownSync(file, 1000, 1000);
     } catch {
       /* best-effort */

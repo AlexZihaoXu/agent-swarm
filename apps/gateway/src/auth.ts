@@ -249,15 +249,52 @@ export function clearCookie(isSecure = false): string {
   return `${COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${isSecure ? '; Secure' : ''}`;
 }
 
-/** The shared token agents present so their machine-to-machine calls to the
- *  gateway pass the operator-login gate. Generated + persisted on first use. */
-export function swarmToken(): string {
+/** The gateway's swarm secret, from which every agent's token is derived.
+ *  Generated + persisted on first use. Never written to an agent's disk. */
+function swarmSecret(): string {
   let t = getSettings().swarmSecret;
   if (!t) {
     t = randomBytes(32).toString('hex');
     updateSettings({ swarmSecret: t });
   }
   return t;
+}
+
+/** Agent ids are container hostnames; anything else can't be one. */
+const AGENT_ID = /^[a-z0-9][a-z0-9-]{0,62}$/i;
+
+/** `<id>.<HMAC(secret, id)>`: a token that names the one agent it belongs to.
+ *  One shared token for every agent let any agent claim any `fromId` (and so
+ *  borrow another agent's role permissions, read its files through
+ *  send-file, or post to a group chat as the human operator). */
+export function agentTokenFor(secret: string, id: string): string {
+  const mac = createHmac('sha256', secret).update(`agent:${id}`).digest('base64url');
+  return `${id}.${mac}`;
+}
+
+/** The agent a token belongs to, or null if it isn't a valid agent token. */
+export function agentFromTokenWith(
+  secret: string,
+  header: string | string[] | undefined,
+): string | null {
+  const got = Array.isArray(header) ? header[0] : header;
+  if (!got) return null;
+  const dot = got.lastIndexOf('.');
+  const id = got.slice(0, dot);
+  if (dot <= 0 || !AGENT_ID.test(id)) return null;
+  const a = Buffer.from(got);
+  const b = Buffer.from(agentTokenFor(secret, id));
+  return a.length === b.length && timingSafeEqual(a, b) ? id : null;
+}
+
+/** The token written to agent `id`'s disk (`.swarm/gateway-token`). */
+export function agentToken(id: string): string {
+  return agentTokenFor(swarmSecret(), id);
+}
+
+/** Which agent sent this x-swarm-token header (null if invalid). */
+export function agentFromSwarmToken(header: string | string[] | undefined): string | null {
+  return agentFromTokenWith(swarmSecret(), header);
 }
 
 /** Endpoints the machine-to-machine swarm token may reach — exactly the agent-
@@ -271,13 +308,4 @@ export function swarmTokenMayAccess(method: string, pathname: string): boolean {
   if (pathname.startsWith('/api/swarm/')) return true;
   if (method === 'GET' && (pathname === '/api/agents' || pathname === '/api/groups')) return true;
   return false;
-}
-
-/** Constant-time check of an agent's x-swarm-token header. */
-export function validSwarmToken(header: string | string[] | undefined): boolean {
-  const got = Array.isArray(header) ? header[0] : header;
-  if (!got) return false;
-  const a = Buffer.from(got);
-  const b = Buffer.from(swarmToken());
-  return a.length === b.length && timingSafeEqual(a, b);
 }

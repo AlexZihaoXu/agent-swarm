@@ -4,7 +4,7 @@ import { config } from './config.js';
 import { AgentManager } from './docker.js';
 import { parseAgentPath } from './router.js';
 import { applyCors, fromTrustedProxy, handleApi } from './api.js';
-import { isAuthed, swarmTokenMayAccess, validSwarmToken } from './auth.js';
+import { agentFromSwarmToken, isAuthed, swarmTokenMayAccess } from './auth.js';
 import { proxyHttp, proxyToUpstream, relayWs } from './proxy.js';
 import { logEvent, SYSTEM_ACTOR } from './audit.js';
 import { isCrossSite, isPublicRequest, isUnsafeMethod } from './gate.js';
@@ -56,7 +56,10 @@ const server = http.createServer(async (req, res) => {
     //    reach operator-only APIs. API/agent routes get 401/403; page requests
     //    redirect to the login screen.
     const byCookie = isAuthed(req.headers.cookie);
-    const byToken = !byCookie && validSwarmToken(req.headers['x-swarm-token']);
+    // An agent token names its agent; a removed agent's token stops working.
+    const tokenAgent = byCookie ? null : agentFromSwarmToken(req.headers['x-swarm-token']);
+    const swarmAgent = tokenAgent && manager.hasAgent(tokenAgent) ? tokenAgent : null;
+    const byToken = !!swarmAgent;
     const authorized =
       byCookie || (byToken && swarmTokenMayAccess(req.method ?? 'GET', url.pathname));
     if (!authorized && !isPublicRequest(req.method ?? 'GET', url.pathname)) {
@@ -86,7 +89,7 @@ const server = http.createServer(async (req, res) => {
     // 1. Lifecycle API.
     if (url.pathname.startsWith('/api/')) {
       if (applyCors(req, res)) return;
-      if (await handleApi(req, res, manager)) return;
+      if (await handleApi(req, res, manager, swarmAgent ?? undefined)) return;
     }
 
     // 2. Per-agent proxy: /a/:id/(desktop|terminal)/* → the agent container.
